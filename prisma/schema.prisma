@@ -1,0 +1,346 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum SyncRunStatus {
+  PENDING
+  RUNNING
+  FAILED
+  COMPLETED
+}
+
+enum SyncTrigger {
+  MANUAL
+  IMPORT
+  REBUILD
+}
+
+enum LedgerEntryType {
+  RECEIVE
+  SEND
+  SWAP_IN
+  SWAP_OUT
+  FEE
+  LP_ADD_IN
+  LP_ADD_OUT
+  LP_REMOVE_IN
+  LP_REMOVE_OUT
+  STAKE_LOCK
+  STAKE_UNLOCK
+  STAKE_REWARD
+  INTERNAL_TRANSFER
+  APPROVAL_IGNORE
+}
+
+enum RawRecordStatus {
+  ACTIVE
+  REORGED
+}
+
+enum SourceFamily {
+  TRANSFERS
+  DEX
+  STAKING
+  NATIVE
+}
+
+enum TokenMetadataSourceKind {
+  SEED
+  RPC
+  MANUAL
+}
+
+model Chain {
+  id                Int                 @id
+  slug              String              @unique
+  name              String
+  rpcUrl            String
+  nativeAssetId     String              @unique
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  wallets           Wallet[]
+  tokens            Token[]
+  syncRuns          SyncRun[]
+  syncCursors       SyncCursor[]
+  rawBlocks         RawBlock[]
+  rawTransactions   RawTransaction[]
+  rawLogs           RawLog[]
+  rawTokenTransfers RawTokenTransfer[]
+  ledgerActionGroups LedgerActionGroup[]
+  ledgerEntries     LedgerEntry[]
+  protocols         Protocol[]
+  rpcRequestLogs    RpcRequestLog[]
+  reorgEvents       ReorgEvent[]
+}
+
+model Wallet {
+  id                 String              @id @default(cuid())
+  chainId            Int
+  address            String
+  addressLower       String
+  label              String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  chain              Chain               @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  syncRuns           SyncRun[]
+  syncCursors        SyncCursor[]
+  ledgerActionGroups LedgerActionGroup[]
+  ledgerEntries      LedgerEntry[]
+
+  @@unique([chainId, addressLower])
+  @@index([chainId, addressLower])
+}
+
+model Token {
+  id               String                 @id @default(cuid())
+  chainId          Int
+  address          String
+  addressLower     String
+  assetId          String                 @unique
+  symbol           String
+  name             String
+  decimals         Int
+  decimalsSource   String
+  isNative         Boolean                @default(false)
+  isIgnored        Boolean                @default(false)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  chain            Chain                  @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  metadataSources  TokenMetadataSource[]
+  assetFlags       AssetFlag[]
+  rawTransfers     RawTokenTransfer[]
+  ledgerEntries    LedgerEntry[]
+
+  @@unique([chainId, addressLower])
+  @@index([chainId, addressLower])
+}
+
+model TokenMetadataSource {
+  id          String                  @id @default(cuid())
+  tokenId      String
+  sourceKind   TokenMetadataSourceKind
+  sourceRef    String
+  decimals     Int
+  symbol       String?
+  name         String?
+  observedAt   DateTime               @default(now())
+  createdAt    DateTime               @default(now())
+  token        Token                  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  @@unique([tokenId, sourceKind, sourceRef])
+}
+
+model Protocol {
+  id             String   @id @default(cuid())
+  chainId         Int
+  slug            String
+  name            String
+  category        String
+  safeStartBlock  BigInt?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  chain           Chain    @relation(fields: [chainId], references: [id], onDelete: Restrict)
+
+  @@unique([chainId, slug])
+}
+
+model AssetFlag {
+  id          String   @id @default(cuid())
+  tokenId      String
+  flag         String
+  source       String
+  createdAt    DateTime @default(now())
+  token        Token    @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  @@unique([tokenId, flag, source])
+}
+
+model SyncRun {
+  id               String         @id @default(cuid())
+  walletId         String?
+  chainId          Int
+  trigger          SyncTrigger    @default(MANUAL)
+  status           SyncRunStatus  @default(PENDING)
+  stage            String
+  sourceFamilies   SourceFamily[]
+  startBlock       BigInt
+  endBlock         BigInt?
+  latestSafeBlock  BigInt?
+  policyLabel      String
+  warningCount     Int            @default(0)
+  errorMessage     String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  wallet           Wallet?        @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  chain            Chain          @relation(fields: [chainId], references: [id], onDelete: Restrict)
+
+  @@index([chainId, createdAt(sort: Desc)])
+  @@index([walletId, createdAt(sort: Desc)])
+}
+
+model SyncCursor {
+  id              String       @id @default(cuid())
+  walletId        String
+  chainId         Int
+  sourceFamily    SourceFamily
+  fromBlock       BigInt
+  toBlock         BigInt
+  blockHash       String?
+  updatedAt       DateTime     @updatedAt
+  wallet          Wallet       @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  chain           Chain        @relation(fields: [chainId], references: [id], onDelete: Restrict)
+
+  @@unique([walletId, chainId, sourceFamily])
+}
+
+model RpcRequestLog {
+  id           String   @id @default(cuid())
+  chainId      Int
+  method       String
+  requestKey   String   @unique
+  fromBlock    BigInt?
+  toBlock      BigInt?
+  statusCode   Int?
+  errorMessage String?
+  requestedAt  DateTime @default(now())
+  completedAt  DateTime?
+  chain        Chain    @relation(fields: [chainId], references: [id], onDelete: Restrict)
+}
+
+model ReorgEvent {
+  id                 String   @id @default(cuid())
+  chainId            Int
+  fromBlock          BigInt
+  toBlock            BigInt
+  canonicalBlockHash String
+  observedBlockHash  String
+  detectedAt         DateTime @default(now())
+  chain              Chain    @relation(fields: [chainId], references: [id], onDelete: Restrict)
+}
+
+model RawBlock {
+  id            String         @id @default(cuid())
+  chainId       Int
+  blockNumber   BigInt
+  blockHash     String
+  parentHash    String
+  timestamp     DateTime
+  status        RawRecordStatus @default(ACTIVE)
+  createdAt     DateTime       @default(now())
+  chain         Chain          @relation(fields: [chainId], references: [id], onDelete: Restrict)
+
+  @@unique([chainId, blockNumber, blockHash])
+  @@index([chainId, blockNumber])
+}
+
+model RawTransaction {
+  id                String          @id @default(cuid())
+  chainId           Int
+  txHash            String
+  blockNumber       BigInt
+  blockHash         String
+  transactionIndex  Int
+  fromAddress       String
+  toAddress         String?
+  valueRaw          Decimal         @db.Decimal(65, 0)
+  gasPriceRaw       Decimal?        @db.Decimal(65, 0)
+  gasUsedRaw        Decimal?        @db.Decimal(65, 0)
+  status            RawRecordStatus @default(ACTIVE)
+  createdAt         DateTime        @default(now())
+  chain             Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  rawLogs           RawLog[]
+
+  @@unique([chainId, txHash, blockHash])
+  @@index([chainId, txHash])
+}
+
+model RawLog {
+  id                String          @id @default(cuid())
+  chainId           Int
+  transactionId     String?
+  txHash            String
+  blockNumber       BigInt
+  blockHash         String
+  logIndex          Int
+  address           String
+  topic0            String?
+  topic1            String?
+  topic2            String?
+  topic3            String?
+  data              String
+  status            RawRecordStatus @default(ACTIVE)
+  createdAt         DateTime        @default(now())
+  chain             Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  transaction       RawTransaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  @@unique([chainId, txHash, logIndex, blockHash])
+  @@index([chainId, address, blockNumber])
+}
+
+model RawTokenTransfer {
+  id                String          @id @default(cuid())
+  chainId           Int
+  tokenId           String
+  txHash            String
+  blockNumber       BigInt
+  blockHash         String
+  logIndex          Int
+  fromAddress       String
+  toAddress         String
+  amountRaw         Decimal         @db.Decimal(65, 0)
+  status            RawRecordStatus @default(ACTIVE)
+  createdAt         DateTime        @default(now())
+  chain             Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  token             Token           @relation(fields: [tokenId], references: [id], onDelete: Restrict)
+
+  @@unique([chainId, txHash, logIndex, blockHash])
+  @@index([chainId, tokenId, blockNumber])
+}
+
+model LedgerActionGroup {
+  id                String   @id @default(cuid())
+  chainId           Int
+  walletId          String
+  txHash            String
+  actionGroupKey    String
+  actionType        String
+  occurredAt        DateTime
+  createdAt         DateTime @default(now())
+  chain             Chain    @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  wallet            Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  entries           LedgerEntry[]
+
+  @@unique([chainId, walletId, actionGroupKey])
+  @@index([walletId, occurredAt(sort: Desc)])
+}
+
+model LedgerEntry {
+  id                String            @id @default(cuid())
+  chainId           Int
+  walletId          String
+  actionGroupId     String
+  tokenId           String?
+  txHash            String
+  entryType         LedgerEntryType
+  assetId           String
+  quantity          Decimal           @db.Decimal(65, 18)
+  valueUsd          Decimal?          @db.Decimal(65, 18)
+  direction         String
+  normalizerVersion String
+  occurredAt        DateTime
+  sourceLogIndex    Int?
+  sourceLogKey      String?
+  dedupeKey         String
+  createdAt         DateTime          @default(now())
+  chain             Chain             @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  wallet            Wallet            @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  actionGroup       LedgerActionGroup @relation(fields: [actionGroupId], references: [id], onDelete: Cascade)
+  token             Token?            @relation(fields: [tokenId], references: [id], onDelete: SetNull)
+
+  @@unique([chainId, walletId, dedupeKey])
+  @@index([walletId, assetId, occurredAt])
+}
