@@ -75,6 +75,8 @@ The system has three distinct truth layers:
 
 - Raw chain data is the immutable audit layer.
 - Canonical ledger entries are deterministic and rebuildable.
+- Normalized ledger quantities must be stored in canonical decimal-adjusted accounting units.
+- Raw integer token amounts remain preserved in the raw audit layer only.
 - Derived balances, positions, PnL, and snapshots are materialized views.
 - Sync and normalization must be idempotent.
 - Re-running the same sync range must not duplicate raw events, ledger entries, balances, or snapshots.
@@ -219,6 +221,7 @@ The ingestion layer is logs-first. This is the default strategy for EVM scalabil
 The system should:
 
 - Fetch logs in bounded block windows per wallet and protocol family
+- Use adaptive retry and backoff policies for RPC ingestion chunk failures
 - Fetch transaction and receipt metadata only when normalization requires it
 - Persist block hashes alongside raw data
 - Track cursors per wallet, chain, and source family
