@@ -801,8 +801,25 @@ describe("dex sync flow", () => {
           }
           return "Token";
         }),
-        getTransaction: vi.fn(),
-        getTransactionReceipt: vi.fn(),
+        getTransaction: vi.fn(async () => ({
+          hash: "0xambiguous",
+          blockHash: "0xblock101",
+          blockNumber: 101n,
+          transactionIndex: 0,
+          from: walletAddress,
+          to: "0x7777777777777777777777777777777777777777",
+          value: 0n,
+          gasPrice: 2_000_000_000n,
+          input: "0x",
+        })),
+        getTransactionReceipt: vi.fn(async () => ({
+          transactionHash: "0xambiguous",
+          blockHash: "0xblock101",
+          blockNumber: 101n,
+          gasUsed: 21_000n,
+          effectiveGasPrice: 2_000_000_000n,
+          logs: [],
+        })),
       } as never,
     });
 
