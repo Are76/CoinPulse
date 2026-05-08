@@ -71,6 +71,8 @@ type SyncRunOperationRecord = {
 type OperationStateDependencies = {
   now?: Date;
   listSyncRuns?: () => Promise<SyncRunOperationRecord[]>;
+  getLastSuccessfulSyncRun?: () => Promise<SyncRunOperationRecord | null>;
+  getLastRebuildRun?: () => Promise<SyncRunOperationRecord | null>;
 };
 
 export async function getOperationStateReport(
@@ -103,8 +105,74 @@ export async function getOperationStateReport(
           policyLabel: true,
         },
       }));
+  const getLastSuccessfulSyncRun =
+    dependencies.getLastSuccessfulSyncRun ??
+    (async () =>
+      getDb().syncRun.findFirst({
+        where: {
+          trigger: {
+            in: ["MANUAL", "IMPORT"],
+          },
+          status: "COMPLETED",
+        },
+        orderBy: [{ updatedAt: "desc" }],
+        select: {
+          id: true,
+          trigger: true,
+          status: true,
+          stage: true,
+          chainId: true,
+          walletId: true,
+          wallet: {
+            select: {
+              address: true,
+            },
+          },
+          warningCount: true,
+          errorMessage: true,
+          createdAt: true,
+          updatedAt: true,
+          sourceFamilies: true,
+          policyLabel: true,
+        },
+      }));
+  const getLastRebuildRun =
+    dependencies.getLastRebuildRun ??
+    (async () =>
+      getDb().syncRun.findFirst({
+        where: {
+          trigger: "REBUILD",
+          status: {
+            in: ["RUNNING", "COMPLETED"],
+          },
+        },
+        orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+        select: {
+          id: true,
+          trigger: true,
+          status: true,
+          stage: true,
+          chainId: true,
+          walletId: true,
+          wallet: {
+            select: {
+              address: true,
+            },
+          },
+          warningCount: true,
+          errorMessage: true,
+          createdAt: true,
+          updatedAt: true,
+          sourceFamilies: true,
+          policyLabel: true,
+        },
+      }));
 
   const syncRuns = await listSyncRuns();
+  const [lastSuccessfulSyncRun, lastRebuildRun] = await Promise.all([
+    getLastSuccessfulSyncRun(),
+    getLastRebuildRun(),
+  ]);
   const operations = syncRuns
     .map((syncRun) => mapSyncRunToOperationState(syncRun, now))
     .sort(
@@ -112,32 +180,16 @@ export async function getOperationStateReport(
         Date.parse(right.startedAt) - Date.parse(left.startedAt),
     );
 
-  const lastSuccessfulSyncAt = syncRuns
-    .map((syncRun) => mapSyncRunToOperationState(syncRun, now))
-    .filter(
-      (operation) =>
-        operation.operationType === "manual_sync" &&
-        (operation.status === "succeeded" || operation.status === "partial") &&
-        operation.finishedAt,
-    )
-    .sort((left, right) => Date.parse(right.finishedAt!) - Date.parse(left.finishedAt!))[0]
-    ?.finishedAt ?? null;
+  const lastSuccessfulSyncAt = lastSuccessfulSyncRun
+    ? mapSyncRunToOperationState(lastSuccessfulSyncRun, now).finishedAt
+    : null;
 
-  const lastRebuildAt = syncRuns
-    .map((syncRun) => mapSyncRunToOperationState(syncRun, now))
-    .filter(
-      (operation) =>
-        operation.operationType === "rebuild" &&
-        (operation.status === "succeeded" ||
-          operation.status === "partial" ||
-          operation.status === "rebuilding") &&
-        (operation.finishedAt ?? operation.startedAt),
-    )
-    .sort(
-      (left, right) =>
-        Date.parse(right.finishedAt ?? right.startedAt) -
-        Date.parse(left.finishedAt ?? left.startedAt),
-    )[0]?.finishedAt ?? null;
+  const lastRebuildOperation = lastRebuildRun
+    ? mapSyncRunToOperationState(lastRebuildRun, now)
+    : null;
+  const lastRebuildAt = lastRebuildOperation
+    ? lastRebuildOperation.finishedAt ?? lastRebuildOperation.startedAt
+    : null;
 
   const warnings =
     lastRebuildAt === null

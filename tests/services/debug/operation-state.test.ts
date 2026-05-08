@@ -142,6 +142,20 @@ describe("getOperationStateReport", () => {
           updatedAt: new Date("2026-05-08T18:30:00.000Z"),
         },
       ],
+      getLastSuccessfulSyncRun: async () => ({
+        id: "sync-run-1",
+        trigger: "MANUAL",
+        status: "COMPLETED",
+        stage: "COMPLETED",
+        chainId: 369,
+        walletId: "wallet-1",
+        wallet: { address: "0x1111111111111111111111111111111111111111" },
+        warningCount: 0,
+        errorMessage: null,
+        createdAt: new Date("2026-05-08T18:00:00.000Z"),
+        updatedAt: new Date("2026-05-08T18:02:00.000Z"),
+      }),
+      getLastRebuildRun: async () => null,
     });
 
     expect(report.operations).toHaveLength(2);
@@ -159,5 +173,71 @@ describe("getOperationStateReport", () => {
     expect(report.warnings).toContain(
       "rebuild operations are not persisted separately yet; lastRebuildAt may be unavailable",
     );
+  });
+
+  it("finds lastSuccessfulSyncAt even when the successful run is older than the recent operations list", async () => {
+    const now = new Date("2026-05-08T19:00:00.000Z");
+    const recentRuns = Array.from({ length: 25 }, (_, index) => ({
+      id: `recent-run-${index}`,
+      trigger: "MANUAL" as const,
+      status: "FAILED" as const,
+      stage: "INGESTING_RAW_LOGS",
+      chainId: 369,
+      walletId: `wallet-${index}`,
+      wallet: {
+        address: `0x${String(index + 1).padStart(40, "1")}`,
+      },
+      warningCount: 0,
+      errorMessage: "sync failed",
+      createdAt: new Date(`2026-05-08T18:${String(index).padStart(2, "0")}:00.000Z`),
+      updatedAt: new Date(`2026-05-08T18:${String(index).padStart(2, "0")}:30.000Z`),
+    }));
+
+    const report = await getOperationStateReport({
+      now,
+      listSyncRuns: async () => recentRuns,
+      getLastSuccessfulSyncRun: async () => ({
+        id: "older-success",
+        trigger: "MANUAL",
+        status: "COMPLETED",
+        stage: "COMPLETED",
+        chainId: 369,
+        walletId: "wallet-success",
+        wallet: { address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+        warningCount: 0,
+        errorMessage: null,
+        createdAt: new Date("2026-05-08T17:00:00.000Z"),
+        updatedAt: new Date("2026-05-08T17:05:00.000Z"),
+      }),
+      getLastRebuildRun: async () => null,
+    });
+
+    expect(report.operations).toHaveLength(25);
+    expect(report.lastSuccessfulSyncAt).toBe("2026-05-08T17:05:00.000Z");
+  });
+
+  it("uses startedAt for lastRebuildAt when a rebuild is still running", async () => {
+    const now = new Date("2026-05-08T19:00:00.000Z");
+    const report = await getOperationStateReport({
+      now,
+      listSyncRuns: async () => [],
+      getLastSuccessfulSyncRun: async () => null,
+      getLastRebuildRun: async () => ({
+        id: "rebuild-running",
+        trigger: "REBUILD",
+        status: "RUNNING",
+        stage: "NORMALIZING_LEDGER",
+        chainId: 369,
+        walletId: "wallet-rebuild",
+        wallet: { address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+        warningCount: 0,
+        errorMessage: null,
+        createdAt: new Date("2026-05-08T18:45:00.000Z"),
+        updatedAt: new Date("2026-05-08T18:45:00.000Z"),
+      }),
+    });
+
+    expect(report.lastRebuildAt).toBe("2026-05-08T18:45:00.000Z");
+    expect(report.warnings).toHaveLength(0);
   });
 });
