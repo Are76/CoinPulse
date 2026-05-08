@@ -1,7 +1,6 @@
 import { ZodError } from "zod";
 
-import { materializeCurrentPortfolioPositions } from "@/services/portfolio";
-import { rebuildCanonicalLedger } from "@/services/rebuild";
+import { runRebuildOperation } from "@/services/rebuild";
 import {
   buildInternalErrorResponse,
   buildInvalidInputResponse,
@@ -24,20 +23,17 @@ export async function POST(request: Request) {
       return buildNotFoundResponse("WALLET_NOT_FOUND", "Wallet not found for the requested chain.");
     }
 
-    const rebuild = await rebuildCanonicalLedger({
+    const operation = await runRebuildOperation({
       wallet,
       fromBlock: input.fromBlock,
       toBlock: input.toBlock,
       sourceFamilies: input.sourceFamilies,
     });
-    const materialized = await materializeCurrentPortfolioPositions({
-      wallet,
-    });
 
     return Response.json({
       data: {
-        rebuild: serializeForJson(rebuild),
-        materialized: serializeForJson(materialized),
+        rebuild: serializeForJson(operation.rebuild),
+        materialized: serializeForJson(operation.materialized),
       },
     });
   } catch (error) {
