@@ -75,6 +75,23 @@ describe("GET /api/debug/status", () => {
         persistedObservationsOnly: true,
         liveAdaptersEnabled: false,
       },
+      operationState: {
+        updatedAt: "2026-05-08T12:00:00.000Z",
+        operations: [],
+        blockerSummary: {
+          activeBlockerCount: 0,
+          staleBlockerCount: 0,
+          pendingBlockerCount: 0,
+          runningBlockerCount: 0,
+          oldestBlockerAgeMs: null,
+          newestBlockerAgeMs: null,
+          hasStaleBlockers: false,
+          blockersByOperationType: {},
+        },
+        lastSuccessfulSyncAt: null,
+        lastRebuildAt: null,
+        warnings: [],
+      },
     });
 
     const { GET } = await import("../../app/api/debug/status/route");
@@ -91,6 +108,23 @@ describe("GET /api/debug/status", () => {
         pricing: {
           persistedObservationsOnly: true,
           liveAdaptersEnabled: false,
+        },
+        operationState: {
+          updatedAt: "2026-05-08T12:00:00.000Z",
+          operations: [],
+          blockerSummary: {
+            activeBlockerCount: 0,
+            staleBlockerCount: 0,
+            pendingBlockerCount: 0,
+            runningBlockerCount: 0,
+            oldestBlockerAgeMs: null,
+            newestBlockerAgeMs: null,
+            hasStaleBlockers: false,
+            blockersByOperationType: {},
+          },
+          lastSuccessfulSyncAt: null,
+          lastRebuildAt: null,
+          warnings: [],
         },
       },
     });

@@ -25,14 +25,34 @@ type RequestedOperation = {
   chainId: number;
 };
 
+export type OperationStaleThresholds = {
+  pendingMs: number;
+  runningMs: number;
+};
+
+export const DEFAULT_OPERATION_STALE_THRESHOLDS: OperationStaleThresholds = {
+  pendingMs: 15 * 60 * 1000,
+  runningMs: 60 * 60 * 1000,
+};
+
+export type OperationStaleReason =
+  | "pending_threshold_exceeded"
+  | "running_threshold_exceeded";
+
 export type OperationConflictDetails = {
   allowed: false;
   reason: "active_rebuild_in_progress" | "active_sync_in_scope";
   conflictingOperationId: string;
   conflictingTrigger: SyncTrigger | string;
   conflictingStage: string | null;
+  operationType: "manual_sync" | "rebuild" | "unknown";
+  status: SyncRunStatus | string;
   startedAt: string;
+  createdAt: string;
   updatedAt: string;
+  ageMs: number;
+  appearsStale: boolean;
+  staleReason: OperationStaleReason | null;
 };
 
 export type OperationConflictResult = { allowed: true } | OperationConflictDetails;
@@ -51,7 +71,10 @@ export class OperationConflictError extends Error {
 export async function checkOperationConflict(args: {
   requestedOperation: RequestedOperation;
   listActiveRuns: () => Promise<ActiveSyncRunRecord[]>;
+  now?: Date;
+  thresholds?: OperationStaleThresholds;
 }): Promise<OperationConflictResult> {
+  const now = args.now ?? new Date();
   const activeRuns = (await args.listActiveRuns()).filter((run) =>
     isActiveStatus(run.status),
   );
@@ -59,7 +82,12 @@ export async function checkOperationConflict(args: {
   if (args.requestedOperation.trigger === "REBUILD") {
     const activeRebuild = activeRuns.find((run) => run.trigger === "REBUILD");
     if (activeRebuild) {
-      return buildConflict("active_rebuild_in_progress", activeRebuild);
+      return buildConflict(
+        "active_rebuild_in_progress",
+        activeRebuild,
+        now,
+        args.thresholds,
+      );
     }
 
     const activeScopedSync = activeRuns.find(
@@ -69,14 +97,24 @@ export async function checkOperationConflict(args: {
         run.chainId === args.requestedOperation.chainId,
     );
     if (activeScopedSync) {
-      return buildConflict("active_sync_in_scope", activeScopedSync);
+      return buildConflict(
+        "active_sync_in_scope",
+        activeScopedSync,
+        now,
+        args.thresholds,
+      );
     }
   }
 
   if (isSyncLikeTrigger(args.requestedOperation.trigger)) {
     const activeRebuild = activeRuns.find((run) => run.trigger === "REBUILD");
     if (activeRebuild) {
-      return buildConflict("active_rebuild_in_progress", activeRebuild);
+      return buildConflict(
+        "active_rebuild_in_progress",
+        activeRebuild,
+        now,
+        args.thresholds,
+      );
     }
   }
 
@@ -101,8 +139,11 @@ export async function reserveOperationRun(args: {
   failedFromBlock?: bigint;
   failedToBlock?: bigint;
   db?: PrismaClient;
+  now?: Date;
+  thresholds?: OperationStaleThresholds;
 }): Promise<{ id: string }> {
   const db = args.db ?? getDb();
+  const now = args.now ?? new Date();
   const requestedOperation = {
     trigger: args.trigger,
     walletId: args.walletId,
@@ -116,6 +157,8 @@ export async function reserveOperationRun(args: {
           const conflict = await checkOperationConflict({
             requestedOperation,
             listActiveRuns: async () => listConflictingRuns(tx, requestedOperation),
+            now,
+            thresholds: args.thresholds,
           });
 
           if (!conflict.allowed) {
@@ -158,6 +201,8 @@ export async function reserveOperationRun(args: {
       const conflict = await checkOperationConflict({
         requestedOperation,
         listActiveRuns: async () => listConflictingRuns(db, requestedOperation),
+        now,
+        thresholds: args.thresholds,
       });
 
       if (!conflict.allowed) {
@@ -171,6 +216,30 @@ export async function reserveOperationRun(args: {
   }
 
   throw new Error("unreachable");
+}
+
+export function inspectOperationBlocker(
+  run: ActiveSyncRunRecord,
+  options: {
+    now?: Date;
+    thresholds?: OperationStaleThresholds;
+  } = {},
+) {
+  const now = options.now ?? new Date();
+  const thresholds = options.thresholds ?? DEFAULT_OPERATION_STALE_THRESHOLDS;
+  const ageMs = Math.max(0, now.getTime() - run.createdAt.getTime());
+  const staleReason = getStaleReason(run.status, ageMs, thresholds);
+
+  return {
+    operationType: mapOperationType(run.trigger),
+    status: run.status,
+    startedAt: run.createdAt.toISOString(),
+    createdAt: run.createdAt.toISOString(),
+    updatedAt: run.updatedAt.toISOString(),
+    ageMs,
+    appearsStale: staleReason !== null,
+    staleReason,
+  };
 }
 
 export function isOperationConflictError(error: unknown): error is OperationConflictError | {
@@ -204,15 +273,17 @@ export function isOperationConflictError(error: unknown): error is OperationConf
 function buildConflict(
   reason: OperationConflictDetails["reason"],
   run: ActiveSyncRunRecord,
+  now: Date,
+  thresholds?: OperationStaleThresholds,
 ): OperationConflictDetails {
+  const inspection = inspectOperationBlocker(run, { now, thresholds });
   return {
     allowed: false,
     reason,
     conflictingOperationId: run.id,
     conflictingTrigger: run.trigger,
     conflictingStage: run.stage || null,
-    startedAt: run.createdAt.toISOString(),
-    updatedAt: run.updatedAt.toISOString(),
+    ...inspection,
   };
 }
 
@@ -264,6 +335,36 @@ function isSerializableRetryableConflict(error: unknown) {
     "code" in error &&
     error.code === "P2034"
   );
+}
+
+function getStaleReason(
+  status: SyncRunStatus | string,
+  ageMs: number,
+  thresholds: OperationStaleThresholds,
+): OperationStaleReason | null {
+  if (status === "PENDING" && ageMs > thresholds.pendingMs) {
+    return "pending_threshold_exceeded";
+  }
+
+  if (status === "RUNNING" && ageMs > thresholds.runningMs) {
+    return "running_threshold_exceeded";
+  }
+
+  return null;
+}
+
+function mapOperationType(
+  trigger: SyncTrigger | string,
+): "manual_sync" | "rebuild" | "unknown" {
+  switch (trigger) {
+    case "MANUAL":
+    case "IMPORT":
+      return "manual_sync";
+    case "REBUILD":
+      return "rebuild";
+    default:
+      return "unknown";
+  }
 }
 
 function isActiveStatus(status: SyncRunStatus | string): status is (typeof ACTIVE_SYNC_RUN_STATUSES)[number] {
