@@ -1,0 +1,214 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const resolveTrackedWalletByAddress = vi.fn();
+const runWalletSync = vi.fn();
+const rebuildCanonicalLedger = vi.fn();
+const materializeCurrentPortfolioPositions = vi.fn();
+
+vi.mock("@/services/api/wallets", () => ({
+  resolveTrackedWalletByAddress,
+}));
+
+vi.mock("@/services/sync", () => ({
+  runWalletSync,
+}));
+
+vi.mock("@/services/rebuild", () => ({
+  rebuildCanonicalLedger,
+}));
+
+vi.mock("@/services/portfolio", () => ({
+  materializeCurrentPortfolioPositions,
+}));
+
+describe("POST /api/sync/manual", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("validates input, resolves the wallet, and delegates to the sync service", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-1",
+      address: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+    });
+    runWalletSync.mockResolvedValue({
+      runId: "sync-run-1",
+      counts: {
+        rawLogs: 10,
+        actionGroups: 4,
+        ledgerEntries: 9,
+      },
+      warningCount: 1,
+      latestSafeBlock: 200n,
+    });
+
+    const { POST } = await import("../../app/api/sync/manual/route");
+    const response = await POST(
+      new Request("http://localhost/api/sync/manual", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          sourceFamilies: ["TRANSFERS", "DEX"],
+          endBlock: "200",
+          startBlock: "100",
+          policyLabel: "manual-dashboard-sync",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        runId: "sync-run-1",
+        counts: {
+          rawLogs: 10,
+          actionGroups: 4,
+          ledgerEntries: 9,
+        },
+        warningCount: 1,
+        latestSafeBlock: "200",
+      },
+    });
+    expect(runWalletSync).toHaveBeenCalledWith({
+      wallet: {
+        id: "wallet-1",
+        address: "0x1111111111111111111111111111111111111111",
+        chainId: 369,
+      },
+      sourceFamilies: ["TRANSFERS", "DEX"],
+      startBlock: 100n,
+      endBlock: 200n,
+      policyLabel: "manual-dashboard-sync",
+      trigger: "MANUAL",
+    });
+  });
+
+  it("returns a structured validation error for invalid sync input", async () => {
+    const { POST } = await import("../../app/api/sync/manual/route");
+    const response = await POST(
+      new Request("http://localhost/api/sync/manual", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "bad",
+          chainId: "oops",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "INVALID_INPUT",
+        message: "Invalid request input.",
+        details: expect.any(Array),
+      },
+    });
+    expect(runWalletSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/rebuild", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("delegates rebuild and materialization to the backend services", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-1",
+      address: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+    });
+    rebuildCanonicalLedger.mockResolvedValue({
+      wallet: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+      fromBlock: 100n,
+      toBlock: 200n,
+      sourceFamilies: ["TRANSFERS", "DEX"],
+      sourceFamiliesIncluded: ["TRANSFERS", "DEX"],
+      rawSnapshotsProcessed: 12,
+      ledgerEntriesDeleted: 3,
+      ledgerEntriesRecreated: 9,
+      skippedCount: 1,
+      skippedSnapshots: 1,
+      unsupportedSourceFamilies: 0,
+      warnings: ["warning-a"],
+    });
+    materializeCurrentPortfolioPositions.mockResolvedValue({
+      wallet: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+      ledgerEntriesProcessed: 9,
+      tokenBalancesWritten: 3,
+      lpPositionsWritten: 1,
+      stakePositionsWritten: 0,
+      skippedCount: 0,
+      warnings: [],
+    });
+
+    const { POST } = await import("../../app/api/rebuild/route");
+    const response = await POST(
+      new Request("http://localhost/api/rebuild", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          fromBlock: "100",
+          toBlock: "200",
+          sourceFamilies: ["TRANSFERS", "DEX"],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        rebuild: {
+          wallet: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          fromBlock: "100",
+          toBlock: "200",
+          sourceFamilies: ["TRANSFERS", "DEX"],
+          sourceFamiliesIncluded: ["TRANSFERS", "DEX"],
+          rawSnapshotsProcessed: 12,
+          ledgerEntriesDeleted: 3,
+          ledgerEntriesRecreated: 9,
+          skippedCount: 1,
+          skippedSnapshots: 1,
+          unsupportedSourceFamilies: 0,
+          warnings: ["warning-a"],
+        },
+        materialized: {
+          wallet: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          ledgerEntriesProcessed: 9,
+          tokenBalancesWritten: 3,
+          lpPositionsWritten: 1,
+          stakePositionsWritten: 0,
+          skippedCount: 0,
+          warnings: [],
+        },
+      },
+    });
+    expect(rebuildCanonicalLedger).toHaveBeenCalledWith({
+      wallet: {
+        id: "wallet-1",
+        address: "0x1111111111111111111111111111111111111111",
+        chainId: 369,
+      },
+      fromBlock: 100n,
+      toBlock: 200n,
+      sourceFamilies: ["TRANSFERS", "DEX"],
+    });
+    expect(materializeCurrentPortfolioPositions).toHaveBeenCalledWith({
+      wallet: {
+        id: "wallet-1",
+        address: "0x1111111111111111111111111111111111111111",
+        chainId: 369,
+      },
+    });
+  });
+});

@@ -24,6 +24,11 @@ import {
   type PersistedRawLpAction,
 } from "@/services/sync/lp-sync";
 import {
+  ingestStakeActions,
+  normalizeStakeActions,
+  type PersistedRawStakeAction,
+} from "@/services/sync/stake-sync";
+import {
   createDefaultSyncClients,
   getOccurredAtForDexSwap,
   getOccurredAtForTransfer,
@@ -46,6 +51,7 @@ export const SUPPORTED_CONCRETE_SOURCE_FAMILIES = [
   "TRANSFERS",
   "DEX",
   "LP",
+  "STAKING",
 ] as const;
 
 export function createSyncDependencies(args?: {
@@ -105,6 +111,15 @@ export function createSyncDependencies(args?: {
             fromBlock: ingestArgs.fromBlock,
             toBlock: ingestArgs.toBlock,
           });
+        case "STAKING":
+          return ingestStakeActions({
+            db,
+            publicClient,
+            maxWindowSize,
+            wallet: ingestArgs.wallet,
+            fromBlock: ingestArgs.fromBlock,
+            toBlock: ingestArgs.toBlock,
+          });
         default:
           throw new Error(
             `Unsupported source family for concrete sync path: ${ingestArgs.sourceFamily}`,
@@ -138,6 +153,12 @@ export function createSyncDependencies(args?: {
             wallet: normalizeArgs.wallet,
             rawLogs: normalizeArgs.rawLogs as readonly PersistedRawLpAction[],
           });
+        case "STAKING":
+          return normalizeStakeActions({
+            normalizerVersion,
+            wallet: normalizeArgs.wallet,
+            rawLogs: normalizeArgs.rawLogs as readonly PersistedRawStakeAction[],
+          });
         default:
           throw new Error(
             `Unsupported source family for concrete sync path: ${normalizeArgs.sourceFamily}`,
@@ -167,7 +188,7 @@ async function ingestTransfers(args: {
   };
 }
 
-function normalizeTransfers(args: {
+export function normalizeTransfers(args: {
   normalizerVersion: string;
   wallet: { id: string; chainId: number; address: string };
   rawLogs: readonly PersistedTransferRawLog[];

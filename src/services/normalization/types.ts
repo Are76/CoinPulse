@@ -12,6 +12,12 @@ export type NormalizedEntryType =
   | "LP_ADD_OUT"
   | "LP_REMOVE_IN"
   | "LP_REMOVE_OUT"
+  | "STAKE_START"
+  | "STAKE_END"
+  | "STAKE_PRINCIPAL_LOCKED"
+  | "STAKE_PRINCIPAL_RETURNED"
+  | "STAKE_YIELD_RECEIVED"
+  | "STAKE_PENALTY"
   | "STAKE_LOCK"
   | "STAKE_UNLOCK"
   | "STAKE_REWARD"
@@ -23,6 +29,8 @@ export type NormalizedActionType =
   | "SWAP"
   | "LP_ADD"
   | "LP_REMOVE"
+  | "HEX_STAKE_START"
+  | "HEX_STAKE_END"
   | "HEX_STAKE_LOCK";
 
 export type LedgerDirection = "IN" | "OUT" | "INTERNAL";
@@ -37,6 +45,8 @@ export type CanonicalLedgerEntryDraft = {
   actionGroupKey: string;
   entryType: NormalizedEntryType;
   assetId: string;
+  quantityRaw?: string;
+  assetDecimals?: number | null;
   quantity: string;
   direction: LedgerDirection;
   occurredAt: Date;
@@ -155,6 +165,8 @@ export function createLedgerEntryDraft(args: {
     actionGroupKey: args.actionGroupKey,
     entryType: args.entryType,
     assetId: args.assetId,
+    quantityRaw: args.amountRaw,
+    assetDecimals: args.decimals,
     quantity,
     direction: args.direction,
     occurredAt: args.occurredAt,

@@ -37,6 +37,7 @@ export type SyncDbClient = Pick<
   | "rawTokenTransfer"
   | "rawDexSwap"
   | "rawLpAction"
+  | "rawStakeAction"
   | "token"
   | "tokenMetadataSource"
   | "syncRun"
@@ -57,9 +58,11 @@ type BlockReaderClient = {
 type ContractReaderClient = {
   readContract(args: {
     address: `0x${string}`;
-    abi: typeof ERC20_METADATA_ABI;
-    functionName: "decimals" | "symbol" | "name";
-  }): Promise<number | string>;
+    abi: readonly unknown[];
+    functionName: string;
+    args?: readonly unknown[];
+    blockNumber?: bigint;
+  }): Promise<unknown>;
 };
 
 type TransactionReaderClient = {
@@ -72,6 +75,7 @@ type TransactionReaderClient = {
     to: string | null;
     value: bigint;
     gasPrice: bigint | null;
+    input?: string | null;
   }>;
   getTransactionReceipt(args: { hash: `0x${string}` }): Promise<{
     transactionHash: string;
@@ -499,6 +503,17 @@ export function getOccurredAtForDexSwap(
 }
 
 export function getOccurredAtForLpAction(
+  log: {
+    txHash: string;
+    blockNumber: bigint;
+    blockHash: string;
+  },
+  timestampByBlockKey: Map<string, Date>,
+) {
+  return getOccurredAtForBlockHash(log, timestampByBlockKey);
+}
+
+export function getOccurredAtForStakeAction(
   log: {
     txHash: string;
     blockNumber: bigint;

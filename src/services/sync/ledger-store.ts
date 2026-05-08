@@ -45,6 +45,61 @@ type LedgerStoreClient = {
   };
 };
 
+type ScopedLedgerDeleteClient = {
+  ledgerActionGroup: {
+    findMany(args: {
+      where: {
+        chainId: number;
+        walletId: string;
+        actionType: {
+          in: string[];
+        };
+        txHash?: {
+          in: string[];
+        };
+        occurredAt?: {
+          gte: Date;
+          lte: Date;
+        };
+      };
+    }): Promise<
+      Array<{
+        id: string;
+      }>
+    >;
+    deleteMany(args: {
+      where: {
+        id: {
+          in: string[];
+        };
+      };
+    }): Promise<{ count: number }>;
+  };
+  ledgerEntry: {
+    findMany(args: {
+      where: {
+        chainId: number;
+        walletId: string;
+        actionGroupId: {
+          in: string[];
+        };
+      };
+    }): Promise<
+      Array<{
+        id: string;
+      }>
+    >;
+    deleteMany(args: {
+      where: {
+        id: {
+          in: string[];
+        };
+      };
+    }): Promise<{ count: number }>;
+  };
+  $transaction?<T>(callback: (client: ScopedLedgerDeleteClient) => Promise<T>): Promise<T>;
+};
+
 export function buildDeterministicActionGroupId(args: {
   chainId: number;
   walletId: string;
@@ -167,6 +222,99 @@ export async function persistNormalizedLedger(
     actionGroupCount: createdActionGroups.count,
     entryCount: createdEntries.count,
   };
+}
+
+export async function deleteScopedLedgerEntries(
+  args: {
+    chainId: number;
+    walletId: string;
+    actionTypes: readonly string[];
+    txHashes?: readonly string[];
+    occurredAtRange?: {
+      gte: Date;
+      lte: Date;
+    };
+  },
+  client: ScopedLedgerDeleteClient = getDb(),
+) {
+  if (args.actionTypes.length === 0) {
+    return {
+      actionGroupCount: 0,
+      entryCount: 0,
+    };
+  }
+
+  const run = async (transactionClient: ScopedLedgerDeleteClient) => {
+    const where = {
+      chainId: args.chainId,
+      walletId: args.walletId,
+      actionType: {
+        in: [...args.actionTypes],
+      },
+      ...(args.txHashes && args.txHashes.length > 0
+        ? {
+            txHash: {
+              in: [...args.txHashes],
+            },
+          }
+        : args.occurredAtRange
+          ? {
+              occurredAt: args.occurredAtRange,
+            }
+          : {}),
+    };
+
+    const actionGroups = await transactionClient.ledgerActionGroup.findMany({
+      where,
+    });
+
+    if (actionGroups.length === 0) {
+      return {
+        actionGroupCount: 0,
+        entryCount: 0,
+      };
+    }
+
+    const actionGroupIds = actionGroups.map((group) => group.id);
+    const entries = await transactionClient.ledgerEntry.findMany({
+      where: {
+        chainId: args.chainId,
+        walletId: args.walletId,
+        actionGroupId: {
+          in: actionGroupIds,
+        },
+      },
+    });
+
+    if (entries.length > 0) {
+      await transactionClient.ledgerEntry.deleteMany({
+        where: {
+          id: {
+            in: entries.map((entry) => entry.id),
+          },
+        },
+      });
+    }
+
+    await transactionClient.ledgerActionGroup.deleteMany({
+      where: {
+        id: {
+          in: actionGroupIds,
+        },
+      },
+    });
+
+    return {
+      actionGroupCount: actionGroupIds.length,
+      entryCount: entries.length,
+    };
+  };
+
+  if (client.$transaction) {
+    return client.$transaction(run);
+  }
+
+  return run(client);
 }
 
 function buildDeterministicId(prefix: string, parts: readonly string[]) {

@@ -105,6 +105,32 @@ export type PersistRawLpActionInput = {
   feeAmountRaw: string;
 };
 
+export type PersistRawStakeActionInput = {
+  chainId: number;
+  protocolSlug: string;
+  actionKind: "START" | "END";
+  txHash: string;
+  blockNumber: bigint;
+  blockHash: string;
+  actionIndex: number;
+  contractAddress: string;
+  initiatorAddress: string;
+  stakeId?: bigint | null;
+  stakeIndex?: number | null;
+  stakedDays?: number | null;
+  tokenAddress: string;
+  assetIdSnapshot: string;
+  decimalsSnapshot: number;
+  principalLockedRaw?: string | null;
+  totalReturnedRaw?: string | null;
+  principalReturnedRaw?: string | null;
+  yieldRaw?: string | null;
+  penaltyRaw?: string | null;
+  feeAssetIdSnapshot: string;
+  feeDecimalsSnapshot: number;
+  feeAmountRaw: string;
+};
+
 type RawLogReadClient = {
   rawLog: {
     findMany(args: {
@@ -250,6 +276,40 @@ type RawLpActionStoreClient = {
   };
 };
 
+type RawStakeActionStoreClient = {
+  rawStakeAction: {
+    createMany(args: {
+      data: Array<{
+        chainId: number;
+        protocolSlug: string;
+        actionKind: string;
+        txHash: string;
+        blockNumber: bigint;
+        blockHash: string;
+        actionIndex: number;
+        contractAddress: string;
+        initiatorAddress: string;
+        stakeId: bigint | null;
+        stakeIndex: number | null;
+        stakedDays: number | null;
+        tokenAddress: string;
+        assetIdSnapshot: string;
+        decimalsSnapshot: number;
+        principalLockedRaw: string | null;
+        totalReturnedRaw: string | null;
+        principalReturnedRaw: string | null;
+        yieldRaw: string | null;
+        penaltyRaw: string | null;
+        feeAssetIdSnapshot: string;
+        feeDecimalsSnapshot: number;
+        feeAmountRaw: string;
+      }>;
+      skipDuplicates: boolean;
+    }): Promise<{ count: number }>;
+    findFirst?(args: unknown): Promise<Record<string, unknown> | null>;
+  };
+};
+
 type RawTokenTransferReadClient = {
   rawTokenTransfer: {
     findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
@@ -265,6 +325,13 @@ type RawDexSwapReadClient = {
 type RawLpActionReadClient = {
   rawLpAction: {
     findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
+  };
+};
+
+type RawStakeActionReadClient = {
+  rawStakeAction: {
+    findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
+    findFirst?(args: unknown): Promise<Record<string, unknown> | null>;
   };
 };
 
@@ -434,6 +501,44 @@ export async function persistRawLpActions(
       lpAssetIdSnapshot: action.lpAssetIdSnapshot,
       lpDecimalsSnapshot: action.lpDecimalsSnapshot,
       lpAmountRaw: action.lpAmountRaw,
+      feeAssetIdSnapshot: action.feeAssetIdSnapshot,
+      feeDecimalsSnapshot: action.feeDecimalsSnapshot,
+      feeAmountRaw: action.feeAmountRaw,
+    })),
+    skipDuplicates: true,
+  });
+}
+
+export async function persistRawStakeActions(
+  actions: readonly PersistRawStakeActionInput[],
+  client: RawStakeActionStoreClient = getDb(),
+) {
+  if (actions.length === 0) {
+    return { count: 0 };
+  }
+
+  return client.rawStakeAction.createMany({
+    data: actions.map((action) => ({
+      chainId: action.chainId,
+      protocolSlug: action.protocolSlug,
+      actionKind: action.actionKind,
+      txHash: action.txHash.toLowerCase(),
+      blockNumber: action.blockNumber,
+      blockHash: action.blockHash.toLowerCase(),
+      actionIndex: action.actionIndex,
+      contractAddress: action.contractAddress.toLowerCase(),
+      initiatorAddress: action.initiatorAddress.toLowerCase(),
+      stakeId: action.stakeId ?? null,
+      stakeIndex: action.stakeIndex ?? null,
+      stakedDays: action.stakedDays ?? null,
+      tokenAddress: action.tokenAddress.toLowerCase(),
+      assetIdSnapshot: action.assetIdSnapshot,
+      decimalsSnapshot: action.decimalsSnapshot,
+      principalLockedRaw: action.principalLockedRaw ?? null,
+      totalReturnedRaw: action.totalReturnedRaw ?? null,
+      principalReturnedRaw: action.principalReturnedRaw ?? null,
+      yieldRaw: action.yieldRaw ?? null,
+      penaltyRaw: action.penaltyRaw ?? null,
       feeAssetIdSnapshot: action.feeAssetIdSnapshot,
       feeDecimalsSnapshot: action.feeDecimalsSnapshot,
       feeAmountRaw: action.feeAmountRaw,
@@ -637,6 +742,129 @@ export async function readWalletRawLpActions(
   }));
 }
 
+export async function readWalletRawStakeActions(
+  args: {
+    chainId: number;
+    walletAddress: string;
+    fromBlock: bigint;
+    toBlock: bigint;
+  },
+  client: RawStakeActionReadClient = getDb(),
+) {
+  const walletAddress = args.walletAddress.toLowerCase();
+  const records = await client.rawStakeAction.findMany({
+    where: {
+      chainId: args.chainId,
+      status: "ACTIVE",
+      blockNumber: {
+        gte: args.fromBlock,
+        lte: args.toBlock,
+      },
+      initiatorAddress: walletAddress,
+    },
+    orderBy: [{ blockNumber: "asc" }, { actionIndex: "asc" }],
+  });
+
+  return records.map((record) => ({
+    chainId: record.chainId as number,
+    protocolSlug: record.protocolSlug as string,
+    actionKind: record.actionKind as "START" | "END",
+    txHash: record.txHash as string,
+    blockNumber: record.blockNumber as bigint,
+    blockHash: record.blockHash as string,
+    actionIndex: record.actionIndex as number,
+    contractAddress: record.contractAddress as string,
+    initiatorAddress: record.initiatorAddress as string,
+    stakeId:
+      typeof record.stakeId === "bigint"
+        ? record.stakeId
+        : record.stakeId == null
+          ? null
+          : BigInt(record.stakeId as string),
+    stakeIndex: typeof record.stakeIndex === "number" ? record.stakeIndex : null,
+    stakedDays: typeof record.stakedDays === "number" ? record.stakedDays : null,
+    tokenAddress: record.tokenAddress as string,
+    assetIdSnapshot: record.assetIdSnapshot as string,
+    decimalsSnapshot: record.decimalsSnapshot as number,
+    principalLockedRaw:
+      record.principalLockedRaw == null
+        ? null
+        : typeof record.principalLockedRaw === "string"
+          ? record.principalLockedRaw
+          : (record.principalLockedRaw as { toString(): string }).toString(),
+    totalReturnedRaw:
+      record.totalReturnedRaw == null
+        ? null
+        : typeof record.totalReturnedRaw === "string"
+          ? record.totalReturnedRaw
+          : (record.totalReturnedRaw as { toString(): string }).toString(),
+    principalReturnedRaw:
+      record.principalReturnedRaw == null
+        ? null
+        : typeof record.principalReturnedRaw === "string"
+          ? record.principalReturnedRaw
+          : (record.principalReturnedRaw as { toString(): string }).toString(),
+    yieldRaw:
+      record.yieldRaw == null
+        ? null
+        : typeof record.yieldRaw === "string"
+          ? record.yieldRaw
+          : (record.yieldRaw as { toString(): string }).toString(),
+    penaltyRaw:
+      record.penaltyRaw == null
+        ? null
+        : typeof record.penaltyRaw === "string"
+          ? record.penaltyRaw
+          : (record.penaltyRaw as { toString(): string }).toString(),
+    feeAssetIdSnapshot: record.feeAssetIdSnapshot as string,
+    feeDecimalsSnapshot: record.feeDecimalsSnapshot as number,
+    feeAmountRaw:
+      typeof record.feeAmountRaw === "string"
+        ? record.feeAmountRaw
+        : (record.feeAmountRaw as { toString(): string }).toString(),
+  }));
+}
+
+export async function readStakeStartSnapshotByStakeId(
+  args: {
+    chainId: number;
+    walletAddress: string;
+    stakeId: bigint;
+  },
+  client: RawStakeActionReadClient = getDb(),
+) {
+  const record = await client.rawStakeAction.findFirst?.({
+    where: {
+      chainId: args.chainId,
+      status: "ACTIVE",
+      initiatorAddress: args.walletAddress.toLowerCase(),
+      actionKind: "START",
+      stakeId: args.stakeId,
+    },
+    orderBy: [{ blockNumber: "desc" }, { actionIndex: "desc" }],
+  });
+
+  if (!record) {
+    return null;
+  }
+
+  const [mapped] = await readWalletRawStakeActions(
+    {
+      chainId: args.chainId,
+      walletAddress: args.walletAddress,
+      fromBlock: record.blockNumber as bigint,
+      toBlock: record.blockNumber as bigint,
+    },
+    {
+      rawStakeAction: {
+        findMany: async () => [record],
+      },
+    },
+  );
+
+  return mapped ?? null;
+}
+
 export async function markRawDataRangeReorged(
   args: {
     chainId: number;
@@ -653,7 +881,7 @@ export async function markRawDataRangeReorged(
     },
   } satisfies Prisma.RawBlockWhereInput;
 
-  const [rawBlocks, rawTransactions, rawLogs, rawTokenTransfers, rawDexSwaps, rawLpActions] =
+  const [rawBlocks, rawTransactions, rawLogs, rawTokenTransfers, rawDexSwaps, rawLpActions, rawStakeActions] =
     await client.$transaction([
       client.rawBlock.updateMany({
         where,
@@ -691,6 +919,12 @@ export async function markRawDataRangeReorged(
           status: "REORGED",
         },
       }),
+      client.rawStakeAction.updateMany({
+        where,
+        data: {
+          status: "REORGED",
+        },
+      }),
     ]);
 
   return {
@@ -700,6 +934,7 @@ export async function markRawDataRangeReorged(
     rawTokenTransfers: rawTokenTransfers.count,
     rawDexSwaps: rawDexSwaps.count,
     rawLpActions: rawLpActions.count,
+    rawStakeActions: rawStakeActions.count,
   };
 }
 

@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   persistRawLpActions,
+  persistRawStakeActions,
   persistRawDexSwaps,
   persistRawTokenTransfers,
   persistRawTransactions,
   readWalletRawLpActions,
+  readWalletRawStakeActions,
   readWalletDexSwapSnapshots,
   readWalletTransferRawLogs,
   readWalletTransferRawTokenTransfers,
@@ -435,6 +437,110 @@ describe("raw lp audit helpers", () => {
         txHash: "0xlp",
         actionKind: "ADD",
         lpAssetIdSnapshot: "chain:369:erc20:0xlp",
+        feeAmountRaw: "200000000000000",
+      }),
+    ]);
+  });
+});
+
+describe("raw stake audit helpers", () => {
+  it("persists and reads wallet-scoped raw stake action snapshots deterministically", async () => {
+    const creates: Array<unknown> = [];
+
+    const persisted = await persistRawStakeActions(
+      [
+        {
+          chainId: 369,
+          protocolSlug: "hex",
+          actionKind: "START",
+          txHash: "0xstake",
+          blockNumber: 130n,
+          blockHash: "0xblock130",
+          actionIndex: 0,
+          contractAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+          initiatorAddress: "0x1111111111111111111111111111111111111111",
+          stakeId: 42n,
+          stakeIndex: 3,
+          stakedDays: 365,
+          tokenAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+          assetIdSnapshot:
+            "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+          decimalsSnapshot: 8,
+          principalLockedRaw: "100000000",
+          feeAssetIdSnapshot: "chain:369:native:PLS",
+          feeDecimalsSnapshot: 18,
+          feeAmountRaw: "200000000000000",
+        },
+      ],
+      {
+        rawStakeAction: {
+          createMany: async (args) => {
+            creates.push(...args.data);
+            return { count: args.data.length };
+          },
+        },
+      },
+    );
+
+    expect(persisted).toEqual({ count: 1 });
+    expect(creates[0]).toMatchObject({
+      protocolSlug: "hex",
+      actionKind: "START",
+      txHash: "0xstake",
+      stakeId: 42n,
+      principalLockedRaw: "100000000",
+      assetIdSnapshot:
+        "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+      feeAssetIdSnapshot: "chain:369:native:PLS",
+    });
+
+    const records = await readWalletRawStakeActions(
+      {
+        chainId: 369,
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        fromBlock: 120n,
+        toBlock: 140n,
+      },
+      {
+        rawStakeAction: {
+          findMany: async () => [
+            {
+              chainId: 369,
+              protocolSlug: "hex",
+              actionKind: "START",
+              txHash: "0xstake",
+              blockNumber: 130n,
+              blockHash: "0xblock130",
+              actionIndex: 0,
+              contractAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+              initiatorAddress: "0x1111111111111111111111111111111111111111",
+              stakeId: 42n,
+              stakeIndex: 3,
+              stakedDays: 365,
+              tokenAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+              assetIdSnapshot:
+                "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+              decimalsSnapshot: 8,
+              principalLockedRaw: "100000000",
+              totalReturnedRaw: null,
+              principalReturnedRaw: null,
+              yieldRaw: null,
+              penaltyRaw: null,
+              feeAssetIdSnapshot: "chain:369:native:PLS",
+              feeDecimalsSnapshot: 18,
+              feeAmountRaw: "200000000000000",
+            },
+          ],
+        },
+      },
+    );
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        txHash: "0xstake",
+        actionKind: "START",
+        stakeId: 42n,
+        principalLockedRaw: "100000000",
         feeAmountRaw: "200000000000000",
       }),
     ]);

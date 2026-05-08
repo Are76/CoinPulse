@@ -1,0 +1,530 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+import { assemblePortfolioDashboard } from "@/services/dashboard/portfolio-dashboard";
+import type { PersistedPriceObservation, ResolveBestPriceResult } from "@/services/pricing/types";
+import type { AverageCostPnlResult, PnLWarning } from "@/services/pnl/types";
+
+const WALLET_ID = "wallet-1";
+const WALLET_ADDRESS = "0x1111111111111111111111111111111111111111";
+const CHAIN_ID = 369;
+const QUOTE_ASSET = "fiat:usd";
+const TOKEN_ASSET = "chain:369:erc20:0xtoken";
+const TOKEN_ADDRESS = "0xtoken";
+const LP_ASSET = "chain:369:erc20:0xlp";
+const LP_ADDRESS = "0xlp";
+const STAKE_ASSET = "chain:369:erc20:0xphex";
+const STAKE_ADDRESS = "0xphex";
+
+type TokenBalanceRecord = {
+  walletId: string;
+  walletAddress: string;
+  chainId: number;
+  assetId: string;
+  assetAddress: string | null;
+  balanceQuantity: string;
+  decimals: number | null;
+  updatedFromBlock: bigint | null;
+  updatedToBlock: bigint | null;
+};
+
+type LpPositionRecord = {
+  walletId: string;
+  walletAddress: string;
+  chainId: number;
+  lpAssetId: string;
+  lpTokenAddress: string | null;
+  lpTokenQuantity: string;
+  token0AssetId: string | null;
+  token0Address: string | null;
+  token1AssetId: string | null;
+  token1Address: string | null;
+  token0NetQuantity: string | null;
+  token1NetQuantity: string | null;
+  updatedFromBlock: bigint | null;
+  updatedToBlock: bigint | null;
+};
+
+type StakePositionRecord = {
+  walletId: string;
+  walletAddress: string;
+  chainId: number;
+  stakeKey: string;
+  tokenAssetId: string;
+  tokenAddress: string | null;
+  principalQuantity: string;
+  returnedQuantity: string;
+  yieldQuantity: string | null;
+  penaltyQuantity: string | null;
+  status: string;
+  startBlock: bigint | null;
+  endBlock: bigint | null;
+};
+
+type LedgerEntryRecord = {
+  id: string;
+  chainId: number;
+  walletId: string;
+  assetId: string;
+  entryType: string;
+  actionType: string;
+  direction: string;
+  quantity: string;
+  occurredAt: Date;
+  actionGroupId: string;
+  txHash: string;
+  sourceLogKey: string | null;
+};
+
+function createPriceObservation(
+  overrides: Partial<PersistedPriceObservation> = {},
+): PersistedPriceObservation {
+  return {
+    id: "obs-1",
+    chainId: CHAIN_ID,
+    assetId: TOKEN_ASSET,
+    assetAddress: TOKEN_ADDRESS,
+    quoteAsset: QUOTE_ASSET,
+    price: "2",
+    sourceType: "ONCHAIN_POOL",
+    sourceId: "pulsex:pair:0xpair",
+    routeMetadata: null,
+    liquidityUsd: "100000",
+    confidence: "0.91",
+    observedAt: new Date("2026-05-08T12:00:00.000Z"),
+    blockNumber: 100n,
+    staleAfterSeconds: 300,
+    createdAt: new Date("2026-05-08T12:00:00.000Z"),
+    updatedAt: new Date("2026-05-08T12:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+function createResolvedPrice(
+  overrides: Partial<ResolveBestPriceResult> & {
+    selected?: PersistedPriceObservation | null;
+  } = {},
+): ResolveBestPriceResult {
+  return {
+    selected: createPriceObservation(),
+    rejected: [],
+    ...overrides,
+  };
+}
+
+function createPnlWarning(overrides: Partial<PnLWarning> = {}): PnLWarning {
+  return {
+    code: "MARK_PRICE_UNAVAILABLE",
+    detail: "mark unavailable",
+    ...overrides,
+  };
+}
+
+function createPnlResult(
+  overrides: Partial<AverageCostPnlResult> = {},
+): AverageCostPnlResult {
+  return {
+    walletId: WALLET_ID,
+    chainId: CHAIN_ID,
+    assetId: TOKEN_ASSET,
+    quoteAsset: QUOTE_ASSET,
+    holdingsQuantity: "5",
+    averageCost: "1.5",
+    realizedPnl: "0.5",
+    unrealizedPnl: "2.5",
+    markPrice: "2",
+    totalAcquiredQuantity: "5",
+    totalDisposedQuantity: "0",
+    warnings: [],
+    ...overrides,
+  };
+}
+
+function createMemoryDb(overrides?: {
+  tokenBalances?: TokenBalanceRecord[];
+  lpPositions?: LpPositionRecord[];
+  stakePositions?: StakePositionRecord[];
+  ledgerEntries?: LedgerEntryRecord[];
+}) {
+  const tokenBalances = overrides?.tokenBalances ?? [];
+  const lpPositions = overrides?.lpPositions ?? [];
+  const stakePositions = overrides?.stakePositions ?? [];
+  const ledgerEntries = overrides?.ledgerEntries ?? [];
+
+  return new Proxy(
+    {
+      portfolioTokenBalance: {
+        async findMany(args: { where: { walletId: string; chainId: number } }) {
+          return tokenBalances.filter(
+            (row) =>
+              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+          );
+        },
+      },
+      portfolioLpPosition: {
+        async findMany(args: { where: { walletId: string; chainId: number } }) {
+          return lpPositions.filter(
+            (row) =>
+              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+          );
+        },
+      },
+      portfolioStakePosition: {
+        async findMany(args: { where: { walletId: string; chainId: number } }) {
+          return stakePositions.filter(
+            (row) =>
+              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+          );
+        },
+      },
+      ledgerEntry: {
+        async findMany(args: { where: { walletId: string; chainId: number } }) {
+          return ledgerEntries.filter(
+            (row) =>
+              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+          );
+        },
+      },
+    },
+    {
+      get(target, property, receiver) {
+        if (property in target) {
+          return Reflect.get(target, property, receiver);
+        }
+        throw new Error(`unexpected-db-access:${String(property)}`);
+      },
+    },
+  );
+}
+
+describe("assemblePortfolioDashboard", () => {
+  it("assembles a portfolio with a priced token position", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    expect(result.summary.totalValueQuote).toBe("10");
+    expect(result.summary.valuationStatus).toBe("available");
+    expect(result.summary.valuationCoverage).toEqual({
+      totalPositions: 1,
+      valuedPositions: 1,
+      unvaluedPositions: 0,
+    });
+    expect(result.tokenPositions).toEqual([
+      expect.objectContaining({
+        assetId: TOKEN_ASSET,
+        balanceQuantity: "5",
+        valuation: expect.objectContaining({
+          status: "available",
+          valueQuote: "10",
+        }),
+        pricing: expect.objectContaining({
+          status: "available",
+          sourceType: "ONCHAIN_POOL",
+          confidence: "0.91",
+        }),
+        pnl: expect.objectContaining({
+          status: "available",
+          unrealizedPnl: "2.5",
+          warnings: [],
+        }),
+      }),
+    ]);
+  });
+
+  it("returns an explicit unpriced token position status", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: null,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => ({ selected: null, rejected: [] }),
+      calculatePnl: async () =>
+        createPnlResult({
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [createPnlWarning()],
+        }),
+    });
+
+    expect(result.summary.totalValueQuote).toBeNull();
+    expect(result.summary.valuationStatus).toBe("unavailable");
+    expect(result.tokenPositions[0]).toMatchObject({
+      pricing: { status: "unavailable" },
+      valuation: { status: "unavailable", valueQuote: null },
+      pnl: { status: "unavailable" },
+    });
+  });
+
+  it("surfaces stale price status explicitly", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => ({
+        selected: null,
+        rejected: [{ id: "obs-1", reason: "STALE" }],
+      }),
+      calculatePnl: async () =>
+        createPnlResult({
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [createPnlWarning()],
+        }),
+    });
+
+    expect(result.tokenPositions[0]?.pricing.status).toBe("stale_price");
+  });
+
+  it("surfaces low-confidence price status explicitly", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => ({
+        selected: null,
+        rejected: [{ id: "obs-1", reason: "LOW_CONFIDENCE" }],
+      }),
+      calculatePnl: async () =>
+        createPnlResult({
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [createPnlWarning()],
+        }),
+    });
+
+    expect(result.tokenPositions[0]?.pricing.status).toBe("low_confidence_price");
+  });
+
+  it("surfaces pnl warnings in the token dto", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () =>
+        createPnlResult({
+          warnings: [
+            createPnlWarning({
+              code: "MARK_PRICE_UNAVAILABLE",
+              detail: "resolved mark price unavailable",
+            }),
+          ],
+          unrealizedPnl: null,
+          markPrice: null,
+        }),
+    });
+
+    expect(result.tokenPositions[0]?.pnl).toMatchObject({
+      status: "unavailable",
+      warnings: [
+        expect.objectContaining({
+          code: "MARK_PRICE_UNAVAILABLE",
+        }),
+      ],
+    });
+    expect(result.summary.warnings).toContain("pnl-warning:MARK_PRICE_UNAVAILABLE");
+  });
+
+  it("includes lp and stake positions without fabricating valuation", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "1",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+        lpPositions: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            lpAssetId: LP_ASSET,
+            lpTokenAddress: LP_ADDRESS,
+            lpTokenQuantity: "0.5",
+            token0AssetId: TOKEN_ASSET,
+            token0Address: TOKEN_ADDRESS,
+            token1AssetId: "chain:369:erc20:0xother",
+            token1Address: "0xother",
+            token0NetQuantity: "1",
+            token1NetQuantity: "2",
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+        stakePositions: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            stakeKey: "42",
+            tokenAssetId: STAKE_ASSET,
+            tokenAddress: STAKE_ADDRESS,
+            principalQuantity: "100",
+            returnedQuantity: "0",
+            yieldQuantity: null,
+            penaltyQuantity: null,
+            status: "ACTIVE",
+            startBlock: null,
+            endBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice({ selected: createPriceObservation({ price: "3" }) }),
+      calculatePnl: async () => createPnlResult({ holdingsQuantity: "1", markPrice: "3", unrealizedPnl: "1.5" }),
+    });
+
+    expect(result.summary.valuationStatus).toBe("partial");
+    expect(result.lpPositions[0]).toMatchObject({
+      valuation: { status: "unsupported", valueQuote: null },
+    });
+    expect(result.stakePositions[0]).toMatchObject({
+      valuation: { status: "unsupported", valueQuote: null },
+    });
+  });
+
+  it("assembles without rpc usage or unexpected dependencies", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "1",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+        ledgerEntries: [
+          {
+            id: "entry-1",
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            entryType: "SWAP_IN",
+            actionType: "SWAP",
+            direction: "IN",
+            quantity: "1",
+            occurredAt: new Date("2026-05-08T12:00:00.000Z"),
+            actionGroupId: "group-1",
+            txHash: "0xtx",
+            sourceLogKey: "log:0xtx:0",
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    expect(result.schemaVersion).toBe("v1");
+  });
+
+  it("keeps the dashboard module backend-only with no ui directives", () => {
+    const source = readFileSync(
+      join(process.cwd(), "src/services/dashboard/portfolio-dashboard.ts"),
+      "utf8",
+    );
+
+    expect(source).not.toContain("\"use client\"");
+    expect(source).not.toContain("React");
+    expect(source).not.toContain("return (");
+  });
+});
