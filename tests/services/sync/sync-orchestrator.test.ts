@@ -3,6 +3,7 @@ import type { SourceFamily } from "@prisma/client";
 
 import { runWalletSync } from "@/services/sync/sync-orchestrator";
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
+import { OperationConflictError } from "@/services/operations/operation-lock";
 
 function createDraft(
   overrides: Partial<CanonicalLedgerEntryDraft> = {},
@@ -259,5 +260,47 @@ describe("runWalletSync", () => {
     ).rejects.toThrow(
       "Unsupported source families for the current concrete sync path: DEX. Supported families: TRANSFERS.",
     );
+  });
+
+  it("blocks a manual sync when an active rebuild conflict is reported", async () => {
+    const reserveOperationRun = vi.fn(async () => {
+      throw new OperationConflictError({
+        allowed: false,
+        reason: "active_rebuild_in_progress",
+        conflictingOperationId: "run-rebuild-1",
+        conflictingTrigger: "REBUILD",
+        conflictingStage: "REBUILDING_LEDGER",
+        startedAt: "2026-05-08T12:00:00.000Z",
+        updatedAt: "2026-05-08T12:01:00.000Z",
+      });
+    });
+
+    await expect(
+      runWalletSync({
+        wallet: {
+          id: "wallet_1",
+          chainId: 369,
+          address: "0x1111111111111111111111111111111111111111",
+        },
+        sourceFamilies: ["TRANSFERS"],
+        endBlock: 20n,
+        policyLabel: "manual-dashboard-sync",
+        dependencies: {
+          cursorStore: {
+            getCursor: vi.fn(async () => null),
+            upsertCursor: vi.fn(async () => undefined),
+          },
+          ingestSourceFamily: vi.fn(),
+          normalizeSourceFamily: vi.fn(),
+          reserveOperationRun,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "OPERATION_CONFLICT",
+      details: expect.objectContaining({
+        reason: "active_rebuild_in_progress",
+        conflictingOperationId: "run-rebuild-1",
+      }),
+    });
   });
 });

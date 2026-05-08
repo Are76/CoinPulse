@@ -2,6 +2,7 @@ import "server-only";
 
 import type { SourceFamily } from "@prisma/client";
 
+import { reserveOperationRun } from "@/services/operations/operation-lock";
 import { materializeCurrentPortfolioPositions } from "@/services/portfolio";
 import type { MaterializePortfolioPositionsReport } from "@/services/portfolio";
 import type { RebuildLedgerReport } from "@/services/rebuild/rebuild-ledger";
@@ -13,6 +14,7 @@ import {
 
 type RebuildOperationDependencies = {
   runStore?: SyncRunStore;
+  reserveOperationRun?: typeof reserveOperationRun;
   rebuildCanonicalLedger?: typeof rebuildCanonicalLedger;
   materializeCurrentPortfolioPositions?: typeof materializeCurrentPortfolioPositions;
 };
@@ -38,12 +40,17 @@ export async function runRebuildOperation(args: {
 }): Promise<RebuildOperationResult> {
   const dependencies = args.dependencies ?? {};
   const runStore = dependencies.runStore ?? createPrismaSyncRunStore();
+  const reserveRun =
+    dependencies.reserveOperationRun ??
+    (dependencies.runStore
+      ? async (input: Parameters<SyncRunStore["createRun"]>[0]) => runStore.createRun(input)
+      : reserveOperationRun);
   const rebuildLedger = dependencies.rebuildCanonicalLedger ?? rebuildCanonicalLedger;
   const materializePortfolio =
     dependencies.materializeCurrentPortfolioPositions ??
     materializeCurrentPortfolioPositions;
 
-  const run = await runStore.createRun({
+  const run = await reserveRun({
     walletId: args.wallet.id,
     chainId: args.wallet.chainId,
     trigger: "REBUILD",

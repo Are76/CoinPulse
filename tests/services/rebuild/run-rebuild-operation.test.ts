@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { OperationConflictError } from "@/services/operations/operation-lock";
 import { runRebuildOperation } from "@/services/rebuild/run-rebuild-operation";
 
 describe("runRebuildOperation", () => {
@@ -149,6 +150,48 @@ describe("runRebuildOperation", () => {
       failedSourceFamily: "LP",
       failedFromBlock: 500n,
       failedToBlock: 600n,
+    });
+  });
+
+  it("blocks rebuild when reserveOperationRun reports an active conflicting sync", async () => {
+    const reserveOperationRun = vi.fn(async () => {
+      throw new OperationConflictError({
+        allowed: false,
+        reason: "active_sync_in_scope",
+        conflictingOperationId: "run-sync-1",
+        conflictingTrigger: "MANUAL",
+        conflictingStage: "PERSISTING_LEDGER",
+        startedAt: "2026-05-08T12:00:00.000Z",
+        updatedAt: "2026-05-08T12:01:00.000Z",
+      });
+    });
+
+    await expect(
+      runRebuildOperation({
+        wallet: {
+          id: "wallet-1",
+          address: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+        },
+        fromBlock: 100n,
+        toBlock: 200n,
+        sourceFamilies: ["TRANSFERS"],
+        dependencies: {
+          runStore: {
+            createRun: vi.fn(),
+            updateRun: vi.fn(),
+          },
+          reserveOperationRun,
+          rebuildCanonicalLedger: vi.fn(),
+          materializeCurrentPortfolioPositions: vi.fn(),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "OPERATION_CONFLICT",
+      details: expect.objectContaining({
+        reason: "active_sync_in_scope",
+        conflictingOperationId: "run-sync-1",
+      }),
     });
   });
 });

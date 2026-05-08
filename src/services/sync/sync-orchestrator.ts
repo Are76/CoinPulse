@@ -3,6 +3,7 @@ import "server-only";
 import type { SourceFamily, SyncTrigger } from "@prisma/client";
 
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
+import { reserveOperationRun } from "@/services/operations/operation-lock";
 import {
   createPrismaSyncCursorStore,
   createPrismaSyncRunStore,
@@ -32,6 +33,7 @@ type SyncRunDependencies<TLog = unknown> = {
   supportedSourceFamilies?: readonly SourceFamily[];
   runStore?: SyncRunStore;
   cursorStore?: SyncCursorStore;
+  reserveOperationRun?: typeof reserveOperationRun;
   ingestSourceFamily: (args: {
     runId: string;
     wallet: SyncWallet;
@@ -80,6 +82,11 @@ export async function runWalletSync<TLog = unknown>(args: {
   const runStore = dependencies.runStore ?? createPrismaSyncRunStore();
   const cursorStore = dependencies.cursorStore ?? createPrismaSyncCursorStore();
   const persistLedger = dependencies.persistLedger ?? persistNormalizedLedger;
+  const reserveRun =
+    dependencies.reserveOperationRun ??
+    (dependencies.runStore
+      ? async (input: Parameters<SyncRunStore["createRun"]>[0]) => runStore.createRun(input)
+      : reserveOperationRun);
 
   const syncPlans = await Promise.all(
     args.sourceFamilies.map(async (sourceFamily) => {
@@ -98,7 +105,7 @@ export async function runWalletSync<TLog = unknown>(args: {
     }),
   );
 
-  const run = await runStore.createRun({
+  const run = await reserveRun({
     walletId: args.wallet.id,
     chainId: args.wallet.chainId,
     trigger: args.trigger ?? "MANUAL",

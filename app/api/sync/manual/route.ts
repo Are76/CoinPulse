@@ -1,7 +1,9 @@
 import { ZodError } from "zod";
 
+import { isOperationConflictError } from "@/services/operations/operation-lock";
 import { runWalletSync } from "@/services/sync";
 import {
+  buildConflictResponse,
   buildInternalErrorResponse,
   buildInvalidInputResponse,
   buildNotFoundResponse,
@@ -36,6 +38,9 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof ZodError) {
       return buildInvalidInputResponse(error);
+    }
+    if (isOperationConflictError(error)) {
+      return buildConflictResponse(error.code, error.message, error.details);
     }
     return buildInternalErrorResponse();
   }
