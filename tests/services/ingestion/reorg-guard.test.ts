@@ -19,7 +19,7 @@ describe("reorg guard", () => {
     });
   });
 
-  it("always includes the detected mismatching block even when it is older than the tip window", () => {
+  it("includes all affected descendant blocks through the latest ingested block for a deep mismatch", () => {
     expect(
       buildBoundedReorgWindow({
         detectedBlockNumber: 80n,
@@ -28,7 +28,7 @@ describe("reorg guard", () => {
       }),
     ).toEqual({
       fromBlock: 80n,
-      toBlock: 90n,
+      toBlock: 155n,
     });
   });
 

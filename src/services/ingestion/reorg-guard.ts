@@ -40,15 +40,11 @@ export function buildBoundedReorgWindow(args: {
     throw new Error("detected block cannot be ahead of the latest ingested block");
   }
 
+  // The bounded policy applies to how far back we inspect for possible reorgs.
+  // Once a mismatch is found, every descendant block through the latest ingested
+  // block is affected and must stop being treated as canonical in the raw layer.
   return {
     fromBlock: args.detectedBlockNumber,
-    toBlock: minBigInt(
-      args.latestIngestedBlockNumber,
-      args.detectedBlockNumber + args.maxDepth,
-    ),
+    toBlock: args.latestIngestedBlockNumber,
   };
-}
-
-function minBigInt(left: bigint, right: bigint) {
-  return left < right ? left : right;
 }
