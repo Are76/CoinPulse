@@ -5,6 +5,7 @@ import { getRedis } from "@/lib/redis";
 import { env } from "@/lib/env";
 import { serverEnv } from "@/lib/server-env";
 import { SUPPORTED_CHAINS } from "@/config/chains";
+import { getOperationStateReport, type OperationStateReport } from "@/services/debug/operation-state";
 
 export type DependencyState = "ready" | "degraded" | "unavailable";
 
@@ -40,6 +41,7 @@ export type DebugStatusReport = {
     persistedObservationsOnly: true;
     liveAdaptersEnabled: false;
   };
+  operationState: OperationStateReport;
 };
 
 type HealthDependencies = {
@@ -83,7 +85,7 @@ export async function getHealthReport(dependencies: HealthDependencies = {}): Pr
   };
 }
 
-export function getDebugStatusReport(): DebugStatusReport {
+export async function getDebugStatusReport(): Promise<DebugStatusReport> {
   return {
     status: "ok",
     timestamp: new Date().toISOString(),
@@ -100,6 +102,7 @@ export function getDebugStatusReport(): DebugStatusReport {
       persistedObservationsOnly: true,
       liveAdaptersEnabled: false,
     },
+    operationState: await getOperationStateReport(),
   };
 }
 
