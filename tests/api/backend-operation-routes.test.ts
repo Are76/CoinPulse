@@ -115,6 +115,7 @@ describe("POST /api/sync/manual", () => {
       code: "OPERATION_CONFLICT",
       message: "A conflicting operation is already active.",
       details: {
+        allowed: false,
         reason: "active_rebuild_in_progress",
         conflictingOperationId: "run-rebuild-1",
         conflictingTrigger: "REBUILD",
@@ -145,6 +146,7 @@ describe("POST /api/sync/manual", () => {
         code: "OPERATION_CONFLICT",
         message: "A conflicting operation is already active.",
         details: {
+          allowed: false,
           reason: "active_rebuild_in_progress",
           conflictingOperationId: "run-rebuild-1",
           conflictingTrigger: "REBUILD",
@@ -265,6 +267,7 @@ describe("POST /api/rebuild", () => {
       code: "OPERATION_CONFLICT",
       message: "A conflicting operation is already active.",
       details: {
+        allowed: false,
         reason: "active_sync_in_scope",
         conflictingOperationId: "run-sync-1",
         conflictingTrigger: "MANUAL",
@@ -295,6 +298,7 @@ describe("POST /api/rebuild", () => {
         code: "OPERATION_CONFLICT",
         message: "A conflicting operation is already active.",
         details: {
+          allowed: false,
           reason: "active_sync_in_scope",
           conflictingOperationId: "run-sync-1",
           conflictingTrigger: "MANUAL",

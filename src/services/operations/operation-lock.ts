@@ -178,6 +178,13 @@ export function isOperationConflictError(error: unknown): error is OperationConf
   message: string;
   details: OperationConflictDetails;
 } {
+  const details =
+    typeof error === "object" &&
+    error !== null &&
+    "details" in error
+      ? error.details
+      : null;
+
   return (
     typeof error === "object" &&
     error !== null &&
@@ -185,7 +192,12 @@ export function isOperationConflictError(error: unknown): error is OperationConf
     error.code === "OPERATION_CONFLICT" &&
     "message" in error &&
     typeof error.message === "string" &&
-    "details" in error
+    typeof details === "object" &&
+    details !== null &&
+    "allowed" in details &&
+    details.allowed === false &&
+    "reason" in details &&
+    typeof details.reason === "string"
   );
 }
 

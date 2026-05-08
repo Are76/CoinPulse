@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkOperationConflict,
+  isOperationConflictError,
   OperationConflictError,
   reserveOperationRun,
 } from "@/services/operations/operation-lock";
@@ -152,6 +153,26 @@ describe("checkOperationConflict", () => {
     expect(error.message).toBe("A conflicting operation is already active.");
     expect(error.details.reason).toBe("active_rebuild_in_progress");
   });
+
+  it("rejects malformed conflict-like errors in the type guard", () => {
+    expect(
+      isOperationConflictError({
+        code: "OPERATION_CONFLICT",
+        message: "A conflicting operation is already active.",
+        details: null,
+      }),
+    ).toBe(false);
+
+    expect(
+      isOperationConflictError({
+        code: "OPERATION_CONFLICT",
+        message: "A conflicting operation is already active.",
+        details: {
+          allowed: false,
+        },
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("reserveOperationRun", () => {
@@ -202,8 +223,9 @@ describe("reserveOperationRun", () => {
 
   it("does not blindly convert P2034 to conflict when recheck finds no active operation", async () => {
     let attempts = 0;
+    const create = async () => ({ id: "run-created-after-retry" });
     const db = {
-      $transaction: async () => {
+      $transaction: async (callback: (tx: { syncRun: { findMany: () => Promise<never[]>; create: typeof create } }) => Promise<{ id: string }>) => {
         attempts += 1;
         if (attempts === 1) {
           const error = new Error("serialization failure") as Error & { code: string };
@@ -211,7 +233,12 @@ describe("reserveOperationRun", () => {
           throw error;
         }
 
-        return { id: "run-created-after-retry" };
+        return callback({
+          syncRun: {
+            findMany: async () => [],
+            create,
+          },
+        });
       },
       syncRun: {
         findMany: async () => [],
