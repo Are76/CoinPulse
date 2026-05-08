@@ -45,6 +45,19 @@ function createMemoryStores() {
     amountRaw: string;
     status: "ACTIVE";
   }>();
+  const rawTransactions = new Map<string, {
+    chainId: number;
+    txHash: string;
+    blockNumber: bigint;
+    blockHash: string;
+    transactionIndex: number;
+    fromAddress: string;
+    toAddress: string | null;
+    valueRaw: string;
+    gasPriceRaw: string | null;
+    gasUsedRaw: string | null;
+    status: "ACTIVE";
+  }>();
   const tokens = new Map<string, {
     id: string;
     assetId: string;
@@ -208,6 +221,35 @@ function createMemoryStores() {
           );
       },
     },
+    rawTransaction: {
+      async createMany(args: {
+        data: Array<{
+          chainId: number;
+          txHash: string;
+          blockNumber: bigint;
+          blockHash: string;
+          transactionIndex: number;
+          fromAddress: string;
+          toAddress: string | null;
+          valueRaw: string;
+          gasPriceRaw: string | null;
+          gasUsedRaw: string | null;
+        }>;
+      }) {
+        let count = 0;
+        for (const item of args.data) {
+          const key = `${item.chainId}:${item.txHash}:${item.blockHash}`;
+          if (!rawTransactions.has(key)) {
+            rawTransactions.set(key, {
+              ...item,
+              status: "ACTIVE",
+            });
+            count += 1;
+          }
+        }
+        return { count };
+      },
+    },
     token: {
       async findUnique(args: { where: { chainId_addressLower: { chainId: number; addressLower: string } } }) {
         return (
@@ -337,6 +379,7 @@ function createMemoryStores() {
     rawLogs,
     rawBlocks,
     rawTokenTransfers,
+    rawTransactions,
     tokens,
     ledgerActionGroups,
     ledgerEntries,
@@ -401,6 +444,28 @@ describe("transfer sync flow", () => {
         }
         return "Token";
       }),
+      getTransaction: vi.fn(async ({ hash }: { hash: `0x${string}` }) => ({
+        hash,
+        blockHash: hash === "0xtx1" ? "0xblock1" : "0xblock2",
+        blockNumber: hash === "0xtx1" ? 10n : 11n,
+        transactionIndex: hash === "0xtx1" ? 0 : 1,
+        from: walletAddress,
+        to:
+          hash === "0xtx1"
+            ? "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            : "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        value: 0n,
+        gasPrice: 2_000_000_000n,
+        input: "0x",
+      })),
+      getTransactionReceipt: vi.fn(async ({ hash }: { hash: `0x${string}` }) => ({
+        transactionHash: hash,
+        blockHash: hash === "0xtx1" ? "0xblock1" : "0xblock2",
+        blockNumber: hash === "0xtx1" ? 10n : 11n,
+        gasUsed: hash === "0xtx1" ? 21_000n : 42_000n,
+        effectiveGasPrice: 2_000_000_000n,
+        logs: [],
+      })),
     };
 
     const dependencies = createSyncDependencies({
@@ -444,6 +509,7 @@ describe("transfer sync flow", () => {
       actionGroups: 0,
       ledgerEntries: 0,
     });
+    expect(stores.rawTransactions.size).toBe(2);
     expect(stores.rawLogs.size).toBe(2);
     expect(stores.rawTokenTransfers.size).toBe(2);
     expect(stores.ledgerActionGroups.size).toBe(2);
@@ -496,6 +562,25 @@ describe("transfer sync flow", () => {
         }
         return "Token";
       }),
+      getTransaction: vi.fn(async () => ({
+        hash: "0xtx1",
+        blockHash: "0xblock1",
+        blockNumber: 10n,
+        transactionIndex: 0,
+        from: walletAddress,
+        to: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        value: 0n,
+        gasPrice: 2_000_000_000n,
+        input: "0x",
+      })),
+      getTransactionReceipt: vi.fn(async () => ({
+        transactionHash: "0xtx1",
+        blockHash: "0xblock1",
+        blockNumber: 10n,
+        gasUsed: 21_000n,
+        effectiveGasPrice: 2_000_000_000n,
+        logs: [],
+      })),
     };
 
     const dependencies = createSyncDependencies({
@@ -559,6 +644,25 @@ describe("transfer sync flow", () => {
         }
         return "Token";
       }),
+      getTransaction: vi.fn(async () => ({
+        hash: "0xtx1",
+        blockHash: "0xblock1",
+        blockNumber: 10n,
+        transactionIndex: 0,
+        from: walletAddress,
+        to: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        value: 0n,
+        gasPrice: 2_000_000_000n,
+        input: "0x",
+      })),
+      getTransactionReceipt: vi.fn(async () => ({
+        transactionHash: "0xtx1",
+        blockHash: "0xblock1",
+        blockNumber: 10n,
+        gasUsed: 21_000n,
+        effectiveGasPrice: 2_000_000_000n,
+        logs: [],
+      })),
     };
 
     const dependencies = createSyncDependencies({
@@ -658,6 +762,25 @@ describe("transfer sync flow", () => {
         }
         return "Token";
       }),
+      getTransaction: vi.fn(async () => ({
+        hash: "0xtx1",
+        blockHash: "0xblock1",
+        blockNumber: 10n,
+        transactionIndex: 0,
+        from: walletAddress,
+        to: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        value: 0n,
+        gasPrice: 2_000_000_000n,
+        input: "0x",
+      })),
+      getTransactionReceipt: vi.fn(async () => ({
+        transactionHash: "0xtx1",
+        blockHash: "0xblock1",
+        blockNumber: 10n,
+        gasUsed: 21_000n,
+        effectiveGasPrice: 2_000_000_000n,
+        logs: [],
+      })),
     };
 
     const originalFindMany = stores.db.rawBlock.findMany;

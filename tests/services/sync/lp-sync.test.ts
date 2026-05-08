@@ -602,8 +602,25 @@ describe("lp sync flow", () => {
           if (functionName === "symbol") return "TOK";
           return "Token";
         }),
-        getTransaction: vi.fn(),
-        getTransactionReceipt: vi.fn(),
+        getTransaction: vi.fn(async () => ({
+          hash: "0xlpambiguous",
+          blockHash: "0xblock122",
+          blockNumber: 122n,
+          transactionIndex: 0,
+          from: walletAddress,
+          to: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          value: 0n,
+          gasPrice: 2_000_000_000n,
+          input: "0x",
+        })),
+        getTransactionReceipt: vi.fn(async () => ({
+          transactionHash: "0xlpambiguous",
+          blockHash: "0xblock122",
+          blockNumber: 122n,
+          gasUsed: 21_000n,
+          effectiveGasPrice: 2_000_000_000n,
+          logs: [],
+        })),
       } as never,
     });
 

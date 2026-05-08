@@ -16,6 +16,7 @@ import {
 import {
   persistRawBlocks,
   persistRawLogs,
+  persistRawTransactions,
   persistRawTokenTransfers,
   readWalletTransferRawTokenTransfers,
 } from "@/services/ingestion/raw-store";
@@ -213,6 +214,44 @@ export async function ingestWalletTransferArtifacts(args: {
       })),
     args.db as never,
   );
+  const transactionHashes = Array.from(
+    new Set(
+      dedupedLogs
+        .map((log) => log.transactionHash?.toLowerCase())
+        .filter((value): value is string => typeof value === "string"),
+    ),
+  ).sort();
+  const rawTransactions = [];
+
+  for (const txHash of transactionHashes) {
+    const transaction = await args.publicClient.getTransaction({
+      hash: txHash as `0x${string}`,
+    });
+    const receipt = await args.publicClient.getTransactionReceipt({
+      hash: txHash as `0x${string}`,
+    });
+
+    if (!transaction.blockHash || transaction.blockNumber === null) {
+      warnings.push(`skip-raw-transaction:${txHash}:missing-tx-block`);
+      continue;
+    }
+
+    rawTransactions.push({
+      chainId: args.wallet.chainId,
+      txHash: transaction.hash,
+      blockNumber: transaction.blockNumber,
+      blockHash: transaction.blockHash,
+      transactionIndex: transaction.transactionIndex ?? 0,
+      fromAddress: transaction.from,
+      toAddress: transaction.to,
+      valueRaw: transaction.value.toString(),
+      gasPriceRaw:
+        (receipt.effectiveGasPrice ?? transaction.gasPrice)?.toString() ?? null,
+      gasUsedRaw: receipt.gasUsed.toString(),
+    });
+  }
+
+  await persistRawTransactions(rawTransactions, args.db as never);
   const decodedTransfers = [];
 
   for (const log of dedupedLogs) {
