@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkOperationConflict,
+  inspectOperationBlocker,
   isOperationConflictError,
   OperationConflictError,
   reserveOperationRun,
@@ -27,6 +28,7 @@ describe("checkOperationConflict", () => {
           updatedAt: new Date("2026-05-08T10:02:00.000Z"),
         },
       ],
+      now: new Date("2026-05-08T10:02:00.000Z"),
     });
 
     expect(result).toEqual({
@@ -35,8 +37,14 @@ describe("checkOperationConflict", () => {
       conflictingOperationId: "run-rebuild-1",
       conflictingTrigger: "REBUILD",
       conflictingStage: "REBUILDING_LEDGER",
+      operationType: "rebuild",
+      status: "RUNNING",
       startedAt: "2026-05-08T10:00:00.000Z",
+      createdAt: "2026-05-08T10:00:00.000Z",
       updatedAt: "2026-05-08T10:02:00.000Z",
+      ageMs: 120000,
+      appearsStale: false,
+      staleReason: null,
     });
   });
 
@@ -59,6 +67,7 @@ describe("checkOperationConflict", () => {
           updatedAt: new Date("2026-05-08T11:00:00.000Z"),
         },
       ],
+      now: new Date("2026-05-08T11:00:00.000Z"),
     });
 
     expect(result).toEqual({
@@ -67,8 +76,14 @@ describe("checkOperationConflict", () => {
       conflictingOperationId: "run-rebuild-2",
       conflictingTrigger: "REBUILD",
       conflictingStage: "PENDING",
+      operationType: "rebuild",
+      status: "PENDING",
       startedAt: "2026-05-08T11:00:00.000Z",
+      createdAt: "2026-05-08T11:00:00.000Z",
       updatedAt: "2026-05-08T11:00:00.000Z",
+      ageMs: 0,
+      appearsStale: false,
+      staleReason: null,
     });
   });
 
@@ -91,6 +106,7 @@ describe("checkOperationConflict", () => {
           updatedAt: new Date("2026-05-08T12:01:00.000Z"),
         },
       ],
+      now: new Date("2026-05-08T12:01:00.000Z"),
     });
 
     expect(result).toEqual({
@@ -99,8 +115,14 @@ describe("checkOperationConflict", () => {
       conflictingOperationId: "run-sync-1",
       conflictingTrigger: "MANUAL",
       conflictingStage: "PERSISTING_LEDGER",
+      operationType: "manual_sync",
+      status: "RUNNING",
       startedAt: "2026-05-08T12:00:00.000Z",
+      createdAt: "2026-05-08T12:00:00.000Z",
       updatedAt: "2026-05-08T12:01:00.000Z",
+      ageMs: 60000,
+      appearsStale: false,
+      staleReason: null,
     });
   });
 
@@ -133,9 +155,128 @@ describe("checkOperationConflict", () => {
           updatedAt: new Date("2026-05-08T09:11:00.000Z"),
         },
       ],
+      now: new Date("2026-05-08T12:00:00.000Z"),
     });
 
     expect(result).toEqual({ allowed: true });
+  });
+
+  it("marks a fresh pending blocker as not stale", () => {
+    const result = inspectOperationBlocker(
+      {
+        id: "run-pending-fresh",
+        trigger: "REBUILD",
+        status: "PENDING",
+        stage: "PENDING",
+        chainId: 369,
+        walletId: "wallet-1",
+        createdAt: new Date("2026-05-08T10:00:00.000Z"),
+        updatedAt: new Date("2026-05-08T10:01:00.000Z"),
+      },
+      {
+        now: new Date("2026-05-08T10:10:00.000Z"),
+        thresholds: {
+          pendingMs: 15 * 60 * 1000,
+          runningMs: 60 * 60 * 1000,
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "PENDING",
+      operationType: "rebuild",
+      ageMs: 600000,
+      appearsStale: false,
+      staleReason: null,
+    });
+  });
+
+  it("marks a stale pending blocker explicitly", () => {
+    const result = inspectOperationBlocker(
+      {
+        id: "run-pending-stale",
+        trigger: "REBUILD",
+        status: "PENDING",
+        stage: "PENDING",
+        chainId: 369,
+        walletId: "wallet-1",
+        createdAt: new Date("2026-05-08T10:00:00.000Z"),
+        updatedAt: new Date("2026-05-08T10:02:00.000Z"),
+      },
+      {
+        now: new Date("2026-05-08T10:20:00.000Z"),
+        thresholds: {
+          pendingMs: 15 * 60 * 1000,
+          runningMs: 60 * 60 * 1000,
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "PENDING",
+      ageMs: 1200000,
+      appearsStale: true,
+      staleReason: "pending_threshold_exceeded",
+    });
+  });
+
+  it("marks a fresh running blocker as not stale", () => {
+    const result = inspectOperationBlocker(
+      {
+        id: "run-running-fresh",
+        trigger: "MANUAL",
+        status: "RUNNING",
+        stage: "PERSISTING_LEDGER",
+        chainId: 369,
+        walletId: "wallet-1",
+        createdAt: new Date("2026-05-08T10:00:00.000Z"),
+        updatedAt: new Date("2026-05-08T10:30:00.000Z"),
+      },
+      {
+        now: new Date("2026-05-08T10:45:00.000Z"),
+        thresholds: {
+          pendingMs: 15 * 60 * 1000,
+          runningMs: 60 * 60 * 1000,
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "RUNNING",
+      operationType: "manual_sync",
+      ageMs: 2700000,
+      appearsStale: false,
+      staleReason: null,
+    });
+  });
+
+  it("marks a stale running blocker explicitly", () => {
+    const result = inspectOperationBlocker(
+      {
+        id: "run-running-stale",
+        trigger: "MANUAL",
+        status: "RUNNING",
+        stage: "PERSISTING_LEDGER",
+        chainId: 369,
+        walletId: "wallet-1",
+        createdAt: new Date("2026-05-08T10:00:00.000Z"),
+        updatedAt: new Date("2026-05-08T10:30:00.000Z"),
+      },
+      {
+        now: new Date("2026-05-08T11:45:01.000Z"),
+        thresholds: {
+          pendingMs: 15 * 60 * 1000,
+          runningMs: 60 * 60 * 1000,
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "RUNNING",
+      ageMs: 6301000,
+      appearsStale: true,
+      staleReason: "running_threshold_exceeded",
+    });
   });
 
   it("converts a conflict result into a typed conflict error", () => {
@@ -145,8 +286,14 @@ describe("checkOperationConflict", () => {
       conflictingOperationId: "run-rebuild-3",
       conflictingTrigger: "REBUILD",
       conflictingStage: "REBUILDING_LEDGER",
+      operationType: "rebuild",
+      status: "RUNNING",
       startedAt: "2026-05-08T13:00:00.000Z",
+      createdAt: "2026-05-08T13:00:00.000Z",
       updatedAt: "2026-05-08T13:01:00.000Z",
+      ageMs: 60000,
+      appearsStale: false,
+      staleReason: null,
     });
 
     expect(error.code).toBe("OPERATION_CONFLICT");
@@ -211,12 +358,14 @@ describe("reserveOperationRun", () => {
         endBlock: 200n,
         policyLabel: "manual-dashboard-sync",
         db,
+        now: new Date("2026-05-08T14:10:00.000Z"),
       }),
     ).rejects.toMatchObject({
       code: "OPERATION_CONFLICT",
       details: expect.objectContaining({
         reason: "active_rebuild_in_progress",
         conflictingOperationId: "run-rebuild-race",
+        appearsStale: false,
       }),
     });
   });
@@ -256,6 +405,7 @@ describe("reserveOperationRun", () => {
       endBlock: 200n,
       policyLabel: "manual-rebuild",
       db,
+      now: new Date("2026-05-08T14:10:00.000Z"),
     });
 
     expect(result).toEqual({ id: "run-created-after-retry" });

@@ -3,6 +3,10 @@ import "server-only";
 import type { SourceFamily, SyncRunStatus, SyncTrigger } from "@prisma/client";
 
 import { getDb } from "@/lib/db";
+import {
+  inspectOperationBlocker,
+  type OperationStaleReason,
+} from "@/services/operations/operation-lock";
 
 export type OperationType =
   | "manual_sync"
@@ -40,11 +44,26 @@ export type OperationState = {
     trigger: SyncTrigger | "UNKNOWN";
     policyLabel: string | null;
   };
+  staleInspection: {
+    ageMs: number;
+    appearsStale: boolean;
+    staleReason: OperationStaleReason | null;
+  } | null;
 };
 
 export type OperationStateReport = {
   updatedAt: string;
   operations: OperationState[];
+  blockerSummary: {
+    activeBlockerCount: number;
+    staleBlockerCount: number;
+    pendingBlockerCount: number;
+    runningBlockerCount: number;
+    oldestBlockerAgeMs: number | null;
+    newestBlockerAgeMs: number | null;
+    hasStaleBlockers: boolean;
+    blockersByOperationType: Partial<Record<OperationType, number>>;
+  };
   lastSuccessfulSyncAt: string | null;
   lastRebuildAt: string | null;
   warnings: string[];
@@ -201,6 +220,7 @@ export async function getOperationStateReport(
   return {
     updatedAt: now.toISOString(),
     operations,
+    blockerSummary: summarizeOperationBlockers(operations),
     lastSuccessfulSyncAt,
     lastRebuildAt,
     warnings,
@@ -241,6 +261,17 @@ export function mapSyncRunToOperationState(
       trigger: isKnownTrigger(syncRun.trigger) ? syncRun.trigger : "UNKNOWN",
       policyLabel: syncRun.policyLabel ?? null,
     },
+    staleInspection:
+      syncRun.status === "PENDING" || syncRun.status === "RUNNING"
+        ? (() => {
+            const inspection = inspectOperationBlocker(syncRun, { now });
+            return {
+              ageMs: inspection.ageMs,
+              appearsStale: inspection.appearsStale,
+              staleReason: inspection.staleReason,
+            };
+          })()
+        : null,
   };
 }
 
@@ -277,4 +308,49 @@ function mapOperationStatus(args: {
 
 function isKnownTrigger(value: string): value is SyncTrigger {
   return value === "MANUAL" || value === "IMPORT" || value === "REBUILD";
+}
+
+function summarizeOperationBlockers(
+  operations: OperationState[],
+): OperationStateReport["blockerSummary"] {
+  const blockers = operations.filter(
+    (operation) =>
+      operation.staleInspection !== null &&
+      (operation.status === "queued" ||
+        operation.status === "running" ||
+        operation.status === "rebuilding"),
+  );
+
+  const ageValues = blockers.map(
+    (blocker) => blocker.staleInspection?.ageMs ?? 0,
+  );
+  const blockersByOperationType = blockers.reduce<
+    Partial<Record<OperationType, number>>
+  >((accumulator, blocker) => {
+    accumulator[blocker.operationType] =
+      (accumulator[blocker.operationType] ?? 0) + 1;
+    return accumulator;
+  }, {});
+
+  const pendingBlockerCount = blockers.filter(
+    (blocker) => blocker.status === "queued",
+  ).length;
+  const runningBlockerCount = blockers.filter(
+    (blocker) =>
+      blocker.status === "running" || blocker.status === "rebuilding",
+  ).length;
+  const staleBlockerCount = blockers.filter(
+    (blocker) => blocker.staleInspection?.appearsStale === true,
+  ).length;
+
+  return {
+    activeBlockerCount: blockers.length,
+    staleBlockerCount,
+    pendingBlockerCount,
+    runningBlockerCount,
+    oldestBlockerAgeMs: ageValues.length > 0 ? Math.max(...ageValues) : null,
+    newestBlockerAgeMs: ageValues.length > 0 ? Math.min(...ageValues) : null,
+    hasStaleBlockers: staleBlockerCount > 0,
+    blockersByOperationType,
+  };
 }

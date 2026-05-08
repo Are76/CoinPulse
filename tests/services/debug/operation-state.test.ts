@@ -74,8 +74,46 @@ describe("mapSyncRunToOperationState", () => {
       currentStage: "PERSISTING_LEDGER",
       finishedAt: null,
       errorMessage: null,
+      staleInspection: {
+        ageMs: 60000,
+        appearsStale: false,
+        staleReason: null,
+      },
     });
     expect(result.durationMs).toBe(60000);
+  });
+
+  it("marks a long-running operation as stale in debug state", () => {
+    const startedAt = new Date("2026-05-08T18:00:00.000Z");
+    const now = new Date("2026-05-08T19:30:01.000Z");
+
+    const result = mapSyncRunToOperationState(
+      {
+        id: "sync-run-stale",
+        trigger: "REBUILD",
+        status: "RUNNING",
+        stage: "REBUILDING_LEDGER",
+        chainId: 369,
+        walletId: "wallet-1",
+        wallet: {
+          address: "0x2222222222222222222222222222222222222222",
+        },
+        warningCount: 0,
+        errorMessage: null,
+        createdAt: startedAt,
+        updatedAt: new Date("2026-05-08T18:30:00.000Z"),
+      },
+      now,
+    );
+
+    expect(result).toMatchObject({
+      operationType: "rebuild",
+      status: "rebuilding",
+      staleInspection: {
+        appearsStale: true,
+        staleReason: "running_threshold_exceeded",
+      },
+    });
   });
 
   it("maps failed runs to failed operations and preserves the backend error message", () => {
@@ -110,6 +148,197 @@ describe("mapSyncRunToOperationState", () => {
 });
 
 describe("getOperationStateReport", () => {
+  it("returns an empty blocker summary when there are no active blockers", async () => {
+    const now = new Date("2026-05-08T19:00:00.000Z");
+    const report = await getOperationStateReport({
+      now,
+      listSyncRuns: async () => [
+        {
+          id: "sync-run-1",
+          trigger: "MANUAL",
+          status: "COMPLETED",
+          stage: "COMPLETED",
+          chainId: 369,
+          walletId: "wallet-1",
+          wallet: { address: "0x1111111111111111111111111111111111111111" },
+          warningCount: 0,
+          errorMessage: null,
+          createdAt: new Date("2026-05-08T18:00:00.000Z"),
+          updatedAt: new Date("2026-05-08T18:02:00.000Z"),
+        },
+      ],
+      getLastSuccessfulSyncRun: async () => null,
+      getLastRebuildRun: async () => null,
+    });
+
+    expect(report.blockerSummary).toEqual({
+      activeBlockerCount: 0,
+      staleBlockerCount: 0,
+      pendingBlockerCount: 0,
+      runningBlockerCount: 0,
+      oldestBlockerAgeMs: null,
+      newestBlockerAgeMs: null,
+      hasStaleBlockers: false,
+      blockersByOperationType: {},
+    });
+  });
+
+  it("summarizes fresh active blockers without marking them stale", async () => {
+    const now = new Date("2026-05-08T19:00:00.000Z");
+    const report = await getOperationStateReport({
+      now,
+      listSyncRuns: async () => [
+        {
+          id: "pending-sync",
+          trigger: "MANUAL",
+          status: "PENDING",
+          stage: "PENDING",
+          chainId: 369,
+          walletId: "wallet-1",
+          wallet: { address: "0x1111111111111111111111111111111111111111" },
+          warningCount: 0,
+          errorMessage: null,
+          createdAt: new Date("2026-05-08T18:50:00.000Z"),
+          updatedAt: new Date("2026-05-08T18:50:00.000Z"),
+        },
+        {
+          id: "running-rebuild",
+          trigger: "REBUILD",
+          status: "RUNNING",
+          stage: "REBUILDING_LEDGER",
+          chainId: 369,
+          walletId: "wallet-2",
+          wallet: { address: "0x2222222222222222222222222222222222222222" },
+          warningCount: 0,
+          errorMessage: null,
+          createdAt: new Date("2026-05-08T18:30:00.000Z"),
+          updatedAt: new Date("2026-05-08T18:45:00.000Z"),
+        },
+      ],
+      getLastSuccessfulSyncRun: async () => null,
+      getLastRebuildRun: async () => null,
+    });
+
+    expect(report.blockerSummary).toEqual({
+      activeBlockerCount: 2,
+      staleBlockerCount: 0,
+      pendingBlockerCount: 1,
+      runningBlockerCount: 1,
+      oldestBlockerAgeMs: 1800000,
+      newestBlockerAgeMs: 600000,
+      hasStaleBlockers: false,
+      blockersByOperationType: {
+        manual_sync: 1,
+        rebuild: 1,
+      },
+    });
+  });
+
+  it("summarizes mixed fresh and stale blockers", async () => {
+    const now = new Date("2026-05-08T19:00:00.000Z");
+    const report = await getOperationStateReport({
+      now,
+      listSyncRuns: async () => [
+        {
+          id: "stale-pending",
+          trigger: "MANUAL",
+          status: "PENDING",
+          stage: "PENDING",
+          chainId: 369,
+          walletId: "wallet-1",
+          wallet: { address: "0x1111111111111111111111111111111111111111" },
+          warningCount: 0,
+          errorMessage: null,
+          createdAt: new Date("2026-05-08T18:40:00.000Z"),
+          updatedAt: new Date("2026-05-08T18:40:00.000Z"),
+        },
+        {
+          id: "fresh-running",
+          trigger: "REBUILD",
+          status: "RUNNING",
+          stage: "REBUILDING_LEDGER",
+          chainId: 369,
+          walletId: "wallet-2",
+          wallet: { address: "0x2222222222222222222222222222222222222222" },
+          warningCount: 0,
+          errorMessage: null,
+          createdAt: new Date("2026-05-08T18:20:00.000Z"),
+          updatedAt: new Date("2026-05-08T18:50:00.000Z"),
+        },
+      ],
+      getLastSuccessfulSyncRun: async () => null,
+      getLastRebuildRun: async () => null,
+    });
+
+    expect(report.blockerSummary).toEqual({
+      activeBlockerCount: 2,
+      staleBlockerCount: 1,
+      pendingBlockerCount: 1,
+      runningBlockerCount: 1,
+      oldestBlockerAgeMs: 2400000,
+      newestBlockerAgeMs: 1200000,
+      hasStaleBlockers: true,
+      blockersByOperationType: {
+        manual_sync: 1,
+        rebuild: 1,
+      },
+    });
+  });
+
+  it("groups blockers by operation type when available", async () => {
+    const now = new Date("2026-05-08T19:00:00.000Z");
+    const report = await getOperationStateReport({
+      now,
+      listSyncRuns: async () => [
+        {
+          id: "manual-1",
+          trigger: "MANUAL",
+          status: "PENDING",
+          stage: "PENDING",
+          chainId: 369,
+          walletId: "wallet-1",
+          wallet: { address: "0x1111111111111111111111111111111111111111" },
+          warningCount: 0,
+          errorMessage: null,
+          createdAt: new Date("2026-05-08T18:55:00.000Z"),
+          updatedAt: new Date("2026-05-08T18:55:00.000Z"),
+        },
+        {
+          id: "import-1",
+          trigger: "IMPORT",
+          status: "RUNNING",
+          stage: "NORMALIZING_LEDGER",
+          chainId: 369,
+          walletId: "wallet-2",
+          wallet: { address: "0x2222222222222222222222222222222222222222" },
+          warningCount: 0,
+          errorMessage: null,
+          createdAt: new Date("2026-05-08T18:50:00.000Z"),
+          updatedAt: new Date("2026-05-08T18:56:00.000Z"),
+        },
+        {
+          id: "rebuild-1",
+          trigger: "REBUILD",
+          status: "RUNNING",
+          stage: "REBUILDING_LEDGER",
+          chainId: 369,
+          walletId: "wallet-3",
+          wallet: { address: "0x3333333333333333333333333333333333333333" },
+          warningCount: 0,
+          errorMessage: null,
+          createdAt: new Date("2026-05-08T18:45:00.000Z"),
+          updatedAt: new Date("2026-05-08T18:57:00.000Z"),
+        },
+      ],
+      getLastSuccessfulSyncRun: async () => null,
+      getLastRebuildRun: async () => null,
+    });
+
+    expect(report.blockerSummary.blockersByOperationType).toEqual({
+      manual_sync: 2,
+      rebuild: 1,
+    });
+  });
   it("builds summary timestamps and keeps rebuild state explicit when no rebuild operations exist", async () => {
     const now = new Date("2026-05-08T19:00:00.000Z");
     const report = await getOperationStateReport({

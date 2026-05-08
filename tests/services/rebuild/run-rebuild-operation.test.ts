@@ -162,7 +162,13 @@ describe("runRebuildOperation", () => {
         conflictingTrigger: "MANUAL",
         conflictingStage: "PERSISTING_LEDGER",
         startedAt: "2026-05-08T12:00:00.000Z",
+        createdAt: "2026-05-08T12:00:00.000Z",
         updatedAt: "2026-05-08T12:01:00.000Z",
+        operationType: "manual_sync",
+        status: "RUNNING",
+        ageMs: 60000,
+        appearsStale: false,
+        staleReason: null,
       });
     });
 

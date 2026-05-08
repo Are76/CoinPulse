@@ -271,7 +271,13 @@ describe("runWalletSync", () => {
         conflictingTrigger: "REBUILD",
         conflictingStage: "REBUILDING_LEDGER",
         startedAt: "2026-05-08T12:00:00.000Z",
+        createdAt: "2026-05-08T12:00:00.000Z",
         updatedAt: "2026-05-08T12:01:00.000Z",
+        operationType: "rebuild",
+        status: "RUNNING",
+        ageMs: 60000,
+        appearsStale: false,
+        staleReason: null,
       });
     });
 
