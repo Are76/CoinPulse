@@ -70,6 +70,7 @@ model Chain {
   rawTransactions   RawTransaction[]
   rawLogs           RawLog[]
   rawTokenTransfers RawTokenTransfer[]
+  rawDexSwaps       RawDexSwap[]
   ledgerActionGroups LedgerActionGroup[]
   ledgerEntries     LedgerEntry[]
   protocols         Protocol[]
@@ -307,6 +308,38 @@ model RawTokenTransfer {
   @@unique([chainId, txHash, logIndex, blockHash])
   @@index([chainId, tokenId, blockNumber])
   @@index([chainId, assetIdSnapshot, blockNumber])
+}
+
+model RawDexSwap {
+  id                    String          @id @default(cuid())
+  chainId               Int
+  protocolSlug          String
+  txHash                String
+  blockNumber           BigInt
+  blockHash             String
+  logIndex              Int
+  pairAddress           String
+  initiatorAddress      String
+  counterpartyAddress   String?
+  soldTokenAddress      String
+  soldAssetIdSnapshot   String
+  soldDecimalsSnapshot  Int
+  soldAmountRaw         Decimal         @db.Decimal(65, 0)
+  boughtTokenAddress    String
+  boughtAssetIdSnapshot String
+  boughtDecimalsSnapshot Int
+  boughtAmountRaw       Decimal         @db.Decimal(65, 0)
+  feeAssetIdSnapshot    String
+  feeDecimalsSnapshot   Int
+  feeAmountRaw          Decimal         @db.Decimal(65, 0)
+  status                RawRecordStatus @default(ACTIVE)
+  createdAt             DateTime        @default(now())
+  chain                 Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
+
+  @@unique([chainId, txHash, logIndex, blockHash])
+  @@index([chainId, initiatorAddress, blockNumber])
+  @@index([chainId, soldAssetIdSnapshot, blockNumber])
+  @@index([chainId, boughtAssetIdSnapshot, blockNumber])
 }
 
 model LedgerActionGroup {

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  persistRawDexSwaps,
   persistRawTokenTransfers,
+  persistRawTransactions,
+  readWalletDexSwapSnapshots,
   readWalletTransferRawLogs,
   readWalletTransferRawTokenTransfers,
 } from "@/services/ingestion/raw-store";
@@ -185,6 +188,143 @@ describe("raw token transfer audit helpers", () => {
         tokenAddress: "0xtoken",
         assetIdSnapshot: "chain:369:erc20:0xtoken",
         decimalsSnapshot: 18,
+      }),
+    ]);
+  });
+});
+
+describe("raw dex swap audit helpers", () => {
+  it("persists raw transactions and wallet-scoped dex swap snapshots deterministically", async () => {
+    const transactionCreates: Array<unknown> = [];
+    const swapCreates: Array<unknown> = [];
+
+    const persistedTransactions = await persistRawTransactions(
+      [
+        {
+          chainId: 369,
+          txHash: "0xswap",
+          blockNumber: 100n,
+          blockHash: "0xblock100",
+          transactionIndex: 2,
+          fromAddress: "0x1111111111111111111111111111111111111111",
+          toAddress: "0x7777777777777777777777777777777777777777",
+          valueRaw: "0",
+          gasPriceRaw: "2000000000",
+          gasUsedRaw: "100000",
+        },
+      ],
+      {
+        rawTransaction: {
+          createMany: async (args) => {
+            transactionCreates.push(...args.data);
+            return { count: args.data.length };
+          },
+        },
+      },
+    );
+
+    const persistedSwaps = await persistRawDexSwaps(
+      [
+        {
+          chainId: 369,
+          protocolSlug: "pulsex",
+          txHash: "0xswap",
+          blockNumber: 100n,
+          blockHash: "0xblock100",
+          logIndex: 5,
+          pairAddress: "0x9999999999999999999999999999999999999999",
+          initiatorAddress: "0x1111111111111111111111111111111111111111",
+          counterpartyAddress: "0x7777777777777777777777777777777777777777",
+          soldTokenAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          soldAssetIdSnapshot: "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          soldDecimalsSnapshot: 6,
+          soldAmountRaw: "5000000",
+          boughtTokenAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          boughtAssetIdSnapshot: "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          boughtDecimalsSnapshot: 18,
+          boughtAmountRaw: "3000000000000000000",
+          feeAssetIdSnapshot: "chain:369:native:PLS",
+          feeDecimalsSnapshot: 18,
+          feeAmountRaw: "200000000000000",
+        },
+      ],
+      {
+        rawDexSwap: {
+          createMany: async (args) => {
+            swapCreates.push(...args.data);
+            return { count: args.data.length };
+          },
+        },
+      },
+    );
+
+    expect(persistedTransactions).toEqual({ count: 1 });
+    expect(persistedSwaps).toEqual({ count: 1 });
+    expect(transactionCreates[0]).toMatchObject({
+      txHash: "0xswap",
+      blockHash: "0xblock100",
+      fromAddress: "0x1111111111111111111111111111111111111111",
+      gasPriceRaw: "2000000000",
+      gasUsedRaw: "100000",
+    });
+    expect(swapCreates[0]).toMatchObject({
+      protocolSlug: "pulsex",
+      txHash: "0xswap",
+      pairAddress: "0x9999999999999999999999999999999999999999",
+      soldAssetIdSnapshot:
+        "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      boughtAssetIdSnapshot:
+        "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      feeAssetIdSnapshot: "chain:369:native:PLS",
+      feeAmountRaw: "200000000000000",
+    });
+
+    const records = await readWalletDexSwapSnapshots(
+      {
+        chainId: 369,
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        fromBlock: 90n,
+        toBlock: 110n,
+      },
+      {
+        rawDexSwap: {
+          findMany: async () => [
+            {
+              chainId: 369,
+              protocolSlug: "pulsex",
+              txHash: "0xswap",
+              blockNumber: 100n,
+              blockHash: "0xblock100",
+              logIndex: 5,
+              pairAddress: "0x9999999999999999999999999999999999999999",
+              initiatorAddress: "0x1111111111111111111111111111111111111111",
+              counterpartyAddress: "0x7777777777777777777777777777777777777777",
+              soldTokenAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              soldAssetIdSnapshot:
+                "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              soldDecimalsSnapshot: 6,
+              soldAmountRaw: "5000000",
+              boughtTokenAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              boughtAssetIdSnapshot:
+                "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              boughtDecimalsSnapshot: 18,
+              boughtAmountRaw: "3000000000000000000",
+              feeAssetIdSnapshot: "chain:369:native:PLS",
+              feeDecimalsSnapshot: 18,
+              feeAmountRaw: "200000000000000",
+            },
+          ],
+        },
+      },
+    );
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        txHash: "0xswap",
+        protocolSlug: "pulsex",
+        soldAmountRaw: "5000000",
+        boughtAmountRaw: "3000000000000000000",
+        feeAmountRaw: "200000000000000",
       }),
     ]);
   });

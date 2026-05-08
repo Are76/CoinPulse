@@ -41,6 +41,42 @@ export type PersistRawTokenTransferInput = {
   amountRaw: string;
 };
 
+export type PersistRawTransactionInput = {
+  chainId: number;
+  txHash: string;
+  blockNumber: bigint;
+  blockHash: string;
+  transactionIndex: number;
+  fromAddress: string;
+  toAddress: string | null;
+  valueRaw: string;
+  gasPriceRaw: string | null;
+  gasUsedRaw: string | null;
+};
+
+export type PersistRawDexSwapInput = {
+  chainId: number;
+  protocolSlug: string;
+  txHash: string;
+  blockNumber: bigint;
+  blockHash: string;
+  logIndex: number;
+  pairAddress: string;
+  initiatorAddress: string;
+  counterpartyAddress: string | null;
+  soldTokenAddress: string;
+  soldAssetIdSnapshot: string;
+  soldDecimalsSnapshot: number;
+  soldAmountRaw: string;
+  boughtTokenAddress: string;
+  boughtAssetIdSnapshot: string;
+  boughtDecimalsSnapshot: number;
+  boughtAmountRaw: string;
+  feeAssetIdSnapshot: string;
+  feeDecimalsSnapshot: number;
+  feeAmountRaw: string;
+};
+
 type RawLogReadClient = {
   rawLog: {
     findMany(args: {
@@ -101,8 +137,64 @@ type RawTokenTransferStoreClient = {
   };
 };
 
+type RawTransactionStoreClient = {
+  rawTransaction: {
+    createMany(args: {
+      data: Array<{
+        chainId: number;
+        txHash: string;
+        blockNumber: bigint;
+        blockHash: string;
+        transactionIndex: number;
+        fromAddress: string;
+        toAddress: string | null;
+        valueRaw: string;
+        gasPriceRaw: string | null;
+        gasUsedRaw: string | null;
+      }>;
+      skipDuplicates: boolean;
+    }): Promise<{ count: number }>;
+  };
+};
+
+type RawDexSwapStoreClient = {
+  rawDexSwap: {
+    createMany(args: {
+      data: Array<{
+        chainId: number;
+        protocolSlug: string;
+        txHash: string;
+        blockNumber: bigint;
+        blockHash: string;
+        logIndex: number;
+        pairAddress: string;
+        initiatorAddress: string;
+        counterpartyAddress: string | null;
+        soldTokenAddress: string;
+        soldAssetIdSnapshot: string;
+        soldDecimalsSnapshot: number;
+        soldAmountRaw: string;
+        boughtTokenAddress: string;
+        boughtAssetIdSnapshot: string;
+        boughtDecimalsSnapshot: number;
+        boughtAmountRaw: string;
+        feeAssetIdSnapshot: string;
+        feeDecimalsSnapshot: number;
+        feeAmountRaw: string;
+      }>;
+      skipDuplicates: boolean;
+    }): Promise<{ count: number }>;
+  };
+};
+
 type RawTokenTransferReadClient = {
   rawTokenTransfer: {
+    findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
+  };
+};
+
+type RawDexSwapReadClient = {
+  rawDexSwap: {
     findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
   };
 };
@@ -181,6 +273,66 @@ export async function persistRawTokenTransfers(
   });
 }
 
+export async function persistRawTransactions(
+  transactions: readonly PersistRawTransactionInput[],
+  client: RawTransactionStoreClient = getDb(),
+) {
+  if (transactions.length === 0) {
+    return { count: 0 };
+  }
+
+  return client.rawTransaction.createMany({
+    data: transactions.map((transaction) => ({
+      chainId: transaction.chainId,
+      txHash: transaction.txHash.toLowerCase(),
+      blockNumber: transaction.blockNumber,
+      blockHash: transaction.blockHash.toLowerCase(),
+      transactionIndex: transaction.transactionIndex,
+      fromAddress: transaction.fromAddress.toLowerCase(),
+      toAddress: transaction.toAddress?.toLowerCase() ?? null,
+      valueRaw: transaction.valueRaw,
+      gasPriceRaw: transaction.gasPriceRaw,
+      gasUsedRaw: transaction.gasUsedRaw,
+    })),
+    skipDuplicates: true,
+  });
+}
+
+export async function persistRawDexSwaps(
+  swaps: readonly PersistRawDexSwapInput[],
+  client: RawDexSwapStoreClient = getDb(),
+) {
+  if (swaps.length === 0) {
+    return { count: 0 };
+  }
+
+  return client.rawDexSwap.createMany({
+    data: swaps.map((swap) => ({
+      chainId: swap.chainId,
+      protocolSlug: swap.protocolSlug,
+      txHash: swap.txHash.toLowerCase(),
+      blockNumber: swap.blockNumber,
+      blockHash: swap.blockHash.toLowerCase(),
+      logIndex: swap.logIndex,
+      pairAddress: swap.pairAddress.toLowerCase(),
+      initiatorAddress: swap.initiatorAddress.toLowerCase(),
+      counterpartyAddress: swap.counterpartyAddress?.toLowerCase() ?? null,
+      soldTokenAddress: swap.soldTokenAddress.toLowerCase(),
+      soldAssetIdSnapshot: swap.soldAssetIdSnapshot,
+      soldDecimalsSnapshot: swap.soldDecimalsSnapshot,
+      soldAmountRaw: swap.soldAmountRaw,
+      boughtTokenAddress: swap.boughtTokenAddress.toLowerCase(),
+      boughtAssetIdSnapshot: swap.boughtAssetIdSnapshot,
+      boughtDecimalsSnapshot: swap.boughtDecimalsSnapshot,
+      boughtAmountRaw: swap.boughtAmountRaw,
+      feeAssetIdSnapshot: swap.feeAssetIdSnapshot,
+      feeDecimalsSnapshot: swap.feeDecimalsSnapshot,
+      feeAmountRaw: swap.feeAmountRaw,
+    })),
+    skipDuplicates: true,
+  });
+}
+
 export async function readWalletTransferRawLogs(
   args: {
     chainId: number;
@@ -250,6 +402,65 @@ export async function readWalletTransferRawTokenTransfers(
   }));
 }
 
+export async function readWalletDexSwapSnapshots(
+  args: {
+    chainId: number;
+    walletAddress: string;
+    fromBlock: bigint;
+    toBlock: bigint;
+  },
+  client: RawDexSwapReadClient = getDb(),
+) {
+  const walletAddress = args.walletAddress.toLowerCase();
+  const records = await client.rawDexSwap.findMany({
+    where: {
+      chainId: args.chainId,
+      status: "ACTIVE",
+      blockNumber: {
+        gte: args.fromBlock,
+        lte: args.toBlock,
+      },
+      initiatorAddress: walletAddress,
+    },
+    orderBy: [{ blockNumber: "asc" }, { logIndex: "asc" }],
+  });
+
+  return records.map((record) => ({
+    chainId: record.chainId as number,
+    protocolSlug: record.protocolSlug as string,
+    txHash: record.txHash as string,
+    blockNumber: record.blockNumber as bigint,
+    blockHash: record.blockHash as string,
+    logIndex: record.logIndex as number,
+    pairAddress: record.pairAddress as string,
+    initiatorAddress: record.initiatorAddress as string,
+    counterpartyAddress:
+      typeof record.counterpartyAddress === "string"
+        ? record.counterpartyAddress
+        : null,
+    soldTokenAddress: record.soldTokenAddress as string,
+    soldAssetIdSnapshot: record.soldAssetIdSnapshot as string,
+    soldDecimalsSnapshot: record.soldDecimalsSnapshot as number,
+    soldAmountRaw:
+      typeof record.soldAmountRaw === "string"
+        ? record.soldAmountRaw
+        : (record.soldAmountRaw as { toString(): string }).toString(),
+    boughtTokenAddress: record.boughtTokenAddress as string,
+    boughtAssetIdSnapshot: record.boughtAssetIdSnapshot as string,
+    boughtDecimalsSnapshot: record.boughtDecimalsSnapshot as number,
+    boughtAmountRaw:
+      typeof record.boughtAmountRaw === "string"
+        ? record.boughtAmountRaw
+        : (record.boughtAmountRaw as { toString(): string }).toString(),
+    feeAssetIdSnapshot: record.feeAssetIdSnapshot as string,
+    feeDecimalsSnapshot: record.feeDecimalsSnapshot as number,
+    feeAmountRaw:
+      typeof record.feeAmountRaw === "string"
+        ? record.feeAmountRaw
+        : (record.feeAmountRaw as { toString(): string }).toString(),
+  }));
+}
+
 export async function markRawDataRangeReorged(
   args: {
     chainId: number;
@@ -266,7 +477,7 @@ export async function markRawDataRangeReorged(
     },
   } satisfies Prisma.RawBlockWhereInput;
 
-  const [rawBlocks, rawTransactions, rawLogs, rawTokenTransfers] =
+  const [rawBlocks, rawTransactions, rawLogs, rawTokenTransfers, rawDexSwaps] =
     await client.$transaction([
       client.rawBlock.updateMany({
         where,
@@ -292,6 +503,12 @@ export async function markRawDataRangeReorged(
           status: "REORGED",
         },
       }),
+      client.rawDexSwap.updateMany({
+        where,
+        data: {
+          status: "REORGED",
+        },
+      }),
     ]);
 
   return {
@@ -299,6 +516,7 @@ export async function markRawDataRangeReorged(
     rawTransactions: rawTransactions.count,
     rawLogs: rawLogs.count,
     rawTokenTransfers: rawTokenTransfers.count,
+    rawDexSwaps: rawDexSwaps.count,
   };
 }
 
