@@ -1,9 +1,22 @@
 import type { FormEvent, ReactNode } from "react";
 
-import { ProvenanceChip } from "@/components/ui/provenance-chip";
+import { EmptyState } from "@/components/ui/data-state/empty-state";
+import { ErrorState } from "@/components/ui/data-state/error-state";
+import { LoadingState } from "@/components/ui/data-state/loading-state";
+import {
+  WarningBanner,
+  WarningList,
+} from "@/components/ui/data-state/warning-banner";
+import { DataTableShell } from "@/components/ui/data-table-shell";
+import { SectionCard } from "@/components/ui/section-card";
+import {
+  LabelBadge,
+  StatusBadge,
+  type BadgeTone,
+} from "@/components/ui/status/status-badge";
 import { SurfaceCard } from "@/components/ui/surface-card";
-import { DataTable, TableFrame } from "@/components/ui/table-frame";
-import { cn } from "@/lib/utils";
+import { TimestampLabel } from "@/components/ui/value/timestamp-label";
+import { ValueDisplay } from "@/components/ui/value/value-display";
 import type {
   DashboardLpPositionDto,
   DashboardPnlDto,
@@ -16,7 +29,7 @@ import type {
 
 export function DashboardHero(args: {
   backendStatusLabel: string;
-  backendStatusTone: "fresh" | "warn";
+  backendStatusTone: Exclude<BadgeTone, "danger">;
   pricingStatusLabel: string;
 }) {
   return (
@@ -36,10 +49,11 @@ export function DashboardHero(args: {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <ProvenanceChip tone={args.backendStatusTone}>
-            {args.backendStatusLabel}
-          </ProvenanceChip>
-          <ProvenanceChip tone="neutral">{args.pricingStatusLabel}</ProvenanceChip>
+          <LabelBadge
+            label={args.backendStatusLabel}
+            tone={args.backendStatusTone}
+          />
+          <LabelBadge label={args.pricingStatusLabel} tone="neutral" />
         </div>
       </div>
     </SurfaceCard>
@@ -73,14 +87,10 @@ export function WalletQueryForm(args: {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <SurfaceCard className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-lg font-semibold">Query dashboard DTO</h2>
-        <p className="text-sm leading-6 text-[color:var(--color-text-muted)]">
-          Load one tracked wallet and one chain at a time. The frontend only renders
-          the backend response; it does not reconstruct balances or valuation locally.
-        </p>
-      </div>
+    <SectionCard
+      title="Query dashboard DTO"
+      subtitle="Load one tracked wallet and one chain at a time. The frontend only renders the backend response; it does not reconstruct balances or valuation locally."
+    >
       <form
         className="grid gap-4 md:grid-cols-[minmax(0,1fr)_12rem_auto]"
         onSubmit={args.onSubmit}
@@ -112,43 +122,29 @@ export function WalletQueryForm(args: {
           </button>
         </div>
       </form>
-    </SurfaceCard>
+    </SectionCard>
   );
 }
 
 export function IdleStateCard() {
   return (
-    <SurfaceCard className="flex flex-col gap-2">
-      <h3 className="text-base font-semibold">No portfolio loaded</h3>
-      <p className="text-sm leading-6 text-[color:var(--color-text-muted)]">
-        Enter a wallet address and chain to request the normalized dashboard DTO.
-        Missing valuation or PnL will stay marked as unavailable, stale, unsupported,
-        or incomplete rather than rendered as zero.
-      </p>
-    </SurfaceCard>
+    <EmptyState
+      title="No portfolio loaded"
+      message="Enter a wallet address and chain to request the normalized dashboard DTO. Missing valuation or PnL will stay marked as unavailable, stale, unsupported, or incomplete rather than rendered as zero."
+    />
   );
 }
 
 export function LoadingStateCard() {
   return (
     <SurfaceCard className="grid gap-4 md:grid-cols-4">
-      <LoadingBlock />
-      <LoadingBlock />
-      <LoadingBlock />
-      <LoadingBlock />
+      <LoadingState />
     </SurfaceCard>
   );
 }
 
 export function ErrorStateCard({ message }: { message: string }) {
-  return (
-    <WarningBanner tone="danger">
-      <div className="flex flex-col gap-1">
-        <strong className="font-semibold">Dashboard request failed</strong>
-        <span>{message}</span>
-      </div>
-    </WarningBanner>
-  );
+  return <ErrorState title="Dashboard request failed" message={message} />;
 }
 
 export function PortfolioSummarySection({
@@ -163,7 +159,7 @@ export function PortfolioSummarySection({
         <MetricCard label="Chain" value={String(dashboard.wallet.chainId)} />
         <MetricCard
           label="Summary valuation"
-          value={formatOptionalValue(dashboard.summary.totalValueQuote)}
+          value={formatNullable(dashboard.summary.totalValueQuote)}
           status={dashboard.summary.valuationStatus}
         />
         <MetricCard
@@ -180,8 +176,9 @@ export function PortfolioSummarySection({
         />
         <SummaryMetaStat
           label="As of"
-          value={formatTimestamp(dashboard.asOf)}
+          value={dashboard.asOf}
           hint="Resolved dashboard timestamp"
+          isTimestamp
         />
         <SummaryMetaStat
           label="Schema"
@@ -191,256 +188,224 @@ export function PortfolioSummarySection({
       </SurfaceCard>
       {dashboard.summary.warnings.length > 0 ? (
         <WarningBanner>
-          <WarningsList warnings={dashboard.summary.warnings} />
+          <WarningList warnings={dashboard.summary.warnings} />
         </WarningBanner>
       ) : null}
     </>
   );
 }
 
-export function TokenPositionsTable({ positions }: { positions: DashboardTokenPositionDto[] }) {
-  if (positions.length === 0) {
-    return <EmptySectionCard title="Token positions" message="No token positions were materialized for this wallet and chain." />;
-  }
-
-  return (
-    <TableFrame>
-      <SectionHeader
-        title="Token positions"
-        subtitle="Backend-resolved balances, pricing provenance, valuation status, and PnL warnings."
-      />
-      <DataTable className="cp-table">
-        <thead>
-          <tr>
-            <th>Asset</th>
-            <th>Quantity</th>
-            <th>Valuation</th>
-            <th>Pricing</th>
-            <th>PnL</th>
-            <th>Warnings</th>
-          </tr>
-        </thead>
-        <tbody>
-          {positions.map((position) => (
-            <tr key={position.assetId}>
-              <td>
-                <div className="flex flex-col gap-2">
-                  <span className="cp-data">{position.assetAddress ?? position.assetId}</span>
-                  <StatusChip status={position.pricing.status} />
-                </div>
-              </td>
-              <td className="cp-data">{position.balanceQuantity}</td>
-              <td>
-                <ValueWithStatus
-                  status={position.valuation.status}
-                  value={position.valuation.valueQuote}
-                />
-              </td>
-              <td>
-                <PricingDetails pricing={position.pricing} />
-              </td>
-              <td>
-                <PnlDetails pnl={position.pnl} />
-              </td>
-              <td>
-                <WarningsList
-                  warnings={[
-                    ...position.pricing.rejectedReasons,
-                    ...position.pnl.warnings.map((warning) => warning.detail),
-                  ]}
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </DataTable>
-    </TableFrame>
-  );
-}
-
-export function LpPositionsTable({ positions }: { positions: DashboardLpPositionDto[] }) {
-  if (positions.length === 0) {
-    return <EmptySectionCard title="LP positions" message="No LP positions were materialized for this wallet and chain." />;
-  }
-
-  return (
-    <TableFrame>
-      <SectionHeader
-        title="LP positions"
-        subtitle="Position quantities are shown even when valuation or PnL is unsupported."
-      />
-      <DataTable className="cp-table">
-        <thead>
-          <tr>
-            <th>LP token</th>
-            <th>LP quantity</th>
-            <th>Underlying</th>
-            <th>Valuation</th>
-            <th>PnL</th>
-            <th>Warnings</th>
-          </tr>
-        </thead>
-        <tbody>
-          {positions.map((position) => (
-            <tr key={position.lpAssetId}>
-              <td className="cp-data">{position.lpTokenAddress ?? position.lpAssetId}</td>
-              <td className="cp-data">{position.lpTokenQuantity}</td>
-              <td>
-                <div className="flex flex-col gap-1 cp-data">
-                  <span>
-                    {position.token0Address ?? "n/a"}: {position.token0NetQuantity ?? "n/a"}
-                  </span>
-                  <span>
-                    {position.token1Address ?? "n/a"}: {position.token1NetQuantity ?? "n/a"}
-                  </span>
-                </div>
-              </td>
-              <td>
-                <ValueWithStatus
-                  status={position.valuation.status}
-                  value={position.valuation.valueQuote}
-                />
-              </td>
-              <td>
-                <StatusChip status={position.pnl.status} />
-              </td>
-              <td>
-                <WarningsList
-                  warnings={[
-                    ...position.warnings,
-                    ...position.pnl.warnings.map((warning) => warning.detail),
-                  ]}
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </DataTable>
-    </TableFrame>
-  );
-}
-
-export function StakePositionsTable({ positions }: { positions: DashboardStakePositionDto[] }) {
-  if (positions.length === 0) {
-    return <EmptySectionCard title="Stake positions" message="No stake positions were materialized for this wallet and chain." />;
-  }
-
-  return (
-    <TableFrame>
-      <SectionHeader
-        title="Stake positions"
-        subtitle="Principal, lifecycle state, and backend warnings are shown without fabricated valuation."
-      />
-      <DataTable className="cp-table">
-        <thead>
-          <tr>
-            <th>Stake key</th>
-            <th>Token</th>
-            <th>Principal</th>
-            <th>Status</th>
-            <th>Valuation</th>
-            <th>PnL</th>
-            <th>Warnings</th>
-          </tr>
-        </thead>
-        <tbody>
-          {positions.map((position) => (
-            <tr key={position.stakeKey}>
-              <td className="cp-data">{position.stakeKey}</td>
-              <td className="cp-data">{position.tokenAddress ?? position.tokenAssetId}</td>
-              <td className="cp-data">{position.principalQuantity}</td>
-              <td>
-                <span className="rounded-full border border-[color:var(--color-border-soft)] px-2.5 py-1 text-xs font-medium text-[color:var(--color-text-muted)]">
-                  {position.status}
-                </span>
-              </td>
-              <td>
-                <ValueWithStatus
-                  status={position.valuation.status}
-                  value={position.valuation.valueQuote}
-                />
-              </td>
-              <td>
-                <StatusChip status={position.pnl.status} />
-              </td>
-              <td>
-                <WarningsList
-                  warnings={[
-                    ...position.warnings,
-                    ...position.pnl.warnings.map((warning) => warning.detail),
-                  ]}
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </DataTable>
-    </TableFrame>
-  );
-}
-
-export function WarningBanner({
-  children,
-  tone = "warn",
+export function TokenPositionsTable({
+  positions,
 }: {
-  children: ReactNode;
-  tone?: "warn" | "danger";
+  positions: DashboardTokenPositionDto[];
 }) {
-  return (
-    <SurfaceCard
-      className={cn(
-        "border px-5 py-4 text-sm leading-6",
-        tone === "danger"
-          ? "border-[color:var(--color-status-danger)] text-[color:var(--color-status-danger)]"
-          : "border-[color:var(--color-status-warning)] text-[color:var(--color-status-warning)]",
-      )}
-    >
-      {children}
-    </SurfaceCard>
-  );
-}
-
-export function WarningsList({ warnings }: { warnings: string[] }) {
-  if (warnings.length === 0) {
-    return <span className="text-[color:var(--color-text-muted)]">none</span>;
+  if (positions.length === 0) {
+    return (
+      <EmptyState
+        title="Token positions"
+        message="No token positions were materialized for this wallet and chain."
+      />
+    );
   }
 
   return (
-    <ul className="space-y-1 text-xs leading-5 text-[color:var(--color-text-muted)]">
-      {warnings.map((warning) => (
-        <li key={warning}>{warning}</li>
-      ))}
-    </ul>
+    <DataTableShell
+      title="Token positions"
+      subtitle="Backend-resolved balances, pricing provenance, valuation status, and PnL warnings."
+    >
+      <thead>
+        <tr>
+          <th>Asset</th>
+          <th>Quantity</th>
+          <th>Valuation</th>
+          <th>Pricing</th>
+          <th>PnL</th>
+          <th>Warnings</th>
+        </tr>
+      </thead>
+      <tbody>
+        {positions.map((position) => (
+          <tr key={position.assetId}>
+            <td>
+              <div className="flex flex-col gap-2">
+                <span className="cp-data">{position.assetAddress ?? position.assetId}</span>
+                <StatusBadge status={position.pricing.status} />
+              </div>
+            </td>
+            <td className="cp-data">{position.balanceQuantity}</td>
+            <td>
+              <ValueDisplay
+                status={position.valuation.status}
+                value={position.valuation.valueQuote}
+              />
+            </td>
+            <td>
+              <PricingDetails pricing={position.pricing} />
+            </td>
+            <td>
+              <PnlDetails pnl={position.pnl} />
+            </td>
+            <td>
+              <WarningList
+                warnings={[
+                  ...position.pricing.rejectedReasons,
+                  ...position.pnl.warnings.map((warning) => warning.detail),
+                ]}
+              />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </DataTableShell>
   );
 }
 
-export function StatusChip({ status }: { status: DashboardStatus }) {
-  const tone =
-    status === "available"
-      ? "fresh"
-      : status === "stale_price" ||
-          status === "low_confidence_price" ||
-          status === "incomplete_basis" ||
-          status === "partial"
-        ? "warn"
-        : "neutral";
+export function LpPositionsTable({
+  positions,
+}: {
+  positions: DashboardLpPositionDto[];
+}) {
+  if (positions.length === 0) {
+    return (
+      <EmptyState
+        title="LP positions"
+        message="No LP positions were materialized for this wallet and chain."
+      />
+    );
+  }
 
-  return <ProvenanceChip tone={tone}>{status}</ProvenanceChip>;
+  return (
+    <DataTableShell
+      title="LP positions"
+      subtitle="Position quantities are shown even when valuation or PnL is unsupported."
+    >
+      <thead>
+        <tr>
+          <th>LP token</th>
+          <th>LP quantity</th>
+          <th>Underlying</th>
+          <th>Valuation</th>
+          <th>PnL</th>
+          <th>Warnings</th>
+        </tr>
+      </thead>
+      <tbody>
+        {positions.map((position) => (
+          <tr key={position.lpAssetId}>
+            <td className="cp-data">{position.lpTokenAddress ?? position.lpAssetId}</td>
+            <td className="cp-data">{position.lpTokenQuantity}</td>
+            <td>
+              <div className="flex flex-col gap-1 cp-data">
+                <span>
+                  {position.token0Address ?? "n/a"}: {position.token0NetQuantity ?? "n/a"}
+                </span>
+                <span>
+                  {position.token1Address ?? "n/a"}: {position.token1NetQuantity ?? "n/a"}
+                </span>
+              </div>
+            </td>
+            <td>
+              <ValueDisplay
+                status={position.valuation.status}
+                value={position.valuation.valueQuote}
+              />
+            </td>
+            <td>
+              <StatusBadge status={position.pnl.status} />
+            </td>
+            <td>
+              <WarningList
+                warnings={[
+                  ...position.warnings,
+                  ...position.pnl.warnings.map((warning) => warning.detail),
+                ]}
+              />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </DataTableShell>
+  );
+}
+
+export function StakePositionsTable({
+  positions,
+}: {
+  positions: DashboardStakePositionDto[];
+}) {
+  if (positions.length === 0) {
+    return (
+      <EmptyState
+        title="Stake positions"
+        message="No stake positions were materialized for this wallet and chain."
+      />
+    );
+  }
+
+  return (
+    <DataTableShell
+      title="Stake positions"
+      subtitle="Principal, lifecycle state, and backend warnings are shown without fabricated valuation."
+    >
+      <thead>
+        <tr>
+          <th>Stake key</th>
+          <th>Token</th>
+          <th>Principal</th>
+          <th>Status</th>
+          <th>Valuation</th>
+          <th>PnL</th>
+          <th>Warnings</th>
+        </tr>
+      </thead>
+      <tbody>
+        {positions.map((position) => (
+          <tr key={position.stakeKey}>
+            <td className="cp-data">{position.stakeKey}</td>
+            <td className="cp-data">{position.tokenAddress ?? position.tokenAssetId}</td>
+            <td className="cp-data">{position.principalQuantity}</td>
+            <td>
+              <LabelBadge label={position.status} tone="neutral" />
+            </td>
+            <td>
+              <ValueDisplay
+                status={position.valuation.status}
+                value={position.valuation.valueQuote}
+              />
+            </td>
+            <td>
+              <StatusBadge status={position.pnl.status} />
+            </td>
+            <td>
+              <WarningList
+                warnings={[
+                  ...position.warnings,
+                  ...position.pnl.warnings.map((warning) => warning.detail),
+                ]}
+              />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </DataTableShell>
+  );
 }
 
 function PricingDetails({ pricing }: { pricing: DashboardPricingDto }) {
   return (
     <div className="flex flex-col gap-1">
-      <StatusChip status={pricing.status} />
-      <span className="cp-data">
-        confidence {formatOptionalValue(pricing.confidence)}
-      </span>
+      <StatusBadge status={pricing.status} />
+      <ValueDisplay value={pricing.confidence} prefix="confidence" />
       <span className="text-xs text-[color:var(--color-text-muted)]">
-        {pricing.sourceType ?? "no source"}{pricing.sourceId ? ` - ${pricing.sourceId}` : ""}
+        {pricing.sourceType ?? "no source"}
+        {pricing.sourceId ? ` - ${pricing.sourceId}` : ""}
       </span>
-      <span className="text-xs text-[color:var(--color-text-muted)]">
-        {pricing.observedAt ? `observed ${formatTimestamp(pricing.observedAt)}` : "observation unavailable"}
-      </span>
+      <TimestampLabel
+        label="observed"
+        value={pricing.observedAt}
+        fallback="Observation unavailable"
+      />
     </div>
   );
 }
@@ -448,35 +413,25 @@ function PricingDetails({ pricing }: { pricing: DashboardPricingDto }) {
 function PnlDetails({ pnl }: { pnl: DashboardPnlDto }) {
   return (
     <div className="flex flex-col gap-1">
-      <StatusChip status={pnl.status} />
-      <span className="cp-data">{formatOptionalValue(pnl.unrealizedPnl)}</span>
-      <span className="text-xs text-[color:var(--color-text-muted)]">
-        avg cost {formatOptionalValue(pnl.averageCost)}
-      </span>
+      <StatusBadge status={pnl.status} />
+      <ValueDisplay value={pnl.unrealizedPnl} />
+      <ValueDisplay value={pnl.averageCost} prefix="avg cost" />
     </div>
   );
 }
 
-function ValueWithStatus(args: {
-  status: DashboardStatus;
-  value: string | null;
+function MetricCard(args: {
+  label: string;
+  value: string;
+  status?: DashboardStatus;
 }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <StatusChip status={args.status} />
-      <span className="cp-data">{formatOptionalValue(args.value)}</span>
-    </div>
-  );
-}
-
-function MetricCard(args: { label: string; value: string; status?: DashboardStatus }) {
   return (
     <div className="rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] p-4">
       <div className="flex items-start justify-between gap-3">
         <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
           {args.label}
         </span>
-        {args.status ? <StatusChip status={args.status} /> : null}
+        {args.status ? <StatusBadge status={args.status} /> : null}
       </div>
       <p className="mt-4 cp-data text-lg">{args.value}</p>
     </div>
@@ -494,14 +449,23 @@ function MetaStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SummaryMetaStat(args: { label: string; value: string; hint: string }) {
+function SummaryMetaStat(args: {
+  label: string;
+  value: string;
+  hint: string;
+  isTimestamp?: boolean;
+}) {
   return (
     <div className="rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] p-4">
       <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
         {args.label}
       </div>
-      <div className="mt-3 cp-data text-sm">{args.value}</div>
-      <div className="mt-2 text-xs text-[color:var(--color-text-muted)]">{args.hint}</div>
+      <div className="mt-3 cp-data text-sm">
+        {args.isTimestamp ? <TimestampLabel value={args.value} /> : args.value}
+      </div>
+      <div className="mt-2 text-xs text-[color:var(--color-text-muted)]">
+        {args.hint}
+      </div>
     </div>
   );
 }
@@ -523,50 +487,16 @@ function LabeledField({
   );
 }
 
-function LoadingBlock() {
-  return (
-    <div className="h-32 animate-pulse rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)]" />
-  );
-}
-
-function SectionHeader({ title, subtitle }: { title: string; subtitle: string }) {
-  return (
-    <div className="flex flex-col gap-1 border-b border-[color:var(--color-border-soft)] px-6 py-4">
-      <h2 className="text-lg font-semibold">{title}</h2>
-      <p className="text-sm leading-6 text-[color:var(--color-text-muted)]">{subtitle}</p>
-    </div>
-  );
-}
-
-function EmptySectionCard({ title, message }: { title: string; message: string }) {
-  return (
-    <SurfaceCard className="flex flex-col gap-2">
-      <h3 className="text-base font-semibold">{title}</h3>
-      <p className="text-sm leading-6 text-[color:var(--color-text-muted)]">{message}</p>
-    </SurfaceCard>
-  );
-}
-
 function truncateAddress(value: string) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
-function formatOptionalValue(value: string | null) {
+function formatNullable(value: string | null) {
   return value ?? "n/a";
 }
 
 function formatCoverage(value: PortfolioDashboardDto["summary"]["valuationCoverage"]) {
   return `${value.valuedPositions}/${value.totalPositions} valued`;
-}
-
-function formatTimestamp(value: string) {
-  return new Date(value).toLocaleString("en-GB", {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 const fieldClassName =
