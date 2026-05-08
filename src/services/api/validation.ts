@@ -117,6 +117,19 @@ export function buildNotFoundResponse(code: string, message: string) {
   );
 }
 
+export function buildConflictResponse(code: string, message: string, details?: unknown) {
+  return Response.json(
+    {
+      error: {
+        code,
+        message,
+        ...(typeof details === "undefined" ? {} : { details }),
+      },
+    },
+    { status: 409 },
+  );
+}
+
 export function buildInternalErrorResponse(message = "Internal server error.") {
   return Response.json(
     {

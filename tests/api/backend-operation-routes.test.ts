@@ -104,6 +104,59 @@ describe("POST /api/sync/manual", () => {
     });
     expect(runWalletSync).not.toHaveBeenCalled();
   });
+
+  it("returns a structured 409 conflict when manual sync is blocked by an active rebuild", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-1",
+      address: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+    });
+    runWalletSync.mockRejectedValue({
+      code: "OPERATION_CONFLICT",
+      message: "A conflicting operation is already active.",
+      details: {
+        allowed: false,
+        reason: "active_rebuild_in_progress",
+        conflictingOperationId: "run-rebuild-1",
+        conflictingTrigger: "REBUILD",
+        conflictingStage: "REBUILDING_LEDGER",
+        startedAt: "2026-05-08T10:00:00.000Z",
+        updatedAt: "2026-05-08T10:01:00.000Z",
+      },
+    });
+
+    const { POST } = await import("../../app/api/sync/manual/route");
+    const response = await POST(
+      new Request("http://localhost/api/sync/manual", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          sourceFamilies: ["TRANSFERS"],
+          endBlock: "200",
+          policyLabel: "manual-dashboard-sync",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "OPERATION_CONFLICT",
+        message: "A conflicting operation is already active.",
+        details: {
+          allowed: false,
+          reason: "active_rebuild_in_progress",
+          conflictingOperationId: "run-rebuild-1",
+          conflictingTrigger: "REBUILD",
+          conflictingStage: "REBUILDING_LEDGER",
+          startedAt: "2026-05-08T10:00:00.000Z",
+          updatedAt: "2026-05-08T10:01:00.000Z",
+        },
+      },
+    });
+  });
 });
 
 describe("POST /api/rebuild", () => {
@@ -201,6 +254,59 @@ describe("POST /api/rebuild", () => {
       fromBlock: 100n,
       toBlock: 200n,
       sourceFamilies: ["TRANSFERS", "DEX"],
+    });
+  });
+
+  it("returns a structured 409 conflict when rebuild is blocked by an active sync", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-1",
+      address: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+    });
+    runRebuildOperation.mockRejectedValue({
+      code: "OPERATION_CONFLICT",
+      message: "A conflicting operation is already active.",
+      details: {
+        allowed: false,
+        reason: "active_sync_in_scope",
+        conflictingOperationId: "run-sync-1",
+        conflictingTrigger: "MANUAL",
+        conflictingStage: "PERSISTING_LEDGER",
+        startedAt: "2026-05-08T12:00:00.000Z",
+        updatedAt: "2026-05-08T12:01:00.000Z",
+      },
+    });
+
+    const { POST } = await import("../../app/api/rebuild/route");
+    const response = await POST(
+      new Request("http://localhost/api/rebuild", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          fromBlock: "100",
+          toBlock: "200",
+          sourceFamilies: ["TRANSFERS"],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "OPERATION_CONFLICT",
+        message: "A conflicting operation is already active.",
+        details: {
+          allowed: false,
+          reason: "active_sync_in_scope",
+          conflictingOperationId: "run-sync-1",
+          conflictingTrigger: "MANUAL",
+          conflictingStage: "PERSISTING_LEDGER",
+          startedAt: "2026-05-08T12:00:00.000Z",
+          updatedAt: "2026-05-08T12:01:00.000Z",
+        },
+      },
     });
   });
 });
