@@ -40,14 +40,15 @@ export function buildBoundedReorgWindow(args: {
     throw new Error("detected block cannot be ahead of the latest ingested block");
   }
 
-  const fromBlock = maxBigInt(0n, args.latestIngestedBlockNumber - args.maxDepth);
-
   return {
-    fromBlock,
-    toBlock: args.latestIngestedBlockNumber,
+    fromBlock: args.detectedBlockNumber,
+    toBlock: minBigInt(
+      args.latestIngestedBlockNumber,
+      args.detectedBlockNumber + args.maxDepth,
+    ),
   };
 }
 
-function maxBigInt(left: bigint, right: bigint) {
-  return left > right ? left : right;
+function minBigInt(left: bigint, right: bigint) {
+  return left < right ? left : right;
 }

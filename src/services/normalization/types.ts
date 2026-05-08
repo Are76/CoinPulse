@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 
-import { Decimal } from "@/lib/decimal";
 import { buildLedgerEntryDedupeKey } from "@/services/normalization/ledger-dedupe";
 
 export type NormalizedEntryType =
@@ -58,9 +57,19 @@ export function toCanonicalQuantity(args: {
     throw new Error("decimals cannot be negative");
   }
 
-  return new Decimal(args.amountRaw)
-    .div(new Decimal(10).pow(args.decimals))
-    .toString();
+  if (args.decimals === 0) {
+    return trimLeadingZeros(args.amountRaw);
+  }
+
+  const paddedAmount = args.amountRaw.padStart(args.decimals + 1, "0");
+  const integerPart = paddedAmount.slice(0, -args.decimals);
+  const fractionalPart = paddedAmount.slice(-args.decimals).replace(/0+$/, "");
+
+  if (fractionalPart.length === 0) {
+    return trimLeadingZeros(integerPart);
+  }
+
+  return `${trimLeadingZeros(integerPart)}.${fractionalPart}`;
 }
 
 export function buildActionGroupKey(args: {
@@ -81,6 +90,12 @@ export function buildActionGroupKey(args: {
       }),
     )
     .digest("hex");
+}
+
+function trimLeadingZeros(value: string) {
+  const trimmed = value.replace(/^0+/, "");
+
+  return trimmed.length === 0 ? "0" : trimmed;
 }
 
 export function buildSourceLogKey(args: {

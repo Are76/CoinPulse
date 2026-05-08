@@ -34,4 +34,16 @@ describe("normalization types", () => {
       }),
     ).toBe("123.45");
   });
+
+  it("preserves exact decimal-adjusted quantities for large ledger-scale raw values", () => {
+    expect(
+      toCanonicalQuantity({
+        amountRaw:
+          "12345678901234567890123456789012345678901234567890123456789012345",
+        decimals: 18,
+      }),
+    ).toBe(
+      "12345678901234567890123456789012345678901234567.890123456789012345",
+    );
+  });
 });

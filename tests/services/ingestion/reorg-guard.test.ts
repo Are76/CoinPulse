@@ -14,8 +14,21 @@ describe("reorg guard", () => {
         maxDepth: 10n,
       }),
     ).toEqual({
-      fromBlock: 145n,
+      fromBlock: 150n,
       toBlock: 155n,
+    });
+  });
+
+  it("always includes the detected mismatching block even when it is older than the tip window", () => {
+    expect(
+      buildBoundedReorgWindow({
+        detectedBlockNumber: 80n,
+        latestIngestedBlockNumber: 155n,
+        maxDepth: 10n,
+      }),
+    ).toEqual({
+      fromBlock: 80n,
+      toBlock: 90n,
     });
   });
 
