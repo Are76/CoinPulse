@@ -22,6 +22,7 @@ export type NormalizedActionType =
   | "TRANSFER"
   | "SWAP"
   | "LP_ADD"
+  | "LP_REMOVE"
   | "HEX_STAKE_LOCK";
 
 export type LedgerDirection = "IN" | "OUT" | "INTERNAL";

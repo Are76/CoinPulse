@@ -44,6 +44,7 @@ enum RawRecordStatus {
 enum SourceFamily {
   TRANSFERS
   DEX
+  LP
   STAKING
   NATIVE
 }
@@ -71,6 +72,7 @@ model Chain {
   rawLogs           RawLog[]
   rawTokenTransfers RawTokenTransfer[]
   rawDexSwaps       RawDexSwap[]
+  rawLpActions      RawLpAction[]
   ledgerActionGroups LedgerActionGroup[]
   ledgerEntries     LedgerEntry[]
   protocols         Protocol[]
@@ -340,6 +342,44 @@ model RawDexSwap {
   @@index([chainId, initiatorAddress, blockNumber])
   @@index([chainId, soldAssetIdSnapshot, blockNumber])
   @@index([chainId, boughtAssetIdSnapshot, blockNumber])
+}
+
+model RawLpAction {
+  id                    String          @id @default(cuid())
+  chainId               Int
+  protocolSlug          String
+  actionKind            String
+  txHash                String
+  blockNumber           BigInt
+  blockHash             String
+  logIndex              Int
+  pairAddress           String
+  initiatorAddress      String
+  counterpartyAddress   String?
+  token0Address         String
+  token0AssetIdSnapshot String
+  token0DecimalsSnapshot Int
+  token0AmountRaw       Decimal         @db.Decimal(65, 0)
+  token1Address         String
+  token1AssetIdSnapshot String
+  token1DecimalsSnapshot Int
+  token1AmountRaw       Decimal         @db.Decimal(65, 0)
+  lpTokenAddress        String
+  lpAssetIdSnapshot     String
+  lpDecimalsSnapshot    Int
+  lpAmountRaw           Decimal         @db.Decimal(65, 0)
+  feeAssetIdSnapshot    String
+  feeDecimalsSnapshot   Int
+  feeAmountRaw          Decimal         @db.Decimal(65, 0)
+  status                RawRecordStatus @default(ACTIVE)
+  createdAt             DateTime        @default(now())
+  chain                 Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
+
+  @@unique([chainId, txHash, logIndex, blockHash])
+  @@index([chainId, initiatorAddress, blockNumber])
+  @@index([chainId, lpAssetIdSnapshot, blockNumber])
+  @@index([chainId, token0AssetIdSnapshot, blockNumber])
+  @@index([chainId, token1AssetIdSnapshot, blockNumber])
 }
 
 model LedgerActionGroup {

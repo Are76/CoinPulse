@@ -77,6 +77,34 @@ export type PersistRawDexSwapInput = {
   feeAmountRaw: string;
 };
 
+export type PersistRawLpActionInput = {
+  chainId: number;
+  protocolSlug: string;
+  actionKind: "ADD" | "REMOVE";
+  txHash: string;
+  blockNumber: bigint;
+  blockHash: string;
+  logIndex: number;
+  pairAddress: string;
+  initiatorAddress: string;
+  counterpartyAddress: string | null;
+  token0Address: string;
+  token0AssetIdSnapshot: string;
+  token0DecimalsSnapshot: number;
+  token0AmountRaw: string;
+  token1Address: string;
+  token1AssetIdSnapshot: string;
+  token1DecimalsSnapshot: number;
+  token1AmountRaw: string;
+  lpTokenAddress: string;
+  lpAssetIdSnapshot: string;
+  lpDecimalsSnapshot: number;
+  lpAmountRaw: string;
+  feeAssetIdSnapshot: string;
+  feeDecimalsSnapshot: number;
+  feeAmountRaw: string;
+};
+
 type RawLogReadClient = {
   rawLog: {
     findMany(args: {
@@ -187,6 +215,41 @@ type RawDexSwapStoreClient = {
   };
 };
 
+type RawLpActionStoreClient = {
+  rawLpAction: {
+    createMany(args: {
+      data: Array<{
+        chainId: number;
+        protocolSlug: string;
+        actionKind: string;
+        txHash: string;
+        blockNumber: bigint;
+        blockHash: string;
+        logIndex: number;
+        pairAddress: string;
+        initiatorAddress: string;
+        counterpartyAddress: string | null;
+        token0Address: string;
+        token0AssetIdSnapshot: string;
+        token0DecimalsSnapshot: number;
+        token0AmountRaw: string;
+        token1Address: string;
+        token1AssetIdSnapshot: string;
+        token1DecimalsSnapshot: number;
+        token1AmountRaw: string;
+        lpTokenAddress: string;
+        lpAssetIdSnapshot: string;
+        lpDecimalsSnapshot: number;
+        lpAmountRaw: string;
+        feeAssetIdSnapshot: string;
+        feeDecimalsSnapshot: number;
+        feeAmountRaw: string;
+      }>;
+      skipDuplicates: boolean;
+    }): Promise<{ count: number }>;
+  };
+};
+
 type RawTokenTransferReadClient = {
   rawTokenTransfer: {
     findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
@@ -195,6 +258,12 @@ type RawTokenTransferReadClient = {
 
 type RawDexSwapReadClient = {
   rawDexSwap: {
+    findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
+  };
+};
+
+type RawLpActionReadClient = {
+  rawLpAction: {
     findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
   };
 };
@@ -333,6 +402,46 @@ export async function persistRawDexSwaps(
   });
 }
 
+export async function persistRawLpActions(
+  actions: readonly PersistRawLpActionInput[],
+  client: RawLpActionStoreClient = getDb(),
+) {
+  if (actions.length === 0) {
+    return { count: 0 };
+  }
+
+  return client.rawLpAction.createMany({
+    data: actions.map((action) => ({
+      chainId: action.chainId,
+      protocolSlug: action.protocolSlug,
+      actionKind: action.actionKind,
+      txHash: action.txHash.toLowerCase(),
+      blockNumber: action.blockNumber,
+      blockHash: action.blockHash.toLowerCase(),
+      logIndex: action.logIndex,
+      pairAddress: action.pairAddress.toLowerCase(),
+      initiatorAddress: action.initiatorAddress.toLowerCase(),
+      counterpartyAddress: action.counterpartyAddress?.toLowerCase() ?? null,
+      token0Address: action.token0Address.toLowerCase(),
+      token0AssetIdSnapshot: action.token0AssetIdSnapshot,
+      token0DecimalsSnapshot: action.token0DecimalsSnapshot,
+      token0AmountRaw: action.token0AmountRaw,
+      token1Address: action.token1Address.toLowerCase(),
+      token1AssetIdSnapshot: action.token1AssetIdSnapshot,
+      token1DecimalsSnapshot: action.token1DecimalsSnapshot,
+      token1AmountRaw: action.token1AmountRaw,
+      lpTokenAddress: action.lpTokenAddress.toLowerCase(),
+      lpAssetIdSnapshot: action.lpAssetIdSnapshot,
+      lpDecimalsSnapshot: action.lpDecimalsSnapshot,
+      lpAmountRaw: action.lpAmountRaw,
+      feeAssetIdSnapshot: action.feeAssetIdSnapshot,
+      feeDecimalsSnapshot: action.feeDecimalsSnapshot,
+      feeAmountRaw: action.feeAmountRaw,
+    })),
+    skipDuplicates: true,
+  });
+}
+
 export async function readWalletTransferRawLogs(
   args: {
     chainId: number;
@@ -461,6 +570,73 @@ export async function readWalletDexSwapSnapshots(
   }));
 }
 
+export async function readWalletRawLpActions(
+  args: {
+    chainId: number;
+    walletAddress: string;
+    fromBlock: bigint;
+    toBlock: bigint;
+  },
+  client: RawLpActionReadClient = getDb(),
+) {
+  const walletAddress = args.walletAddress.toLowerCase();
+  const records = await client.rawLpAction.findMany({
+    where: {
+      chainId: args.chainId,
+      status: "ACTIVE",
+      blockNumber: {
+        gte: args.fromBlock,
+        lte: args.toBlock,
+      },
+      initiatorAddress: walletAddress,
+    },
+    orderBy: [{ blockNumber: "asc" }, { logIndex: "asc" }],
+  });
+
+  return records.map((record) => ({
+    chainId: record.chainId as number,
+    protocolSlug: record.protocolSlug as string,
+    actionKind: record.actionKind as "ADD" | "REMOVE",
+    txHash: record.txHash as string,
+    blockNumber: record.blockNumber as bigint,
+    blockHash: record.blockHash as string,
+    logIndex: record.logIndex as number,
+    pairAddress: record.pairAddress as string,
+    initiatorAddress: record.initiatorAddress as string,
+    counterpartyAddress:
+      typeof record.counterpartyAddress === "string"
+        ? record.counterpartyAddress
+        : null,
+    token0Address: record.token0Address as string,
+    token0AssetIdSnapshot: record.token0AssetIdSnapshot as string,
+    token0DecimalsSnapshot: record.token0DecimalsSnapshot as number,
+    token0AmountRaw:
+      typeof record.token0AmountRaw === "string"
+        ? record.token0AmountRaw
+        : (record.token0AmountRaw as { toString(): string }).toString(),
+    token1Address: record.token1Address as string,
+    token1AssetIdSnapshot: record.token1AssetIdSnapshot as string,
+    token1DecimalsSnapshot: record.token1DecimalsSnapshot as number,
+    token1AmountRaw:
+      typeof record.token1AmountRaw === "string"
+        ? record.token1AmountRaw
+        : (record.token1AmountRaw as { toString(): string }).toString(),
+    lpTokenAddress: record.lpTokenAddress as string,
+    lpAssetIdSnapshot: record.lpAssetIdSnapshot as string,
+    lpDecimalsSnapshot: record.lpDecimalsSnapshot as number,
+    lpAmountRaw:
+      typeof record.lpAmountRaw === "string"
+        ? record.lpAmountRaw
+        : (record.lpAmountRaw as { toString(): string }).toString(),
+    feeAssetIdSnapshot: record.feeAssetIdSnapshot as string,
+    feeDecimalsSnapshot: record.feeDecimalsSnapshot as number,
+    feeAmountRaw:
+      typeof record.feeAmountRaw === "string"
+        ? record.feeAmountRaw
+        : (record.feeAmountRaw as { toString(): string }).toString(),
+  }));
+}
+
 export async function markRawDataRangeReorged(
   args: {
     chainId: number;
@@ -477,7 +653,7 @@ export async function markRawDataRangeReorged(
     },
   } satisfies Prisma.RawBlockWhereInput;
 
-  const [rawBlocks, rawTransactions, rawLogs, rawTokenTransfers, rawDexSwaps] =
+  const [rawBlocks, rawTransactions, rawLogs, rawTokenTransfers, rawDexSwaps, rawLpActions] =
     await client.$transaction([
       client.rawBlock.updateMany({
         where,
@@ -509,6 +685,12 @@ export async function markRawDataRangeReorged(
           status: "REORGED",
         },
       }),
+      client.rawLpAction.updateMany({
+        where,
+        data: {
+          status: "REORGED",
+        },
+      }),
     ]);
 
   return {
@@ -517,6 +699,7 @@ export async function markRawDataRangeReorged(
     rawLogs: rawLogs.count,
     rawTokenTransfers: rawTokenTransfers.count,
     rawDexSwaps: rawDexSwaps.count,
+    rawLpActions: rawLpActions.count,
   };
 }
 

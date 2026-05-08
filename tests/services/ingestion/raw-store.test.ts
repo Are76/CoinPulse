@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  persistRawLpActions,
   persistRawDexSwaps,
   persistRawTokenTransfers,
   persistRawTransactions,
+  readWalletRawLpActions,
   readWalletDexSwapSnapshots,
   readWalletTransferRawLogs,
   readWalletTransferRawTokenTransfers,
@@ -324,6 +326,115 @@ describe("raw dex swap audit helpers", () => {
         protocolSlug: "pulsex",
         soldAmountRaw: "5000000",
         boughtAmountRaw: "3000000000000000000",
+        feeAmountRaw: "200000000000000",
+      }),
+    ]);
+  });
+});
+
+describe("raw lp audit helpers", () => {
+  it("persists and reads wallet-scoped raw lp action snapshots deterministically", async () => {
+    const creates: Array<unknown> = [];
+
+    const persisted = await persistRawLpActions(
+      [
+        {
+          chainId: 369,
+          protocolSlug: "pulsex",
+          actionKind: "ADD",
+          txHash: "0xlp",
+          blockNumber: 120n,
+          blockHash: "0xblock120",
+          logIndex: 6,
+          pairAddress: "0xpair",
+          initiatorAddress: "0x1111111111111111111111111111111111111111",
+          counterpartyAddress: "0xrouter",
+          token0Address: "0xtoken0",
+          token0AssetIdSnapshot: "chain:369:erc20:0xtoken0",
+          token0DecimalsSnapshot: 18,
+          token0AmountRaw: "1000000000000000000",
+          token1Address: "0xtoken1",
+          token1AssetIdSnapshot: "chain:369:erc20:0xtoken1",
+          token1DecimalsSnapshot: 6,
+          token1AmountRaw: "5000000",
+          lpTokenAddress: "0xlp",
+          lpAssetIdSnapshot: "chain:369:erc20:0xlp",
+          lpDecimalsSnapshot: 18,
+          lpAmountRaw: "100000000000000000",
+          feeAssetIdSnapshot: "chain:369:native:PLS",
+          feeDecimalsSnapshot: 18,
+          feeAmountRaw: "200000000000000",
+        },
+      ],
+      {
+        rawLpAction: {
+          createMany: async (args) => {
+            creates.push(...args.data);
+            return { count: args.data.length };
+          },
+        },
+      },
+    );
+
+    expect(persisted).toEqual({ count: 1 });
+    expect(creates[0]).toMatchObject({
+      protocolSlug: "pulsex",
+      actionKind: "ADD",
+      txHash: "0xlp",
+      pairAddress: "0xpair",
+      token0AssetIdSnapshot: "chain:369:erc20:0xtoken0",
+      token1AssetIdSnapshot: "chain:369:erc20:0xtoken1",
+      lpAssetIdSnapshot: "chain:369:erc20:0xlp",
+      feeAssetIdSnapshot: "chain:369:native:PLS",
+    });
+
+    const records = await readWalletRawLpActions(
+      {
+        chainId: 369,
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        fromBlock: 100n,
+        toBlock: 130n,
+      },
+      {
+        rawLpAction: {
+          findMany: async () => [
+            {
+              chainId: 369,
+              protocolSlug: "pulsex",
+              actionKind: "ADD",
+              txHash: "0xlp",
+              blockNumber: 120n,
+              blockHash: "0xblock120",
+              logIndex: 6,
+              pairAddress: "0xpair",
+              initiatorAddress: "0x1111111111111111111111111111111111111111",
+              counterpartyAddress: "0xrouter",
+              token0Address: "0xtoken0",
+              token0AssetIdSnapshot: "chain:369:erc20:0xtoken0",
+              token0DecimalsSnapshot: 18,
+              token0AmountRaw: "1000000000000000000",
+              token1Address: "0xtoken1",
+              token1AssetIdSnapshot: "chain:369:erc20:0xtoken1",
+              token1DecimalsSnapshot: 6,
+              token1AmountRaw: "5000000",
+              lpTokenAddress: "0xlp",
+              lpAssetIdSnapshot: "chain:369:erc20:0xlp",
+              lpDecimalsSnapshot: 18,
+              lpAmountRaw: "100000000000000000",
+              feeAssetIdSnapshot: "chain:369:native:PLS",
+              feeDecimalsSnapshot: 18,
+              feeAmountRaw: "200000000000000",
+            },
+          ],
+        },
+      },
+    );
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        txHash: "0xlp",
+        actionKind: "ADD",
+        lpAssetIdSnapshot: "chain:369:erc20:0xlp",
         feeAmountRaw: "200000000000000",
       }),
     ]);
