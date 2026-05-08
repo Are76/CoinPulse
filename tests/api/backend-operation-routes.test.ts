@@ -2,8 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const resolveTrackedWalletByAddress = vi.fn();
 const runWalletSync = vi.fn();
-const rebuildCanonicalLedger = vi.fn();
-const materializeCurrentPortfolioPositions = vi.fn();
+const runRebuildOperation = vi.fn();
 
 vi.mock("@/services/api/wallets", () => ({
   resolveTrackedWalletByAddress,
@@ -14,11 +13,7 @@ vi.mock("@/services/sync", () => ({
 }));
 
 vi.mock("@/services/rebuild", () => ({
-  rebuildCanonicalLedger,
-}));
-
-vi.mock("@/services/portfolio", () => ({
-  materializeCurrentPortfolioPositions,
+  runRebuildOperation,
 }));
 
 describe("POST /api/sync/manual", () => {
@@ -122,30 +117,34 @@ describe("POST /api/rebuild", () => {
       address: "0x1111111111111111111111111111111111111111",
       chainId: 369,
     });
-    rebuildCanonicalLedger.mockResolvedValue({
-      wallet: "0x1111111111111111111111111111111111111111",
-      chainId: 369,
-      fromBlock: 100n,
-      toBlock: 200n,
-      sourceFamilies: ["TRANSFERS", "DEX"],
-      sourceFamiliesIncluded: ["TRANSFERS", "DEX"],
-      rawSnapshotsProcessed: 12,
-      ledgerEntriesDeleted: 3,
-      ledgerEntriesRecreated: 9,
-      skippedCount: 1,
-      skippedSnapshots: 1,
-      unsupportedSourceFamilies: 0,
-      warnings: ["warning-a"],
-    });
-    materializeCurrentPortfolioPositions.mockResolvedValue({
-      wallet: "0x1111111111111111111111111111111111111111",
-      chainId: 369,
-      ledgerEntriesProcessed: 9,
-      tokenBalancesWritten: 3,
-      lpPositionsWritten: 1,
-      stakePositionsWritten: 0,
-      skippedCount: 0,
-      warnings: [],
+    runRebuildOperation.mockResolvedValue({
+      runId: "rebuild-run-1",
+      warningCount: 1,
+      rebuild: {
+        wallet: "0x1111111111111111111111111111111111111111",
+        chainId: 369,
+        fromBlock: 100n,
+        toBlock: 200n,
+        sourceFamilies: ["TRANSFERS", "DEX"],
+        sourceFamiliesIncluded: ["TRANSFERS", "DEX"],
+        rawSnapshotsProcessed: 12,
+        ledgerEntriesDeleted: 3,
+        ledgerEntriesRecreated: 9,
+        skippedCount: 1,
+        skippedSnapshots: 1,
+        unsupportedSourceFamilies: 0,
+        warnings: ["warning-a"],
+      },
+      materialized: {
+        wallet: "0x1111111111111111111111111111111111111111",
+        chainId: 369,
+        ledgerEntriesProcessed: 9,
+        tokenBalancesWritten: 3,
+        lpPositionsWritten: 1,
+        stakePositionsWritten: 0,
+        skippedCount: 0,
+        warnings: [],
+      },
     });
 
     const { POST } = await import("../../app/api/rebuild/route");
@@ -193,7 +192,7 @@ describe("POST /api/rebuild", () => {
         },
       },
     });
-    expect(rebuildCanonicalLedger).toHaveBeenCalledWith({
+    expect(runRebuildOperation).toHaveBeenCalledWith({
       wallet: {
         id: "wallet-1",
         address: "0x1111111111111111111111111111111111111111",
@@ -202,13 +201,6 @@ describe("POST /api/rebuild", () => {
       fromBlock: 100n,
       toBlock: 200n,
       sourceFamilies: ["TRANSFERS", "DEX"],
-    });
-    expect(materializeCurrentPortfolioPositions).toHaveBeenCalledWith({
-      wallet: {
-        id: "wallet-1",
-        address: "0x1111111111111111111111111111111111111111",
-        chainId: 369,
-      },
     });
   });
 });
