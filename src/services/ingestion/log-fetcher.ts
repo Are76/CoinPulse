@@ -42,6 +42,15 @@ export async function fetchLogsWithAdaptiveRetry(
   const minWindowSize = args.minWindowSize ?? 32n;
   const maxAttemptsPerWindow = args.maxAttemptsPerWindow ?? 3;
   const baseBackoffMs = args.baseBackoffMs ?? 250;
+
+  if (minWindowSize <= 0n) {
+    throw new Error("minWindowSize must be greater than zero");
+  }
+
+  if (maxAttemptsPerWindow <= 0) {
+    throw new Error("maxAttemptsPerWindow must be greater than zero");
+  }
+
   const queue: WindowAttempt[] = args.windows.map((window) => ({
     ...window,
     attempt: 1,
@@ -80,7 +89,7 @@ export async function fetchLogsWithAdaptiveRetry(
         queue.unshift(
           ...splitWindows.map((window) => ({
             ...window,
-            attempt: currentWindow.attempt + 1,
+            attempt: 1,
           })),
         );
 

@@ -25,7 +25,6 @@ type NormalizeTransferArgs = {
 export function normalizeTransfer(
   args: NormalizeTransferArgs,
 ): CanonicalLedgerEntryDraft[] {
-  const walletAddress = args.walletAddress.toLowerCase();
   const fromAddress = args.fromAddress.toLowerCase();
   const toAddress = args.toAddress.toLowerCase();
   const trackedAddresses = new Set(
@@ -48,7 +47,7 @@ export function normalizeTransfer(
     sourceRef: `transfer:${args.logIndex}`,
   });
 
-  if (senderTracked && recipientTracked && (fromAddress === walletAddress || toAddress === walletAddress)) {
+  if (senderTracked && recipientTracked) {
     return [
       createLedgerEntryDraft({
         chainId: args.chainId,
@@ -71,7 +70,7 @@ export function normalizeTransfer(
     ];
   }
 
-  if (toAddress === walletAddress) {
+  if (recipientTracked) {
     return [
       createLedgerEntryDraft({
         chainId: args.chainId,
@@ -94,7 +93,7 @@ export function normalizeTransfer(
     ];
   }
 
-  if (fromAddress === walletAddress) {
+  if (senderTracked) {
     return [
       createLedgerEntryDraft({
         chainId: args.chainId,

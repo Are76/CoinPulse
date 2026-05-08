@@ -11,7 +11,6 @@ describe("reorg guard", () => {
       buildBoundedReorgWindow({
         detectedBlockNumber: 150n,
         latestIngestedBlockNumber: 155n,
-        maxDepth: 10n,
       }),
     ).toEqual({
       fromBlock: 150n,
@@ -24,7 +23,6 @@ describe("reorg guard", () => {
       buildBoundedReorgWindow({
         detectedBlockNumber: 80n,
         latestIngestedBlockNumber: 155n,
-        maxDepth: 10n,
       }),
     ).toEqual({
       fromBlock: 80n,
