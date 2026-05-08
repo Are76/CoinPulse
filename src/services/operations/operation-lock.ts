@@ -1,14 +1,12 @@
 import "server-only";
 
 import { Prisma } from "@prisma/client";
-import type { PrismaClient, SyncRunStatus, SyncTrigger } from "@prisma/client";
+import type { PrismaClient, SourceFamily, SyncRunStatus, SyncTrigger } from "@prisma/client";
 
 import { getDb } from "@/lib/db";
 
 const ACTIVE_SYNC_RUN_STATUSES = ["PENDING", "RUNNING"] as const satisfies readonly SyncRunStatus[];
 const SYNC_LIKE_TRIGGERS = ["MANUAL", "IMPORT"] as const satisfies readonly SyncTrigger[];
-
-type OperationLockClient = PrismaClient | Prisma.TransactionClient;
 
 type ActiveSyncRunRecord = {
   id: string;
@@ -91,7 +89,7 @@ export async function reserveOperationRun(args: {
   trigger: SyncTrigger;
   status: SyncRunStatus;
   stage: string;
-  sourceFamilies: Parameters<OperationLockClient["syncRun"]["create"]>[0]["data"]["sourceFamilies"];
+  sourceFamilies: SourceFamily[];
   startBlock: bigint;
   endBlock: bigint;
   latestSafeBlock?: bigint;
@@ -99,74 +97,80 @@ export async function reserveOperationRun(args: {
   warningCount?: number;
   warningDetails?: readonly string[];
   errorMessage?: string;
-  failedSourceFamily?: Parameters<OperationLockClient["syncRun"]["create"]>[0]["data"]["failedSourceFamily"];
+  failedSourceFamily?: SourceFamily;
   failedFromBlock?: bigint;
   failedToBlock?: bigint;
-  db?: OperationLockClient;
+  db?: PrismaClient;
 }): Promise<{ id: string }> {
   const db = args.db ?? getDb();
+  const requestedOperation = {
+    trigger: args.trigger,
+    walletId: args.walletId,
+    chainId: args.chainId,
+  } as const;
 
-  return db.$transaction(
-    async (tx) => {
-      const conflict = await checkOperationConflict({
-        requestedOperation: {
-          trigger: args.trigger,
-          walletId: args.walletId,
-          chainId: args.chainId,
-        },
-        listActiveRuns: async () =>
-          tx.syncRun.findMany({
-            where: buildConflictWhere({
-              trigger: args.trigger,
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await db.$transaction(
+        async (tx) => {
+          const conflict = await checkOperationConflict({
+            requestedOperation,
+            listActiveRuns: async () => listConflictingRuns(tx, requestedOperation),
+          });
+
+          if (!conflict.allowed) {
+            throw new OperationConflictError(conflict);
+          }
+
+          return tx.syncRun.create({
+            data: {
               walletId: args.walletId,
               chainId: args.chainId,
-            }),
-            orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+              trigger: args.trigger,
+              status: args.status,
+              stage: args.stage,
+              sourceFamilies: args.sourceFamilies,
+              startBlock: args.startBlock,
+              endBlock: args.endBlock,
+              latestSafeBlock: args.latestSafeBlock,
+              policyLabel: args.policyLabel,
+              warningCount: args.warningCount ?? 0,
+              warningDetails: args.warningDetails ?? [],
+              errorMessage: args.errorMessage ?? null,
+              failedSourceFamily: args.failedSourceFamily ?? null,
+              failedFromBlock: args.failedFromBlock ?? null,
+              failedToBlock: args.failedToBlock ?? null,
+            },
             select: {
               id: true,
-              trigger: true,
-              status: true,
-              stage: true,
-              chainId: true,
-              walletId: true,
-              createdAt: true,
-              updatedAt: true,
             },
-          }),
+          });
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        },
+      );
+    } catch (error) {
+      if (!isSerializableRetryableConflict(error)) {
+        throw error;
+      }
+
+      const conflict = await checkOperationConflict({
+        requestedOperation,
+        listActiveRuns: async () => listConflictingRuns(db, requestedOperation),
       });
 
       if (!conflict.allowed) {
         throw new OperationConflictError(conflict);
       }
 
-      return tx.syncRun.create({
-        data: {
-          walletId: args.walletId,
-          chainId: args.chainId,
-          trigger: args.trigger,
-          status: args.status,
-          stage: args.stage,
-          sourceFamilies: args.sourceFamilies,
-          startBlock: args.startBlock,
-          endBlock: args.endBlock,
-          latestSafeBlock: args.latestSafeBlock,
-          policyLabel: args.policyLabel,
-          warningCount: args.warningCount ?? 0,
-          warningDetails: args.warningDetails ?? [],
-          errorMessage: args.errorMessage ?? null,
-          failedSourceFamily: args.failedSourceFamily ?? null,
-          failedFromBlock: args.failedFromBlock ?? null,
-          failedToBlock: args.failedToBlock ?? null,
-        },
-        select: {
-          id: true,
-        },
-      });
-    },
-    {
-      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-    },
-  );
+      if (attempt === 2) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error("unreachable");
 }
 
 export function isOperationConflictError(error: unknown): error is OperationConflictError | {
@@ -219,6 +223,35 @@ function buildConflictWhere(requestedOperation: RequestedOperation): Prisma.Sync
     status: { in: [...ACTIVE_SYNC_RUN_STATUSES] },
     trigger: "REBUILD",
   };
+}
+
+async function listConflictingRuns(
+  client: Pick<PrismaClient, "syncRun"> | Prisma.TransactionClient,
+  requestedOperation: RequestedOperation,
+) {
+  return client.syncRun.findMany({
+    where: buildConflictWhere(requestedOperation),
+    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    select: {
+      id: true,
+      trigger: true,
+      status: true,
+      stage: true,
+      chainId: true,
+      walletId: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+}
+
+function isSerializableRetryableConflict(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "P2034"
+  );
 }
 
 function isActiveStatus(status: SyncRunStatus | string): status is (typeof ACTIVE_SYNC_RUN_STATUSES)[number] {

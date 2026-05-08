@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkOperationConflict,
   OperationConflictError,
+  reserveOperationRun,
 } from "@/services/operations/operation-lock";
 
 describe("checkOperationConflict", () => {
@@ -150,5 +151,87 @@ describe("checkOperationConflict", () => {
     expect(error.code).toBe("OPERATION_CONFLICT");
     expect(error.message).toBe("A conflicting operation is already active.");
     expect(error.details.reason).toBe("active_rebuild_in_progress");
+  });
+});
+
+describe("reserveOperationRun", () => {
+  it("converts a serializable P2034 race into OperationConflictError after conflict recheck", async () => {
+    const db = {
+      $transaction: async () => {
+        const error = new Error("serialization failure") as Error & { code: string };
+        error.code = "P2034";
+        throw error;
+      },
+      syncRun: {
+        findMany: async () => [
+          {
+            id: "run-rebuild-race",
+            trigger: "REBUILD",
+            status: "RUNNING",
+            stage: "REBUILDING_LEDGER",
+            chainId: 369,
+            walletId: "wallet-1",
+            createdAt: new Date("2026-05-08T14:00:00.000Z"),
+            updatedAt: new Date("2026-05-08T14:00:01.000Z"),
+          },
+        ],
+      },
+    } as never;
+
+    await expect(
+      reserveOperationRun({
+        walletId: "wallet-1",
+        chainId: 369,
+        trigger: "MANUAL",
+        status: "PENDING",
+        stage: "PENDING",
+        sourceFamilies: ["TRANSFERS"],
+        startBlock: 100n,
+        endBlock: 200n,
+        policyLabel: "manual-dashboard-sync",
+        db,
+      }),
+    ).rejects.toMatchObject({
+      code: "OPERATION_CONFLICT",
+      details: expect.objectContaining({
+        reason: "active_rebuild_in_progress",
+        conflictingOperationId: "run-rebuild-race",
+      }),
+    });
+  });
+
+  it("does not blindly convert P2034 to conflict when recheck finds no active operation", async () => {
+    let attempts = 0;
+    const db = {
+      $transaction: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          const error = new Error("serialization failure") as Error & { code: string };
+          error.code = "P2034";
+          throw error;
+        }
+
+        return { id: "run-created-after-retry" };
+      },
+      syncRun: {
+        findMany: async () => [],
+      },
+    } as never;
+
+    const result = await reserveOperationRun({
+      walletId: "wallet-1",
+      chainId: 369,
+      trigger: "REBUILD",
+      status: "PENDING",
+      stage: "PENDING",
+      sourceFamilies: ["TRANSFERS"],
+      startBlock: 100n,
+      endBlock: 200n,
+      policyLabel: "manual-rebuild",
+      db,
+    });
+
+    expect(result).toEqual({ id: "run-created-after-retry" });
+    expect(attempts).toBe(2);
   });
 });
