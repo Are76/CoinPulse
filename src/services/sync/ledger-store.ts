@@ -7,15 +7,8 @@ import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 
 type LedgerStoreClient = {
   ledgerActionGroup: {
-    upsert(args: {
-      where: {
-        chainId_walletId_actionGroupKey: {
-          chainId: number;
-          walletId: string;
-          actionGroupKey: string;
-        };
-      };
-      create: {
+    createMany(args: {
+      data: Array<{
         id: string;
         chainId: number;
         walletId: string;
@@ -23,13 +16,9 @@ type LedgerStoreClient = {
         actionGroupKey: string;
         actionType: string;
         occurredAt: Date;
-      };
-      update: {
-        txHash: string;
-        actionType: string;
-        occurredAt: Date;
-      };
-    }): Promise<unknown>;
+      }>;
+      skipDuplicates: boolean;
+    }): Promise<{ count: number }>;
   };
   ledgerEntry: {
     createMany(args: {
@@ -147,23 +136,10 @@ export async function persistNormalizedLedger(
     }
   }
 
-  for (const actionGroup of actionGroups.values()) {
-    await client.ledgerActionGroup.upsert({
-      where: {
-        chainId_walletId_actionGroupKey: {
-          chainId: actionGroup.chainId,
-          walletId: actionGroup.walletId,
-          actionGroupKey: actionGroup.actionGroupKey,
-        },
-      },
-      create: actionGroup,
-      update: {
-        txHash: actionGroup.txHash,
-        actionType: actionGroup.actionType,
-        occurredAt: actionGroup.occurredAt,
-      },
-    });
-  }
+  const createdActionGroups = await client.ledgerActionGroup.createMany({
+    data: Array.from(actionGroups.values()),
+    skipDuplicates: true,
+  });
 
   const createdEntries = await client.ledgerEntry.createMany({
     data: Array.from(entries.values()).map((entry) => ({
@@ -188,7 +164,7 @@ export async function persistNormalizedLedger(
   });
 
   return {
-    actionGroupCount: actionGroups.size,
+    actionGroupCount: createdActionGroups.count,
     entryCount: createdEntries.count,
   };
 }

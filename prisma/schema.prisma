@@ -172,7 +172,11 @@ model SyncRun {
   latestSafeBlock  BigInt?
   policyLabel      String
   warningCount     Int            @default(0)
+  warningDetails   Json?
   errorMessage     String?
+  failedSourceFamily SourceFamily?
+  failedFromBlock  BigInt?
+  failedToBlock    BigInt?
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
   wallet           Wallet?        @relation(fields: [walletId], references: [id], onDelete: SetNull)
@@ -285,6 +289,9 @@ model RawTokenTransfer {
   id                String          @id @default(cuid())
   chainId           Int
   tokenId           String
+  tokenAddress      String
+  assetIdSnapshot   String
+  decimalsSnapshot  Int
   txHash            String
   blockNumber       BigInt
   blockHash         String
@@ -299,6 +306,7 @@ model RawTokenTransfer {
 
   @@unique([chainId, txHash, logIndex, blockHash])
   @@index([chainId, tokenId, blockNumber])
+  @@index([chainId, assetIdSnapshot, blockNumber])
 }
 
 model LedgerActionGroup {

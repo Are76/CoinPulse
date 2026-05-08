@@ -173,6 +173,14 @@ describe("runWalletSync", () => {
       actionGroups: 0,
       ledgerEntries: 0,
     });
+    expect(cursorStore.upsertCursor).toHaveBeenCalledWith({
+      walletId: "wallet_1",
+      chainId: 369,
+      sourceFamily: "TRANSFERS",
+      fromBlock: 121n,
+      toBlock: 150n,
+      blockHash: "0xrerun",
+    });
   });
 
   it("marks the sync run as failed with stage and range context when normalization fails", async () => {
@@ -219,10 +227,37 @@ describe("runWalletSync", () => {
         runId: "run_1",
         status: "FAILED",
         stage: "NORMALIZING_LEDGER",
+        failedSourceFamily: "TRANSFERS",
+        failedFromBlock: 10n,
+        failedToBlock: 20n,
         warningCount: 1,
+        warningDetails: ["missing optional receipt"],
         latestSafeBlock: 20n,
         errorMessage: expect.stringContaining("TRANSFERS 10-20"),
       }),
+    );
+  });
+
+  it("fails fast when the concrete sync path is asked to run unsupported source families", async () => {
+    await expect(
+      runWalletSync({
+        wallet: {
+          id: "wallet_1",
+          chainId: 369,
+          address: "0x1111111111111111111111111111111111111111",
+        },
+        sourceFamilies: ["DEX"],
+        startBlock: 10n,
+        endBlock: 20n,
+        policyLabel: "unsupported-family",
+        dependencies: {
+          supportedSourceFamilies: ["TRANSFERS"],
+          ingestSourceFamily: vi.fn(),
+          normalizeSourceFamily: vi.fn(),
+        },
+      }),
+    ).rejects.toThrow(
+      "Unsupported source families for the current concrete sync path: DEX. Supported families: TRANSFERS.",
     );
   });
 });

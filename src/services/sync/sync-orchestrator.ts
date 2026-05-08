@@ -11,6 +11,7 @@ import {
   type SyncRunStore,
 } from "@/services/sync/sync-state-store";
 import { persistNormalizedLedger } from "@/services/sync/ledger-store";
+import { createSyncDependencies } from "@/services/sync/transfer-sync";
 
 export type SyncWallet = {
   id: string;
@@ -28,6 +29,7 @@ export type IngestSourceFamilyResult<TLog = unknown> = {
 };
 
 type SyncRunDependencies<TLog = unknown> = {
+  supportedSourceFamilies?: readonly SourceFamily[];
   runStore?: SyncRunStore;
   cursorStore?: SyncCursorStore;
   ingestSourceFamily: (args: {
@@ -56,14 +58,28 @@ export async function runWalletSync<TLog = unknown>(args: {
   startBlock?: bigint;
   policyLabel: string;
   trigger?: SyncTrigger;
-  dependencies: SyncRunDependencies<TLog>;
+  dependencies?: SyncRunDependencies<TLog>;
 }) {
-  const runStore =
-    args.dependencies.runStore ?? createPrismaSyncRunStore();
-  const cursorStore =
-    args.dependencies.cursorStore ?? createPrismaSyncCursorStore();
-  const persistLedger =
-    args.dependencies.persistLedger ?? persistNormalizedLedger;
+  const dependencies =
+    args.dependencies ?? (createSyncDependencies() as unknown as SyncRunDependencies<TLog>);
+  const unsupportedSourceFamilies = (dependencies.supportedSourceFamilies
+    ? args.sourceFamilies.filter(
+        (sourceFamily) =>
+          !dependencies.supportedSourceFamilies?.includes(sourceFamily),
+      )
+    : []) as SourceFamily[];
+
+  if (unsupportedSourceFamilies.length > 0) {
+    throw new Error(
+      `Unsupported source families for the current concrete sync path: ${unsupportedSourceFamilies.join(
+        ", ",
+      )}. Supported families: ${dependencies.supportedSourceFamilies?.join(", ") ?? "none"}.`,
+    );
+  }
+
+  const runStore = dependencies.runStore ?? createPrismaSyncRunStore();
+  const cursorStore = dependencies.cursorStore ?? createPrismaSyncCursorStore();
+  const persistLedger = dependencies.persistLedger ?? persistNormalizedLedger;
 
   const syncPlans = await Promise.all(
     args.sourceFamilies.map(async (sourceFamily) => {
@@ -95,6 +111,7 @@ export async function runWalletSync<TLog = unknown>(args: {
   });
 
   let warningCount = 0;
+  const warningDetails: string[] = [];
   let latestSafeBlock: bigint | undefined;
   let currentStage = "PENDING";
   let currentRange:
@@ -130,9 +147,10 @@ export async function runWalletSync<TLog = unknown>(args: {
         stage: currentStage,
         latestSafeBlock,
         warningCount,
+        warningDetails,
       });
 
-      const ingestResult = await args.dependencies.ingestSourceFamily({
+      const ingestResult = await dependencies.ingestSourceFamily({
         runId: run.id,
         wallet: args.wallet,
         sourceFamily: plan.sourceFamily,
@@ -143,6 +161,7 @@ export async function runWalletSync<TLog = unknown>(args: {
 
       counts.rawLogs += ingestResult.rawLogCount;
       warningCount += ingestResult.warnings.length;
+      warningDetails.push(...ingestResult.warnings);
       latestSafeBlock = ingestResult.toBlock;
       currentRange = {
         sourceFamily: plan.sourceFamily,
@@ -157,9 +176,10 @@ export async function runWalletSync<TLog = unknown>(args: {
         stage: currentStage,
         latestSafeBlock,
         warningCount,
+        warningDetails,
       });
 
-      const drafts = await args.dependencies.normalizeSourceFamily({
+      const drafts = await dependencies.normalizeSourceFamily({
         runId: run.id,
         wallet: args.wallet,
         sourceFamily: plan.sourceFamily,
@@ -175,6 +195,7 @@ export async function runWalletSync<TLog = unknown>(args: {
         stage: currentStage,
         latestSafeBlock,
         warningCount,
+        warningDetails,
       });
 
       const persisted = await persistLedger(drafts);
@@ -189,6 +210,7 @@ export async function runWalletSync<TLog = unknown>(args: {
         stage: currentStage,
         latestSafeBlock,
         warningCount,
+        warningDetails,
       });
 
       await cursorStore.upsertCursor({
@@ -207,8 +229,12 @@ export async function runWalletSync<TLog = unknown>(args: {
       stage: "COMPLETED",
       latestSafeBlock: latestSafeBlock ?? args.endBlock,
       warningCount,
+      warningDetails,
       errorMessage: null,
       endBlock: args.endBlock,
+      failedSourceFamily: null,
+      failedFromBlock: null,
+      failedToBlock: null,
     });
 
     return {
@@ -224,6 +250,7 @@ export async function runWalletSync<TLog = unknown>(args: {
       stage: currentStage,
       latestSafeBlock,
       warningCount,
+      warningDetails,
       errorMessage: buildSyncFailureMessage({
         error,
         stage: currentStage,
@@ -232,6 +259,9 @@ export async function runWalletSync<TLog = unknown>(args: {
         toBlock: currentRange?.toBlock,
       }),
       endBlock: args.endBlock,
+      failedSourceFamily: currentRange?.sourceFamily ?? null,
+      failedFromBlock: currentRange?.fromBlock ?? null,
+      failedToBlock: currentRange?.toBlock ?? null,
     });
 
     throw error;

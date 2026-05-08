@@ -33,8 +33,8 @@ function createDraft(
 
 describe("persistNormalizedLedger", () => {
   it("persists deterministic action group and ledger entry identities idempotently", async () => {
-    const actionGroupUpsert = vi.fn(async ({ create }: { create: { id: string } }) => ({
-      id: create.id,
+    const actionGroupCreateMany = vi.fn(async () => ({
+      count: 1,
     }));
     const ledgerEntryCreateMany = vi.fn(async () => ({
       count: 2,
@@ -42,7 +42,7 @@ describe("persistNormalizedLedger", () => {
 
     const client = {
       ledgerActionGroup: {
-        upsert: actionGroupUpsert,
+        createMany: actionGroupCreateMany,
       },
       ledgerEntry: {
         createMany: ledgerEntryCreateMany,
@@ -67,22 +67,24 @@ describe("persistNormalizedLedger", () => {
       actionGroupCount: 1,
       entryCount: 2,
     });
-    expect(actionGroupUpsert).toHaveBeenCalledTimes(1);
-    expect(actionGroupUpsert.mock.calls[0]?.[0]).toMatchObject({
-      create: {
-        id: buildDeterministicActionGroupId({
-          chainId: first.chainId,
-          walletId: first.walletId,
-          actionGroupKey,
+    expect(actionGroupCreateMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          id: buildDeterministicActionGroupId({
+            chainId: first.chainId,
+            walletId: first.walletId,
+            actionGroupKey,
+          }),
         }),
-      },
+      ],
+      skipDuplicates: true,
     });
     expect(ledgerEntryCreateMany).toHaveBeenCalledWith({
       data: expect.arrayContaining([
         expect.objectContaining({
           id: buildDeterministicLedgerEntryId({
-            chainId: first.chainId,
-            walletId: first.walletId,
+          chainId: first.chainId,
+          walletId: first.walletId,
             dedupeKey: first.dedupeKey,
           }),
           actionGroupId: buildDeterministicActionGroupId({
