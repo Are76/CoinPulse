@@ -5,12 +5,11 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "prisma generate && next build",
-    "typecheck": "next build && next typegen && tsc --noEmit",
-    "postinstall": "prisma generate",
+    "typecheck": "prisma generate && next typegen && tsc --noEmit",
     "start": "next start",
     "lint": "eslint .",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "prisma generate && vitest run",
+    "test:watch": "prisma generate && vitest",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts"
