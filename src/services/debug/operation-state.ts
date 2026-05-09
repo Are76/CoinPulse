@@ -7,6 +7,7 @@ import {
   inspectOperationBlocker,
   type OperationStaleReason,
 } from "@/services/operations/operation-lock";
+import { buildNativeTransactionScanWindows } from "@/services/sync/sync-common";
 
 export type OperationType =
   | "manual_sync"
@@ -64,9 +65,29 @@ export type OperationStateReport = {
     hasStaleBlockers: boolean;
     blockersByOperationType: Partial<Record<OperationType, number>>;
   };
+  ingestionDiagnostics: TransferIngestionDiagnostic[];
   lastSuccessfulSyncAt: string | null;
   lastRebuildAt: string | null;
   warnings: string[];
+};
+
+export type TransferIngestionDiagnostic = {
+  operationId: string;
+  walletId: string | null;
+  walletAddress: string | null;
+  chainId: number;
+  sourceFamily: "TRANSFERS";
+  requestedFromBlock: string;
+  requestedToBlock: string;
+  nativeScanWindowCount: number;
+  nativeScanWindows: Array<{
+    fromBlock: string;
+    toBlock: string;
+  }>;
+  rawBlocksPersistedCount: number;
+  rawTransactionsPersistedCount: number;
+  rawLogsPersistedCount: number;
+  warningCount: number;
 };
 
 type SyncRunOperationRecord = {
@@ -85,6 +106,8 @@ type SyncRunOperationRecord = {
   updatedAt: Date;
   sourceFamilies?: SourceFamily[];
   policyLabel?: string | null;
+  startBlock?: bigint | null;
+  endBlock?: bigint | null;
 };
 
 type OperationStateDependencies = {
@@ -92,6 +115,16 @@ type OperationStateDependencies = {
   listSyncRuns?: () => Promise<SyncRunOperationRecord[]>;
   getLastSuccessfulSyncRun?: () => Promise<SyncRunOperationRecord | null>;
   getLastRebuildRun?: () => Promise<SyncRunOperationRecord | null>;
+  getTransferIngestionCounts?: (args: {
+    chainId: number;
+    walletAddress: string;
+    fromBlock: bigint;
+    toBlock: bigint;
+  }) => Promise<{
+    rawBlocksPersistedCount: number;
+    rawTransactionsPersistedCount: number;
+    rawLogsPersistedCount: number;
+  }>;
 };
 
 export async function getOperationStateReport(
@@ -122,6 +155,8 @@ export async function getOperationStateReport(
           updatedAt: true,
           sourceFamilies: true,
           policyLabel: true,
+          startBlock: true,
+          endBlock: true,
         },
       }));
   const getLastSuccessfulSyncRun =
@@ -153,6 +188,8 @@ export async function getOperationStateReport(
           updatedAt: true,
           sourceFamilies: true,
           policyLabel: true,
+          startBlock: true,
+          endBlock: true,
         },
       }));
   const getLastRebuildRun =
@@ -184,8 +221,70 @@ export async function getOperationStateReport(
           updatedAt: true,
           sourceFamilies: true,
           policyLabel: true,
+          startBlock: true,
+          endBlock: true,
         },
       }));
+  const getTransferIngestionCounts =
+    dependencies.getTransferIngestionCounts ??
+    (async (args: {
+      chainId: number;
+      walletAddress: string;
+      fromBlock: bigint;
+      toBlock: bigint;
+    }) => {
+      const walletAddress = args.walletAddress.toLowerCase();
+      const [rawBlocksPersistedCount, rawTransactionsPersistedCount, rawLogsPersistedCount] =
+        await Promise.all([
+          getDb().rawBlock.count({
+            where: {
+              chainId: args.chainId,
+              status: "ACTIVE",
+              blockNumber: {
+                gte: args.fromBlock,
+                lte: args.toBlock,
+              },
+            },
+          }),
+          getDb().rawTransaction.count({
+            where: {
+              chainId: args.chainId,
+              status: "ACTIVE",
+              blockNumber: {
+                gte: args.fromBlock,
+                lte: args.toBlock,
+              },
+              OR: [{ fromAddress: walletAddress }, { toAddress: walletAddress }],
+            },
+          }),
+          getDb().rawLog.count({
+            where: {
+              chainId: args.chainId,
+              status: "ACTIVE",
+              blockNumber: {
+                gte: args.fromBlock,
+                lte: args.toBlock,
+              },
+              topic0:
+                "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+              OR: [
+                {
+                  topic1: `0x000000000000000000000000${walletAddress.replace(/^0x/, "")}`,
+                },
+                {
+                  topic2: `0x000000000000000000000000${walletAddress.replace(/^0x/, "")}`,
+                },
+              ],
+            },
+          }),
+        ]);
+
+      return {
+        rawBlocksPersistedCount,
+        rawTransactionsPersistedCount,
+        rawLogsPersistedCount,
+      };
+    });
 
   const syncRuns = await listSyncRuns();
   const [lastSuccessfulSyncRun, lastRebuildRun] = await Promise.all([
@@ -198,6 +297,13 @@ export async function getOperationStateReport(
       (left, right) =>
         Date.parse(right.startedAt) - Date.parse(left.startedAt),
     );
+  const ingestionDiagnostics = (
+    await Promise.all(
+      syncRuns.map(async (syncRun) =>
+        projectTransferIngestionDiagnostic(syncRun, getTransferIngestionCounts),
+      ),
+    )
+  ).filter((diagnostic): diagnostic is TransferIngestionDiagnostic => diagnostic !== null);
 
   const lastSuccessfulSyncAt = lastSuccessfulSyncRun
     ? mapSyncRunToOperationState(lastSuccessfulSyncRun, now).finishedAt
@@ -221,6 +327,7 @@ export async function getOperationStateReport(
     updatedAt: now.toISOString(),
     operations,
     blockerSummary: summarizeOperationBlockers(operations),
+    ingestionDiagnostics,
     lastSuccessfulSyncAt,
     lastRebuildAt,
     warnings,
@@ -352,5 +459,52 @@ function summarizeOperationBlockers(
     newestBlockerAgeMs: ageValues.length > 0 ? Math.min(...ageValues) : null,
     hasStaleBlockers: staleBlockerCount > 0,
     blockersByOperationType,
+  };
+}
+
+async function projectTransferIngestionDiagnostic(
+  syncRun: SyncRunOperationRecord,
+  getTransferIngestionCounts: NonNullable<
+    OperationStateDependencies["getTransferIngestionCounts"]
+  >,
+): Promise<TransferIngestionDiagnostic | null> {
+  if (
+    !syncRun.sourceFamilies?.includes("TRANSFERS") ||
+    !syncRun.wallet?.address ||
+    typeof syncRun.startBlock !== "bigint" ||
+    typeof syncRun.endBlock !== "bigint"
+  ) {
+    return null;
+  }
+
+  const counts = await getTransferIngestionCounts({
+    chainId: syncRun.chainId,
+    walletAddress: syncRun.wallet.address,
+    fromBlock: syncRun.startBlock,
+    toBlock: syncRun.endBlock,
+  });
+  const nativeScanWindows = buildNativeTransactionScanWindows({
+    fromBlock: syncRun.startBlock,
+    toBlock: syncRun.endBlock,
+    maxWindowSize: 2_000n,
+  });
+
+  return {
+    operationId: syncRun.id,
+    walletId: syncRun.walletId,
+    walletAddress: syncRun.wallet.address,
+    chainId: syncRun.chainId,
+    sourceFamily: "TRANSFERS",
+    requestedFromBlock: syncRun.startBlock.toString(),
+    requestedToBlock: syncRun.endBlock.toString(),
+    nativeScanWindowCount: nativeScanWindows.length,
+    nativeScanWindows: nativeScanWindows.map((window) => ({
+      fromBlock: window.fromBlock.toString(),
+      toBlock: window.toBlock.toString(),
+    })),
+    rawBlocksPersistedCount: counts.rawBlocksPersistedCount,
+    rawTransactionsPersistedCount: counts.rawTransactionsPersistedCount,
+    rawLogsPersistedCount: counts.rawLogsPersistedCount,
+    warningCount: syncRun.warningCount,
   };
 }

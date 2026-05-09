@@ -181,6 +181,7 @@ describe("getOperationStateReport", () => {
       hasStaleBlockers: false,
       blockersByOperationType: {},
     });
+    expect(report.ingestionDiagnostics).toEqual([]);
   });
 
   it("summarizes fresh active blockers without marking them stale", async () => {
@@ -402,6 +403,163 @@ describe("getOperationStateReport", () => {
     expect(report.warnings).toContain(
       "rebuild operations are not persisted separately yet; lastRebuildAt may be unavailable",
     );
+  });
+
+  it("returns diagnostics for a transfer run with an empty requested range", async () => {
+    const now = new Date("2026-05-08T19:00:00.000Z");
+    const report = await getOperationStateReport({
+      now,
+      listSyncRuns: async () => [
+        {
+          id: "transfer-empty",
+          trigger: "MANUAL",
+          status: "COMPLETED",
+          stage: "COMPLETED",
+          chainId: 369,
+          walletId: "wallet-1",
+          wallet: { address: "0x1111111111111111111111111111111111111111" },
+          warningCount: 0,
+          errorMessage: null,
+          createdAt: new Date("2026-05-08T18:00:00.000Z"),
+          updatedAt: new Date("2026-05-08T18:01:00.000Z"),
+          sourceFamilies: ["TRANSFERS"],
+          policyLabel: "manual",
+          startBlock: 10n,
+          endBlock: 9n,
+        },
+      ],
+      getLastSuccessfulSyncRun: async () => null,
+      getLastRebuildRun: async () => null,
+      getTransferIngestionCounts: async () => ({
+        rawBlocksPersistedCount: 0,
+        rawTransactionsPersistedCount: 0,
+        rawLogsPersistedCount: 0,
+      }),
+    });
+
+    expect(report.ingestionDiagnostics).toEqual([
+      {
+        operationId: "transfer-empty",
+        walletId: "wallet-1",
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        chainId: 369,
+        sourceFamily: "TRANSFERS",
+        requestedFromBlock: "10",
+        requestedToBlock: "9",
+        nativeScanWindowCount: 0,
+        nativeScanWindows: [],
+        rawBlocksPersistedCount: 0,
+        rawTransactionsPersistedCount: 0,
+        rawLogsPersistedCount: 0,
+        warningCount: 0,
+      },
+    ]);
+  });
+
+  it("returns diagnostics for a single native scan window with deterministic shape", async () => {
+    const now = new Date("2026-05-08T19:00:00.000Z");
+    const report = await getOperationStateReport({
+      now,
+      listSyncRuns: async () => [
+        {
+          id: "transfer-one-window",
+          trigger: "MANUAL",
+          status: "COMPLETED",
+          stage: "COMPLETED",
+          chainId: 369,
+          walletId: "wallet-1",
+          wallet: { address: "0x1111111111111111111111111111111111111111" },
+          warningCount: 2,
+          errorMessage: null,
+          createdAt: new Date("2026-05-08T18:00:00.000Z"),
+          updatedAt: new Date("2026-05-08T18:01:00.000Z"),
+          sourceFamilies: ["TRANSFERS", "DEX"],
+          policyLabel: "manual",
+          startBlock: 100n,
+          endBlock: 150n,
+        },
+      ],
+      getLastSuccessfulSyncRun: async () => null,
+      getLastRebuildRun: async () => null,
+      getTransferIngestionCounts: async () => ({
+        rawBlocksPersistedCount: 51,
+        rawTransactionsPersistedCount: 4,
+        rawLogsPersistedCount: 3,
+      }),
+    });
+
+    expect(report.ingestionDiagnostics).toEqual([
+      {
+        operationId: "transfer-one-window",
+        walletId: "wallet-1",
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        chainId: 369,
+        sourceFamily: "TRANSFERS",
+        requestedFromBlock: "100",
+        requestedToBlock: "150",
+        nativeScanWindowCount: 1,
+        nativeScanWindows: [{ fromBlock: "100", toBlock: "150" }],
+        rawBlocksPersistedCount: 51,
+        rawTransactionsPersistedCount: 4,
+        rawLogsPersistedCount: 3,
+        warningCount: 2,
+      },
+    ]);
+  });
+
+  it("returns diagnostics for multiple native scan windows predictably", async () => {
+    const now = new Date("2026-05-08T19:00:00.000Z");
+    const report = await getOperationStateReport({
+      now,
+      listSyncRuns: async () => [
+        {
+          id: "transfer-many-windows",
+          trigger: "REBUILD",
+          status: "RUNNING",
+          stage: "INGESTING_RAW_LOGS",
+          chainId: 369,
+          walletId: "wallet-2",
+          wallet: { address: "0x2222222222222222222222222222222222222222" },
+          warningCount: 1,
+          errorMessage: null,
+          createdAt: new Date("2026-05-08T18:00:00.000Z"),
+          updatedAt: new Date("2026-05-08T18:10:00.000Z"),
+          sourceFamilies: ["TRANSFERS"],
+          policyLabel: "rebuild",
+          startBlock: 1n,
+          endBlock: 4005n,
+        },
+      ],
+      getLastSuccessfulSyncRun: async () => null,
+      getLastRebuildRun: async () => null,
+      getTransferIngestionCounts: async () => ({
+        rawBlocksPersistedCount: 4005,
+        rawTransactionsPersistedCount: 7,
+        rawLogsPersistedCount: 2,
+      }),
+    });
+
+    expect(report.ingestionDiagnostics).toEqual([
+      {
+        operationId: "transfer-many-windows",
+        walletId: "wallet-2",
+        walletAddress: "0x2222222222222222222222222222222222222222",
+        chainId: 369,
+        sourceFamily: "TRANSFERS",
+        requestedFromBlock: "1",
+        requestedToBlock: "4005",
+        nativeScanWindowCount: 3,
+        nativeScanWindows: [
+          { fromBlock: "1", toBlock: "2000" },
+          { fromBlock: "2001", toBlock: "4000" },
+          { fromBlock: "4001", toBlock: "4005" },
+        ],
+        rawBlocksPersistedCount: 4005,
+        rawTransactionsPersistedCount: 7,
+        rawLogsPersistedCount: 2,
+        warningCount: 1,
+      },
+    ]);
   });
 
   it("finds lastSuccessfulSyncAt even when the successful run is older than the recent operations list", async () => {
