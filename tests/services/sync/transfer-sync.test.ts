@@ -249,6 +249,46 @@ function createMemoryStores() {
         }
         return { count };
       },
+      async findMany(args: {
+        where: {
+          chainId: number;
+          status: "ACTIVE";
+          blockNumber: { gte: bigint; lte: bigint };
+          OR: Array<{ fromAddress?: string; toAddress?: string }>;
+        };
+      }) {
+        const fromAddress = args.where.OR?.[0]?.fromAddress;
+        const toAddress = args.where.OR?.[1]?.toAddress;
+        return Array.from(rawTransactions.values())
+          .filter(
+            (item) =>
+              item.chainId === args.where.chainId &&
+              item.status === args.where.status &&
+              item.blockNumber >= args.where.blockNumber.gte &&
+              item.blockNumber <= args.where.blockNumber.lte &&
+              (item.fromAddress === fromAddress || item.toAddress === toAddress),
+          )
+          .sort((left, right) =>
+            left.blockNumber === right.blockNumber
+              ? left.transactionIndex - right.transactionIndex
+              : Number(left.blockNumber - right.blockNumber),
+          );
+      },
+    },
+    rawDexSwap: {
+      async findMany() {
+        return [];
+      },
+    },
+    rawLpAction: {
+      async findMany() {
+        return [];
+      },
+    },
+    rawStakeAction: {
+      async findMany() {
+        return [];
+      },
     },
     token: {
       async findUnique(args: { where: { chainId_addressLower: { chainId: number; addressLower: string } } }) {
@@ -429,12 +469,52 @@ describe("transfer sync flow", () => {
               },
             ];
       }),
-      getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
-        number: blockNumber,
-        hash: blockNumber === 10n ? "0xblock1" : "0xblock2",
-        parentHash: blockNumber === 10n ? "0xparent0" : "0xblock1",
-        timestamp: blockNumber === 10n ? 1_700_000_000n : 1_700_000_100n,
-      })),
+      getBlock: vi.fn(
+        async ({
+          blockNumber,
+          includeTransactions,
+        }: {
+          blockNumber: bigint;
+          includeTransactions?: boolean;
+        }) => ({
+          number: blockNumber,
+          hash: blockNumber === 10n ? "0xblock1" : "0xblock2",
+          parentHash: blockNumber === 10n ? "0xparent0" : "0xblock1",
+          timestamp: blockNumber === 10n ? 1_700_000_000n : 1_700_000_100n,
+          ...(includeTransactions
+            ? {
+                transactions:
+                  blockNumber === 10n
+                    ? [
+                        {
+                          hash: "0xtx1",
+                          blockHash: "0xblock1",
+                          blockNumber: 10n,
+                          transactionIndex: 0,
+                          from: walletAddress,
+                          to: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          value: 0n,
+                          gasPrice: 2_000_000_000n,
+                          input: "0xa9059cbb",
+                        },
+                      ]
+                    : [
+                        {
+                          hash: "0xtx2",
+                          blockHash: "0xblock2",
+                          blockNumber: 11n,
+                          transactionIndex: 1,
+                          from: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                          to: walletAddress,
+                          value: 0n,
+                          gasPrice: 2_000_000_000n,
+                          input: "0x",
+                        },
+                      ],
+              }
+            : {}),
+        }),
+      ),
       readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
         if (functionName === "decimals") {
           return 0;
@@ -501,8 +581,8 @@ describe("transfer sync flow", () => {
 
     expect(first.counts).toEqual({
       rawLogs: 2,
-      actionGroups: 2,
-      ledgerEntries: 2,
+      actionGroups: 3,
+      ledgerEntries: 3,
     });
     expect(second.counts).toEqual({
       rawLogs: 0,
@@ -512,8 +592,8 @@ describe("transfer sync flow", () => {
     expect(stores.rawTransactions.size).toBe(2);
     expect(stores.rawLogs.size).toBe(2);
     expect(stores.rawTokenTransfers.size).toBe(2);
-    expect(stores.ledgerActionGroups.size).toBe(2);
-    expect(stores.ledgerEntries.size).toBe(2);
+    expect(stores.ledgerActionGroups.size).toBe(3);
+    expect(stores.ledgerEntries.size).toBe(3);
   });
 
   it("stores the cursor hash for the requested high-water block even when that block had no transfer log", async () => {
@@ -542,17 +622,45 @@ describe("transfer sync flow", () => {
             ]
           : [];
       }),
-      getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
-        number: blockNumber,
-        hash:
-          blockNumber === 10n
-            ? "0xblock10"
-            : blockNumber === 12n
-              ? "0xblock12"
-              : "0xblock11",
-        parentHash: blockNumber === 10n ? "0xparent9" : "0xblock10",
-        timestamp: 1_700_000_000n + blockNumber,
-      })),
+      getBlock: vi.fn(
+        async ({
+          blockNumber,
+          includeTransactions,
+        }: {
+          blockNumber: bigint;
+          includeTransactions?: boolean;
+        }) => ({
+          number: blockNumber,
+          hash:
+            blockNumber === 10n
+              ? "0xblock10"
+              : blockNumber === 12n
+                ? "0xblock12"
+                : "0xblock11",
+          parentHash: blockNumber === 10n ? "0xparent9" : "0xblock10",
+          timestamp: 1_700_000_000n + blockNumber,
+          ...(includeTransactions
+            ? {
+                transactions:
+                  blockNumber === 10n
+                    ? [
+                        {
+                          hash: "0xtx1",
+                          blockHash: "0xblock10",
+                          blockNumber: 10n,
+                          transactionIndex: 0,
+                          from: walletAddress,
+                          to: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          value: 0n,
+                          gasPrice: 2_000_000_000n,
+                          input: "0xa9059cbb",
+                        },
+                      ]
+                    : [],
+              }
+            : {}),
+        }),
+      ),
       readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
         if (functionName === "decimals") {
           return 0;
@@ -629,12 +737,37 @@ describe("transfer sync flow", () => {
           ],
         },
       ]),
-      getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
-        number: blockNumber,
-        hash: "0xblock1",
-        parentHash: "0xparent0",
-        timestamp: 1_700_000_000n,
-      })),
+      getBlock: vi.fn(
+        async ({
+          blockNumber,
+          includeTransactions,
+        }: {
+          blockNumber: bigint;
+          includeTransactions?: boolean;
+        }) => ({
+          number: blockNumber,
+          hash: "0xblock1",
+          parentHash: "0xparent0",
+          timestamp: 1_700_000_000n,
+          ...(includeTransactions
+            ? {
+                transactions: [
+                  {
+                    hash: "0xtx1",
+                    blockHash: "0xblock1",
+                    blockNumber: 10n,
+                    transactionIndex: 0,
+                    from: walletAddress,
+                    to: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    value: 0n,
+                    gasPrice: 2_000_000_000n,
+                    input: "0xa9059cbb",
+                  },
+                ],
+              }
+            : {}),
+        }),
+      ),
       readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
         if (functionName === "decimals") {
           return 6;
@@ -747,12 +880,37 @@ describe("transfer sync flow", () => {
           ],
         },
       ]),
-      getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
-        number: blockNumber,
-        hash: "0xblock1",
-        parentHash: "0xparent0",
-        timestamp: 1_700_000_000n,
-      })),
+      getBlock: vi.fn(
+        async ({
+          blockNumber,
+          includeTransactions,
+        }: {
+          blockNumber: bigint;
+          includeTransactions?: boolean;
+        }) => ({
+          number: blockNumber,
+          hash: "0xblock1",
+          parentHash: "0xparent0",
+          timestamp: 1_700_000_000n,
+          ...(includeTransactions
+            ? {
+                transactions: [
+                  {
+                    hash: "0xtx1",
+                    blockHash: "0xblock1",
+                    blockNumber: 10n,
+                    transactionIndex: 0,
+                    from: walletAddress,
+                    to: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    value: 0n,
+                    gasPrice: 2_000_000_000n,
+                    input: "0xa9059cbb",
+                  },
+                ],
+              }
+            : {}),
+        }),
+      ),
       readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
         if (functionName === "decimals") {
           return 0;
@@ -807,5 +965,116 @@ describe("transfer sync flow", () => {
     ).rejects.toThrow("Missing raw block timestamp for transfer 0xtx1 at 10:0xblock1");
 
     stores.db.rawBlock.findMany = originalFindMany;
+  });
+
+  it("normalizes persisted native sends, receives, and sender gas fees from raw transactions without ERC20 logs", async () => {
+    const stores = createMemoryStores();
+    const walletAddress = "0x1111111111111111111111111111111111111111";
+    const publicClient = {
+      getLogs: vi.fn(async () => []),
+      getBlock: vi.fn(
+        async ({
+          blockNumber,
+          includeTransactions,
+        }: {
+          blockNumber: bigint;
+          includeTransactions?: boolean;
+        }) => ({
+          number: blockNumber,
+          hash: blockNumber === 20n ? "0xblock20" : "0xblock21",
+          parentHash: blockNumber === 20n ? "0xparent19" : "0xblock20",
+          timestamp: blockNumber === 20n ? 1_700_000_200n : 1_700_000_300n,
+          ...(includeTransactions
+            ? {
+                transactions:
+                  blockNumber === 20n
+                    ? [
+                        {
+                          hash: "0xnative-send",
+                          blockHash: "0xblock20",
+                          blockNumber: 20n,
+                          transactionIndex: 0,
+                          from: walletAddress,
+                          to: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                          value: 1_000_000_000_000_000_000n,
+                          gasPrice: 2_000_000_000n,
+                          input: "0x",
+                        },
+                      ]
+                    : [
+                        {
+                          hash: "0xnative-receive",
+                          blockHash: "0xblock21",
+                          blockNumber: 21n,
+                          transactionIndex: 0,
+                          from: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                          to: walletAddress,
+                          value: 250_000_000_000_000_000n,
+                          gasPrice: 2_000_000_000n,
+                          input: "0x",
+                        },
+                      ],
+              }
+            : {}),
+        }),
+      ),
+      readContract: vi.fn(),
+      getTransaction: vi.fn(),
+      getTransactionReceipt: vi.fn(async ({ hash }: { hash: `0x${string}` }) => ({
+        transactionHash: hash,
+        blockHash: hash === "0xnative-send" ? "0xblock20" : "0xblock21",
+        blockNumber: hash === "0xnative-send" ? 20n : 21n,
+        gasUsed: 21_000n,
+        effectiveGasPrice: 2_000_000_000n,
+        logs: [],
+      })),
+    };
+
+    const dependencies = createSyncDependencies({
+      db: stores.db as never,
+      publicClient: publicClient as never,
+    });
+
+    const result = await runWalletSync({
+      wallet: {
+        id: "wallet_1",
+        chainId: 369,
+        address: walletAddress,
+      },
+      sourceFamilies: ["TRANSFERS"],
+      startBlock: 20n,
+      endBlock: 21n,
+      policyLabel: "native-transfer",
+      dependencies,
+    });
+
+    expect(result.counts).toEqual({
+      rawLogs: 0,
+      actionGroups: 2,
+      ledgerEntries: 3,
+    });
+    expect(stores.rawTransactions.size).toBe(2);
+    expect(Array.from(stores.ledgerEntries.values())).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          txHash: "0xnative-send",
+          entryType: "SEND",
+          assetId: "chain:369:native:PLS",
+          quantity: "1",
+        }),
+        expect.objectContaining({
+          txHash: "0xnative-send",
+          entryType: "FEE",
+          assetId: "chain:369:native:PLS",
+          quantity: "0.000042",
+        }),
+        expect.objectContaining({
+          txHash: "0xnative-receive",
+          entryType: "RECEIVE",
+          assetId: "chain:369:native:PLS",
+          quantity: "0.25",
+        }),
+      ]),
+    );
   });
 });

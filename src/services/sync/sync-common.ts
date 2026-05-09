@@ -17,7 +17,9 @@ import {
   persistRawBlocks,
   persistRawLogs,
   persistRawTransactions,
+  readWalletRawTransactions,
   persistRawTokenTransfers,
+  readWalletProtocolOperationTxHashes,
   readWalletTransferRawTokenTransfers,
 } from "@/services/ingestion/raw-store";
 
@@ -53,6 +55,26 @@ type BlockReaderClient = {
     hash: string;
     parentHash: string;
     timestamp: bigint;
+  }>;
+  getBlock(args: {
+    blockNumber: bigint;
+    includeTransactions: true;
+  }): Promise<{
+    number: bigint;
+    hash: string;
+    parentHash: string;
+    timestamp: bigint;
+    transactions: Array<{
+      hash: string;
+      blockHash: string | null;
+      blockNumber: bigint | null;
+      transactionIndex: number | null;
+      from: string;
+      to: string | null;
+      value: bigint;
+      gasPrice: bigint | null;
+      input?: string | null;
+    }>;
   }>;
 };
 
@@ -111,11 +133,17 @@ export type WalletTransferSnapshot = Awaited<
   ReturnType<typeof readWalletTransferRawTokenTransfers>
 >[number];
 
+export type WalletTransferTransactionSnapshot = Awaited<
+  ReturnType<typeof readWalletRawTransactions>
+>[number];
+
 export type TransferArtifacts = {
   rawLogCount: number;
   latestBlockHash: string | null;
   rawTransfers: readonly PersistedTransferRawLog[];
   transferSnapshots: readonly WalletTransferSnapshot[];
+  rawTransactions: readonly WalletTransferTransactionSnapshot[];
+  protocolOperationTxHashes: readonly string[];
   timestampByBlockKey: Map<string, Date>;
   fromBlock: bigint;
   toBlock: bigint;
@@ -162,27 +190,59 @@ export async function ingestWalletTransferArtifacts(args: {
     }),
   ]);
   const dedupedLogs = dedupeRpcLogs([...incoming.logs, ...outgoing.logs]);
-  const uniqueBlocks = Array.from(
-    new Set(
-      dedupedLogs
-        .map((log) => log.blockNumber)
-        .filter((value): value is bigint => value !== null),
-    ),
-  ).sort((left, right) => Number(left - right));
-  const endBlock = await args.publicClient.getBlock({
-    blockNumber: args.toBlock,
-  });
+  const walletAddress = args.wallet.address.toLowerCase();
   const blocks = [];
+  const rawTransactions = [];
+  let latestBlockHash: string | null = null;
 
-  for (const blockNumber of uniqueBlocks) {
-    const block = await args.publicClient.getBlock({ blockNumber });
+  for (
+    let blockNumber = args.fromBlock;
+    blockNumber <= args.toBlock;
+    blockNumber += 1n
+  ) {
+    const block = await args.publicClient.getBlock({
+      blockNumber,
+      includeTransactions: true,
+    });
+    const blockHash = block.hash.toLowerCase();
+
+    latestBlockHash = blockNumber === args.toBlock ? blockHash : latestBlockHash;
     blocks.push({
       chainId: args.wallet.chainId,
       blockNumber: block.number,
-      blockHash: block.hash,
-      parentHash: block.parentHash,
+      blockHash,
+      parentHash: block.parentHash.toLowerCase(),
       timestamp: new Date(Number(block.timestamp) * 1000),
     });
+
+    const blockTransactions = "transactions" in block ? block.transactions : [];
+
+    for (const transaction of blockTransactions) {
+      const fromAddress = transaction.from.toLowerCase();
+      const toAddress = transaction.to?.toLowerCase() ?? null;
+
+      if (fromAddress !== walletAddress && toAddress !== walletAddress) {
+        continue;
+      }
+
+      const receipt = await args.publicClient.getTransactionReceipt({
+        hash: transaction.hash as `0x${string}`,
+      });
+
+      rawTransactions.push({
+        chainId: args.wallet.chainId,
+        txHash: transaction.hash,
+        blockNumber: transaction.blockNumber ?? block.number,
+        blockHash: transaction.blockHash ?? block.hash,
+        transactionIndex: transaction.transactionIndex ?? 0,
+        fromAddress: transaction.from,
+        toAddress: transaction.to,
+        valueRaw: transaction.value.toString(),
+        gasPriceRaw:
+          (receipt.effectiveGasPrice ?? transaction.gasPrice)?.toString() ?? null,
+        gasUsedRaw: receipt.gasUsed.toString(),
+      });
+    }
   }
 
   const persistedBlocks = await persistRawBlocks(blocks, args.db as never);
@@ -214,43 +274,6 @@ export async function ingestWalletTransferArtifacts(args: {
       })),
     args.db as never,
   );
-  const transactionHashes = Array.from(
-    new Set(
-      dedupedLogs
-        .map((log) => log.transactionHash?.toLowerCase())
-        .filter((value): value is string => typeof value === "string"),
-    ),
-  ).sort();
-  const rawTransactions = [];
-
-  for (const txHash of transactionHashes) {
-    const transaction = await args.publicClient.getTransaction({
-      hash: txHash as `0x${string}`,
-    });
-    const receipt = await args.publicClient.getTransactionReceipt({
-      hash: txHash as `0x${string}`,
-    });
-
-    if (!transaction.blockHash || transaction.blockNumber === null) {
-      warnings.push(`skip-raw-transaction:${txHash}:missing-tx-block`);
-      continue;
-    }
-
-    rawTransactions.push({
-      chainId: args.wallet.chainId,
-      txHash: transaction.hash,
-      blockNumber: transaction.blockNumber,
-      blockHash: transaction.blockHash,
-      transactionIndex: transaction.transactionIndex ?? 0,
-      fromAddress: transaction.from,
-      toAddress: transaction.to,
-      valueRaw: transaction.value.toString(),
-      gasPriceRaw:
-        (receipt.effectiveGasPrice ?? transaction.gasPrice)?.toString() ?? null,
-      gasUsedRaw: receipt.gasUsed.toString(),
-    });
-  }
-
   await persistRawTransactions(rawTransactions, args.db as never);
   const decodedTransfers = [];
 
@@ -307,6 +330,46 @@ export async function ingestWalletTransferArtifacts(args: {
     },
     args.db as never,
   );
+  const persistedTransactions =
+    typeof (args.db.rawTransaction as { findMany?: unknown }).findMany === "function"
+      ? await readWalletRawTransactions(
+          {
+            chainId: args.wallet.chainId,
+            walletAddress: args.wallet.address,
+            fromBlock: args.fromBlock,
+            toBlock: args.toBlock,
+          },
+          args.db as never,
+        )
+      : rawTransactions.map((transaction) => ({
+          chainId: transaction.chainId,
+          txHash: transaction.txHash.toLowerCase(),
+          blockNumber: transaction.blockNumber,
+          blockHash: transaction.blockHash.toLowerCase(),
+          transactionIndex: transaction.transactionIndex,
+          fromAddress: transaction.fromAddress.toLowerCase(),
+          toAddress: transaction.toAddress?.toLowerCase() ?? null,
+          valueRaw: transaction.valueRaw,
+          gasPriceRaw: transaction.gasPriceRaw,
+          gasUsedRaw: transaction.gasUsedRaw,
+        }));
+  const protocolOperationTxHashes =
+    typeof (args.db.rawDexSwap as { findMany?: unknown } | undefined)?.findMany ===
+      "function" &&
+    typeof (args.db.rawLpAction as { findMany?: unknown } | undefined)?.findMany ===
+      "function" &&
+    typeof (args.db.rawStakeAction as { findMany?: unknown } | undefined)?.findMany ===
+      "function"
+      ? await readWalletProtocolOperationTxHashes(
+          {
+            chainId: args.wallet.chainId,
+            walletAddress: args.wallet.address,
+            fromBlock: args.fromBlock,
+            toBlock: args.toBlock,
+          },
+          args.db as never,
+        )
+      : [];
   const blockTimestamps = await args.db.rawBlock.findMany({
     where: {
       chainId: args.wallet.chainId,
@@ -325,12 +388,14 @@ export async function ingestWalletTransferArtifacts(args: {
 
   return {
     rawLogCount: persistedLogs.count,
-    latestBlockHash: endBlock.hash.toLowerCase(),
+    latestBlockHash,
     rawTransfers: rawTransfers.map((transfer) => ({
       ...transfer,
       occurredAt: getOccurredAtForTransfer(transfer, timestampByBlockKey),
     })),
     transferSnapshots: rawTransfers,
+    rawTransactions: persistedTransactions,
+    protocolOperationTxHashes,
     timestampByBlockKey,
     fromBlock: args.fromBlock,
     toBlock: args.toBlock,
