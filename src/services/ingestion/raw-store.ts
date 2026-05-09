@@ -316,6 +316,12 @@ type RawTokenTransferReadClient = {
   };
 };
 
+type RawTransactionReadClient = {
+  rawTransaction: {
+    findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
+  };
+};
+
 type RawDexSwapReadClient = {
   rawDexSwap: {
     findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
@@ -614,6 +620,116 @@ export async function readWalletTransferRawTokenTransfers(
         ? record.amountRaw
         : (record.amountRaw as { toString(): string }).toString(),
   }));
+}
+
+export async function readWalletRawTransactions(
+  args: {
+    chainId: number;
+    walletAddress: string;
+    fromBlock: bigint;
+    toBlock: bigint;
+  },
+  client: RawTransactionReadClient = getDb(),
+) {
+  const walletAddress = args.walletAddress.toLowerCase();
+  const records = await client.rawTransaction.findMany({
+    where: {
+      chainId: args.chainId,
+      status: "ACTIVE",
+      blockNumber: {
+        gte: args.fromBlock,
+        lte: args.toBlock,
+      },
+      OR: [{ fromAddress: walletAddress }, { toAddress: walletAddress }],
+    },
+    orderBy: [{ blockNumber: "asc" }, { transactionIndex: "asc" }],
+  });
+
+  return records.map((record) => ({
+    chainId: record.chainId as number,
+    txHash: record.txHash as string,
+    blockNumber: record.blockNumber as bigint,
+    blockHash: record.blockHash as string,
+    transactionIndex: record.transactionIndex as number,
+    fromAddress: record.fromAddress as string,
+    toAddress:
+      typeof record.toAddress === "string" ? record.toAddress : null,
+    valueRaw:
+      typeof record.valueRaw === "string"
+        ? record.valueRaw
+        : (record.valueRaw as { toString(): string }).toString(),
+    gasPriceRaw:
+      record.gasPriceRaw == null
+        ? null
+        : typeof record.gasPriceRaw === "string"
+          ? record.gasPriceRaw
+          : (record.gasPriceRaw as { toString(): string }).toString(),
+    gasUsedRaw:
+      record.gasUsedRaw == null
+        ? null
+        : typeof record.gasUsedRaw === "string"
+          ? record.gasUsedRaw
+          : (record.gasUsedRaw as { toString(): string }).toString(),
+  }));
+}
+
+export async function readWalletProtocolOperationTxHashes(
+  args: {
+    chainId: number;
+    walletAddress: string;
+    fromBlock: bigint;
+    toBlock: bigint;
+  },
+  client: RawDexSwapReadClient & RawLpActionReadClient & RawStakeActionReadClient = getDb(),
+) {
+  const walletAddress = args.walletAddress.toLowerCase();
+  const [dexRows, lpRows, stakeRows] = await Promise.all([
+    client.rawDexSwap.findMany({
+      where: {
+        chainId: args.chainId,
+        status: "ACTIVE",
+        blockNumber: {
+          gte: args.fromBlock,
+          lte: args.toBlock,
+        },
+        initiatorAddress: walletAddress,
+      },
+      select: { txHash: true },
+    }),
+    client.rawLpAction.findMany({
+      where: {
+        chainId: args.chainId,
+        status: "ACTIVE",
+        blockNumber: {
+          gte: args.fromBlock,
+          lte: args.toBlock,
+        },
+        initiatorAddress: walletAddress,
+      },
+      select: { txHash: true },
+    }),
+    client.rawStakeAction.findMany({
+      where: {
+        chainId: args.chainId,
+        status: "ACTIVE",
+        blockNumber: {
+          gte: args.fromBlock,
+          lte: args.toBlock,
+        },
+        initiatorAddress: walletAddress,
+      },
+      select: { txHash: true },
+    }),
+  ]);
+
+  return Array.from(
+    new Set(
+      [...dexRows, ...lpRows, ...stakeRows]
+        .map((record) => record.txHash)
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.toLowerCase()),
+    ),
+  ).sort();
 }
 
 export async function readWalletDexSwapSnapshots(

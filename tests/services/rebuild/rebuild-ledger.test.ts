@@ -26,6 +26,20 @@ type RawTokenTransferRecord = {
   status: "ACTIVE";
 };
 
+type RawTransactionRecord = {
+  chainId: number;
+  txHash: string;
+  blockNumber: bigint;
+  blockHash: string;
+  transactionIndex: number;
+  fromAddress: string;
+  toAddress: string | null;
+  valueRaw: string;
+  gasPriceRaw: string | null;
+  gasUsedRaw: string | null;
+  status: "ACTIVE";
+};
+
 type RawDexSwapRecord = {
   chainId: number;
   protocolSlug: string;
@@ -165,6 +179,7 @@ const WALLET_ADDRESS = "0x1111111111111111111111111111111111111111";
 function createMemoryDb() {
   const rawBlocks: RawBlockRecord[] = [];
   const rawTokenTransfers: RawTokenTransferRecord[] = [];
+  const rawTransactions: RawTransactionRecord[] = [];
   const rawDexSwaps: RawDexSwapRecord[] = [];
   const rawLpActions: RawLpActionRecord[] = [];
   const rawStakeActions: RawStakeActionRecord[] = [];
@@ -209,6 +224,35 @@ function createMemoryDb() {
           .sort((a, b) =>
             a.blockNumber === b.blockNumber
               ? a.logIndex - b.logIndex
+              : Number(a.blockNumber - b.blockNumber),
+          );
+      },
+    },
+    rawTransaction: {
+      async findMany(args: {
+        where: {
+          chainId: number;
+          status: "ACTIVE";
+          blockNumber: { gte: bigint; lte: bigint };
+          OR: Array<{ fromAddress?: string; toAddress?: string }>;
+        };
+      }) {
+        const addresses = new Set(
+          args.where.OR.flatMap((item) => [item.fromAddress, item.toAddress].filter(Boolean)),
+        );
+
+        return rawTransactions
+          .filter(
+            (record) =>
+              record.chainId === args.where.chainId &&
+              record.status === args.where.status &&
+              record.blockNumber >= args.where.blockNumber.gte &&
+              record.blockNumber <= args.where.blockNumber.lte &&
+              (addresses.has(record.fromAddress) || (record.toAddress ? addresses.has(record.toAddress) : false)),
+          )
+          .sort((a, b) =>
+            a.blockNumber === b.blockNumber
+              ? a.transactionIndex - b.transactionIndex
               : Number(a.blockNumber - b.blockNumber),
           );
       },
@@ -366,6 +410,7 @@ function createMemoryDb() {
     db,
     rawBlocks,
     rawTokenTransfers,
+    rawTransactions,
     rawDexSwaps,
     rawLpActions,
     rawStakeActions,
@@ -455,6 +500,86 @@ describe("rebuildCanonicalLedger", () => {
         expect.objectContaining({
           txHash: "0xunrelated-dex",
           entryType: "SWAP_OUT",
+        }),
+      ]),
+    );
+  });
+
+  it("rebuilds native transfer and sender fee entries from persisted raw transactions", async () => {
+    const stores = createMemoryDb();
+    stores.rawBlocks.push(
+      {
+        chainId: 369,
+        blockNumber: 100n,
+        blockHash: "0xblock100",
+        timestamp: new Date("2026-05-08T10:00:00.000Z"),
+      },
+      {
+        chainId: 369,
+        blockNumber: 101n,
+        blockHash: "0xblock101",
+        timestamp: new Date("2026-05-08T10:01:00.000Z"),
+      },
+    );
+    stores.rawTransactions.push(
+      {
+        chainId: 369,
+        txHash: "0xnative-send",
+        blockNumber: 100n,
+        blockHash: "0xblock100",
+        transactionIndex: 0,
+        fromAddress: WALLET_ADDRESS,
+        toAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        valueRaw: "1000000000000000000",
+        gasPriceRaw: "2000000000",
+        gasUsedRaw: "21000",
+        status: "ACTIVE",
+      },
+      {
+        chainId: 369,
+        txHash: "0xnative-receive",
+        blockNumber: 101n,
+        blockHash: "0xblock101",
+        transactionIndex: 0,
+        fromAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        toAddress: WALLET_ADDRESS,
+        valueRaw: "250000000000000000",
+        gasPriceRaw: "2000000000",
+        gasUsedRaw: "21000",
+        status: "ACTIVE",
+      },
+    );
+
+    const report = await rebuildCanonicalLedger({
+      db: stores.db as never,
+      wallet: { id: WALLET_ID, chainId: 369, address: WALLET_ADDRESS },
+      fromBlock: 100n,
+      toBlock: 101n,
+      sourceFamilies: ["TRANSFERS"],
+      normalizerVersion: "v1",
+    });
+
+    expect(report.rawSnapshotsProcessed).toBe(2);
+    expect(report.ledgerEntriesRecreated).toBe(3);
+    expect(Array.from(stores.ledgerEntries.values())).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          txHash: "0xnative-send",
+          entryType: "SEND",
+          assetId: "chain:369:native:PLS",
+          quantity: "1",
+        }),
+        expect.objectContaining({
+          txHash: "0xnative-send",
+          entryType: "FEE",
+          assetId: "chain:369:native:PLS",
+          quantity: "0.000042",
+        }),
+        expect.objectContaining({
+          txHash: "0xnative-receive",
+          entryType: "RECEIVE",
+          assetId: "chain:369:native:PLS",
+          quantity: "0.25",
         }),
       ]),
     );

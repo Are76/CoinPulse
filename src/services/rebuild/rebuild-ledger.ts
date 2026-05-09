@@ -7,7 +7,9 @@ import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 import {
   readWalletDexSwapSnapshots,
   readWalletRawLpActions,
+  readWalletRawTransactions,
   readWalletRawStakeActions,
+  readWalletProtocolOperationTxHashes,
   readWalletTransferRawTokenTransfers,
 } from "@/services/ingestion/raw-store";
 import {
@@ -23,7 +25,11 @@ import {
 import { normalizeDexSwaps } from "@/services/sync/dex-sync";
 import { normalizeLpActions } from "@/services/sync/lp-sync";
 import { normalizeStakeActions } from "@/services/sync/stake-sync";
-import { normalizeTransfers } from "@/services/sync/transfer-sync";
+import {
+  buildTransferNormalizationSnapshots,
+  normalizeTransfers,
+  type PersistedTransferNormalizationSnapshot,
+} from "@/services/sync/transfer-sync";
 
 const SUPPORTED_REBUILD_SOURCE_FAMILIES = [
   "TRANSFERS",
@@ -61,6 +67,9 @@ type RebuildDbClient = {
     >;
   };
   rawTokenTransfer: {
+    findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
+  };
+  rawTransaction: {
     findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
   };
   rawDexSwap: {
@@ -171,6 +180,7 @@ export async function rebuildCanonicalLedger(args: {
         sourceFamily,
         fromBlock: args.fromBlock,
         toBlock: args.toBlock,
+        timestampByBlockKey,
       });
       const drafts = normalizeRawSnapshots({
         wallet: args.wallet,
@@ -243,7 +253,7 @@ export async function rebuildCanonicalLedger(args: {
 }
 
 type RebuildRawSnapshot =
-  | Awaited<ReturnType<typeof readWalletTransferRawTokenTransfers>>[number]
+  | PersistedTransferNormalizationSnapshot
   | Awaited<ReturnType<typeof readWalletDexSwapSnapshots>>[number]
   | Awaited<ReturnType<typeof readWalletRawLpActions>>[number]
   | Awaited<ReturnType<typeof readWalletRawStakeActions>>[number];
@@ -257,18 +267,51 @@ async function readRawSnapshots(args: {
   sourceFamily: (typeof SUPPORTED_REBUILD_SOURCE_FAMILIES)[number];
   fromBlock: bigint;
   toBlock: bigint;
+  timestampByBlockKey: Map<string, Date>;
 }) {
   switch (args.sourceFamily) {
-    case "TRANSFERS":
-      return readWalletTransferRawTokenTransfers(
-        {
-          chainId: args.wallet.chainId,
-          walletAddress: args.wallet.address,
-          fromBlock: args.fromBlock,
-          toBlock: args.toBlock,
-        },
-        args.db,
-      );
+    case "TRANSFERS": {
+      const [rawTransfers, rawTransactions, protocolOperationTxHashes] =
+        await Promise.all([
+          readWalletTransferRawTokenTransfers(
+            {
+              chainId: args.wallet.chainId,
+              walletAddress: args.wallet.address,
+              fromBlock: args.fromBlock,
+              toBlock: args.toBlock,
+            },
+            args.db,
+          ),
+          readWalletRawTransactions(
+            {
+              chainId: args.wallet.chainId,
+              walletAddress: args.wallet.address,
+              fromBlock: args.fromBlock,
+              toBlock: args.toBlock,
+            },
+            args.db,
+          ),
+          readWalletProtocolOperationTxHashes(
+            {
+              chainId: args.wallet.chainId,
+              walletAddress: args.wallet.address,
+              fromBlock: args.fromBlock,
+              toBlock: args.toBlock,
+            },
+            args.db,
+          ),
+        ]);
+
+      return buildTransferNormalizationSnapshots({
+        rawTransfers: rawTransfers.map((transfer) => ({
+          ...transfer,
+          occurredAt: getOccurredAtForTransfer(transfer, args.timestampByBlockKey),
+        })),
+        rawTransactions,
+        protocolOperationTxHashes,
+        timestampByBlockKey: args.timestampByBlockKey,
+      });
+    }
     case "DEX":
       return readWalletDexSwapSnapshots(
         {
@@ -318,15 +361,7 @@ function normalizeRawSnapshots(args: {
       return normalizeTransfers({
         normalizerVersion: args.normalizerVersion,
         wallet: args.wallet,
-        rawLogs: args.rawSnapshots.map((rawSnapshot) => ({
-          ...(rawSnapshot as Awaited<
-            ReturnType<typeof readWalletTransferRawTokenTransfers>
-          >[number]),
-          occurredAt: getOccurredAtForTransfer(
-            rawSnapshot as Awaited<ReturnType<typeof readWalletTransferRawTokenTransfers>>[number],
-            args.timestampByBlockKey,
-          ),
-        })),
+        rawLogs: args.rawSnapshots as readonly PersistedTransferNormalizationSnapshot[],
       });
     case "DEX":
       return normalizeDexSwaps({
