@@ -141,6 +141,42 @@ type SyncRunRow = {
   updatedAt: Date;
 };
 
+function matchesTopicOr(
+  record: Pick<RawLogRecord, "topic1" | "topic2">,
+  clauses?: Array<{ topic1?: string; topic2?: string }>,
+) {
+  if (!clauses || clauses.length === 0) {
+    return true;
+  }
+
+  return clauses.some((clause) => {
+    const topic1Matches =
+      clause.topic1 === undefined || record.topic1 === clause.topic1;
+    const topic2Matches =
+      clause.topic2 === undefined || record.topic2 === clause.topic2;
+
+    return topic1Matches && topic2Matches;
+  });
+}
+
+function matchesAddressOr(
+  record: Pick<RawTokenTransferRecord | RawTransactionRecord, "fromAddress" | "toAddress">,
+  clauses?: Array<{ fromAddress?: string; toAddress?: string }>,
+) {
+  if (!clauses || clauses.length === 0) {
+    return true;
+  }
+
+  return clauses.some((clause) => {
+    const fromAddressMatches =
+      clause.fromAddress === undefined || record.fromAddress === clause.fromAddress;
+    const toAddressMatches =
+      clause.toAddress === undefined || record.toAddress === clause.toAddress;
+
+    return fromAddressMatches && toAddressMatches;
+  });
+}
+
 function createIntegrationDb() {
   const rawLogs = new Map<string, RawLogRecord>();
   const rawBlocks = new Map<string, RawBlockRecord>();
@@ -190,8 +226,6 @@ function createIntegrationDb() {
         };
         orderBy?: Array<{ blockNumber?: "asc" | "desc"; logIndex?: "asc" | "desc" }>;
       }) {
-        const topic1 = args.where.OR?.[0]?.topic1;
-        const topic2 = args.where.OR?.[1]?.topic2;
         return Array.from(rawLogs.values())
           .filter(
             (record) =>
@@ -200,7 +234,7 @@ function createIntegrationDb() {
               record.blockNumber >= args.where.blockNumber.gte &&
               record.blockNumber <= args.where.blockNumber.lte &&
               (!args.where.topic0 || record.topic0 === args.where.topic0) &&
-              (!topic1 || record.topic1 === topic1 || record.topic2 === topic2),
+              matchesTopicOr(record, args.where.OR),
           )
           .sort((left, right) =>
             left.blockNumber === right.blockNumber
@@ -288,8 +322,6 @@ function createIntegrationDb() {
         };
         orderBy?: Array<{ blockNumber?: "asc" | "desc"; logIndex?: "asc" | "desc" }>;
       }) {
-        const fromAddress = args.where.OR?.[0]?.fromAddress;
-        const toAddress = args.where.OR?.[1]?.toAddress;
         return Array.from(rawTokenTransfers.values())
           .filter(
             (record) =>
@@ -297,7 +329,7 @@ function createIntegrationDb() {
               record.status === args.where.status &&
               record.blockNumber >= args.where.blockNumber.gte &&
               record.blockNumber <= args.where.blockNumber.lte &&
-              (record.fromAddress === fromAddress || record.toAddress === toAddress),
+              matchesAddressOr(record, args.where.OR),
           )
           .sort((left, right) =>
             left.blockNumber === right.blockNumber
@@ -333,8 +365,6 @@ function createIntegrationDb() {
           transactionIndex?: "asc" | "desc";
         }>;
       }) {
-        const fromAddress = args.where.OR?.[0]?.fromAddress;
-        const toAddress = args.where.OR?.[1]?.toAddress;
         return Array.from(rawTransactions.values())
           .filter(
             (record) =>
@@ -342,7 +372,7 @@ function createIntegrationDb() {
               record.status === args.where.status &&
               record.blockNumber >= args.where.blockNumber.gte &&
               record.blockNumber <= args.where.blockNumber.lte &&
-              (record.fromAddress === fromAddress || record.toAddress === toAddress),
+              matchesAddressOr(record, args.where.OR),
           )
           .sort((left, right) =>
             left.blockNumber === right.blockNumber
