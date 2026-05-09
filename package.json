@@ -8,8 +8,8 @@
     "typecheck": "prisma generate && next typegen && tsc --noEmit",
     "start": "next start",
     "lint": "eslint .",
-    "test": "prisma generate && vitest run",
-    "test:watch": "prisma generate && vitest",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts"
