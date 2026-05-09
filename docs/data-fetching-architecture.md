@@ -4,13 +4,13 @@
 
 This document defines how CoinPulse frontend pages fetch and refresh data from backend DTOs without violating the canonical-ledger source-of-truth model.
 
-CoinPulse V1 is PulseChain-first. PostgreSQL-backed raw audit data, canonical ledger entries, derived positions, persisted pricing observations, and persisted PnL outputs remain the only truth consumed by the UI. RPC is ingestion input only. The frontend must never reconstruct balances, valuations, LP values, stake values, or PnL from RPC or raw logs.
+CoinPulse V1 is PulseChain-first. PostgreSQL-backed raw audit data, canonical ledger entries, derived positions, and persisted pricing observations remain the only truth consumed by the UI. PnL is currently assembled on demand in backend DTO construction from canonical ledger truth plus stored pricing inputs, rather than being persisted as an independent source of truth. RPC is ingestion input only. The frontend must never reconstruct balances, valuations, LP values, stake values, or PnL from RPC or raw logs.
 
 ## Truth Model
 
 CoinPulse page data must flow through this stack:
 
-`raw audit -> canonical ledger -> derived positions/state -> pricing observations -> PnL engine -> versioned DTOs -> API routes -> frontend`
+`raw audit -> canonical ledger -> derived positions/state -> pricing observations -> backend-computed PnL/valuation output -> versioned DTOs -> API routes -> frontend`
 
 Rules:
 
@@ -21,33 +21,48 @@ Rules:
 - Frontend never treats token symbols as asset identity.
 - Frontend never uses DexScreener as primary truth.
 - Production DTOs must never contain mock fallback data.
+- PnL may be computed on demand by backend DTO assembly unless and until it is deliberately persisted as its own backend truth layer.
 
 ## Current Page Map
 
-### Present in V1 codebase
+### Current frontend pages in the repo
 
 - `/`
   - Current page: portfolio dashboard
   - Frontend shell: `src/app/page.tsx`
   - Stateful screen: `src/components/dashboard/dashboard-screen.tsx`
-  - Current backend route: `GET /api/portfolio/dashboard`
+  - Currently observed frontend fetch targets:
+    - `GET /api/portfolio/dashboard`
+    - `GET /api/debug/health`
+    - `GET /api/debug/status`
 - `/debug/sync`
   - Current page: operator sync/rebuild page
   - Frontend shell: `src/app/debug/sync/page.tsx`
   - Stateful screen: `src/components/debug/debug-sync-screen.tsx`
-  - Current backend routes:
+  - Currently observed frontend fetch/mutation targets:
     - `GET /api/debug/health`
     - `GET /api/debug/status`
     - `POST /api/sync/manual`
     - `POST /api/rebuild`
 
+### API route handlers verified in the current repo
+
+The following handlers exist in `app/api`, verified from the repository:
+
+- `GET /api/portfolio/dashboard`
+- `GET /api/debug/health`
+- `GET /api/debug/status`
+- `POST /api/wallets/import`
+- `POST /api/sync/manual`
+- `POST /api/rebuild`
+
 ### Backend surface present, but no first-class page yet
 
 - Wallet import
-  - Current backend route: `POST /api/wallets/import`
+  - Implemented backend route: `POST /api/wallets/import`
   - No dedicated frontend page is currently implemented.
 - Debug/status
-  - Backend DTO exists via `GET /api/debug/status`
+  - Implemented backend DTO route: `GET /api/debug/status`
   - No dedicated `/debug/status` page exists yet.
 - Prices/status
   - No `GET /api/prices/status` route exists yet.
@@ -66,7 +81,7 @@ The following are explicitly out of V1 implementation scope for now. They are li
 - Stake detail
 - Cross-chain Ethereum/Base support
 
-These pages must wait until the required persisted derived-state and DTO contracts are correct enough to support them without frontend reconstruction.
+These pages must wait until the required derived-state and DTO contracts are sufficiently correct to support them without frontend reconstruction.
 
 ## Backend DTO Contract Strategy
 
@@ -216,7 +231,7 @@ Use stable, explicit query keys.
 ["debug", "health"]
 ["debug", "status"]
 ["dashboard", schemaVersion, chainId, walletAddress, quoteAsset, asOf ?? "latest"]
-["prices", "status"]
+["prices", "status", { chainId }]
 ["transactions", schemaVersion, filters]
 ["wallets", "tracked", chainId]
 ```
@@ -225,6 +240,7 @@ Rules:
 
 - include DTO version in keys for versioned payloads
 - include normalized wallet address and chain id
+- include `chainId` for any chain-scoped pricing/status query
 - include all server-side filters that affect returned data
 
 ### Polling rules
@@ -294,18 +310,31 @@ Rules:
 
 ### Refetch after manual sync/rebuild
 
-After successful `POST /api/sync/manual` or `POST /api/rebuild`, invalidate:
+After `POST /api/sync/manual` or `POST /api/rebuild`, invalidate relevant queries after:
+
+- success
+- failure
+- conflict (`409`)
+
+because persisted `SyncRun` and operation-state truth can change in all three cases.
+
+Always invalidate:
 
 - `["debug", "status"]`
 - `["debug", "health"]` if health can change operationally
-- affected dashboard queries for the same wallet/chain
-- future transactions queries for the same wallet/chain
-- future prices/status query only if price coverage/status is explicitly tied to the operation
+- future operation-run history queries keyed by wallet/chain
+
+Conditionally invalidate:
+
+- affected dashboard queries for the same wallet/chain only after derived-state materialization has run, or when the backend sync flow also triggers materialization
+- future transactions queries for the same wallet/chain once ledger/derived-state changes are committed and the endpoint exists
+- future prices/status query only if price coverage/status is explicitly tied to the operation and is chain-scoped
 
 Rule:
 
 - frontend invalidates caches
 - backend remains responsible for determining when refreshed persisted truth is ready
+- manual sync completion alone should primarily refresh debug/status and operation-state views unless materialization is known to have completed
 
 ## Unified Transaction Module Design
 
@@ -373,7 +402,7 @@ Rule:
 
 ## API Route Map
 
-### Current implemented routes
+### API route handlers implemented today
 
 - `GET /api/portfolio/dashboard`
 - `GET /api/debug/health`
@@ -382,7 +411,7 @@ Rule:
 - `POST /api/sync/manual`
 - `POST /api/rebuild`
 
-### Preferred normalized route map
+### Preferred future normalized route map
 
 The long-term frontend contract should standardize on these DTO-oriented reads:
 
