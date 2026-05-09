@@ -17,6 +17,7 @@ import {
   persistRawBlocks,
   persistRawLogs,
   persistRawTransactions,
+  type PersistRawTransactionInput,
   readWalletRawTransactions,
   persistRawTokenTransfers,
   readWalletProtocolOperationTxHashes,
@@ -150,6 +151,18 @@ export type TransferArtifacts = {
   warnings: readonly string[];
 };
 
+export function buildNativeTransactionScanWindows(args: {
+  fromBlock: bigint;
+  toBlock: bigint;
+  maxWindowSize: bigint;
+}) {
+  return buildAdaptiveWindows({
+    startBlock: args.fromBlock,
+    endBlock: args.toBlock,
+    maxWindowSize: args.maxWindowSize,
+  });
+}
+
 export function createDefaultSyncClients(args?: {
   db?: SyncDbClient;
   publicClient?: SyncPublicClient;
@@ -191,61 +204,76 @@ export async function ingestWalletTransferArtifacts(args: {
   ]);
   const dedupedLogs = dedupeRpcLogs([...incoming.logs, ...outgoing.logs]);
   const walletAddress = args.wallet.address.toLowerCase();
-  const blocks = [];
-  const rawTransactions = [];
+  const nativeScanWindows = buildNativeTransactionScanWindows({
+    fromBlock: args.fromBlock,
+    toBlock: args.toBlock,
+    maxWindowSize: args.maxWindowSize,
+  });
   let latestBlockHash: string | null = null;
+  let scannedBlockCount = 0;
+  let persistedBlockCount = 0;
+  const scannedRawTransactions: PersistRawTransactionInput[] = [];
 
-  for (
-    let blockNumber = args.fromBlock;
-    blockNumber <= args.toBlock;
-    blockNumber += 1n
-  ) {
-    const block = await args.publicClient.getBlock({
-      blockNumber,
-      includeTransactions: true,
-    });
-    const blockHash = block.hash.toLowerCase();
+  for (const window of nativeScanWindows) {
+    const blocks = [];
+    const rawTransactions = [];
 
-    latestBlockHash = blockNumber === args.toBlock ? blockHash : latestBlockHash;
-    blocks.push({
-      chainId: args.wallet.chainId,
-      blockNumber: block.number,
-      blockHash,
-      parentHash: block.parentHash.toLowerCase(),
-      timestamp: new Date(Number(block.timestamp) * 1000),
-    });
-
-    const blockTransactions = "transactions" in block ? block.transactions : [];
-
-    for (const transaction of blockTransactions) {
-      const fromAddress = transaction.from.toLowerCase();
-      const toAddress = transaction.to?.toLowerCase() ?? null;
-
-      if (fromAddress !== walletAddress && toAddress !== walletAddress) {
-        continue;
-      }
-
-      const receipt = await args.publicClient.getTransactionReceipt({
-        hash: transaction.hash as `0x${string}`,
+    for (
+      let blockNumber = window.fromBlock;
+      blockNumber <= window.toBlock;
+      blockNumber += 1n
+    ) {
+      const block = await args.publicClient.getBlock({
+        blockNumber,
+        includeTransactions: true,
       });
+      const blockHash = block.hash.toLowerCase();
 
-      rawTransactions.push({
+      latestBlockHash = blockNumber === args.toBlock ? blockHash : latestBlockHash;
+      blocks.push({
         chainId: args.wallet.chainId,
-        txHash: transaction.hash,
-        blockNumber: transaction.blockNumber ?? block.number,
-        blockHash: transaction.blockHash ?? block.hash,
-        transactionIndex: transaction.transactionIndex ?? 0,
-        fromAddress: transaction.from,
-        toAddress: transaction.to,
-        valueRaw: transaction.value.toString(),
-        gasPriceRaw:
-          (receipt.effectiveGasPrice ?? transaction.gasPrice)?.toString() ?? null,
-        gasUsedRaw: receipt.gasUsed.toString(),
+        blockNumber: block.number,
+        blockHash,
+        parentHash: block.parentHash.toLowerCase(),
+        timestamp: new Date(Number(block.timestamp) * 1000),
       });
+
+      const blockTransactions = "transactions" in block ? block.transactions : [];
+
+      for (const transaction of blockTransactions) {
+        const fromAddress = transaction.from.toLowerCase();
+        const toAddress = transaction.to?.toLowerCase() ?? null;
+
+        if (fromAddress !== walletAddress && toAddress !== walletAddress) {
+          continue;
+        }
+
+        const receipt = await args.publicClient.getTransactionReceipt({
+          hash: transaction.hash as `0x${string}`,
+        });
+
+        rawTransactions.push({
+          chainId: args.wallet.chainId,
+          txHash: transaction.hash,
+          blockNumber: transaction.blockNumber ?? block.number,
+          blockHash: transaction.blockHash ?? block.hash,
+          transactionIndex: transaction.transactionIndex ?? 0,
+          fromAddress: transaction.from,
+          toAddress: transaction.to,
+          valueRaw: transaction.value.toString(),
+          gasPriceRaw:
+            (receipt.effectiveGasPrice ?? transaction.gasPrice)?.toString() ?? null,
+          gasUsedRaw: receipt.gasUsed.toString(),
+        });
+      }
     }
+
+    scannedBlockCount += blocks.length;
+    scannedRawTransactions.push(...rawTransactions);
+    persistedBlockCount += (await persistRawBlocks(blocks, args.db as never)).count;
+    await persistRawTransactions(rawTransactions, args.db as never);
   }
 
-  const persistedBlocks = await persistRawBlocks(blocks, args.db as never);
   const persistedLogs = await persistRawLogs(
     dedupedLogs
       .filter(
@@ -274,7 +302,6 @@ export async function ingestWalletTransferArtifacts(args: {
       })),
     args.db as never,
   );
-  await persistRawTransactions(rawTransactions, args.db as never);
   const decodedTransfers = [];
 
   for (const log of dedupedLogs) {
@@ -317,7 +344,7 @@ export async function ingestWalletTransferArtifacts(args: {
 
   await persistRawTokenTransfers(decodedTransfers, args.db as never);
 
-  if (blocks.length !== persistedBlocks.count && persistedBlocks.count > 0) {
+  if (scannedBlockCount !== persistedBlockCount && persistedBlockCount > 0) {
     warnings.push("some raw blocks were already persisted for this range");
   }
 
@@ -341,7 +368,7 @@ export async function ingestWalletTransferArtifacts(args: {
           },
           args.db as never,
         )
-      : rawTransactions.map((transaction) => ({
+      : scannedRawTransactions.map((transaction) => ({
           chainId: transaction.chainId,
           txHash: transaction.txHash.toLowerCase(),
           blockNumber: transaction.blockNumber,
