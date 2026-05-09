@@ -509,17 +509,26 @@ async function projectTransferIngestionDiagnostic(
     };
   }
 
-  const counts = await getTransferIngestionCounts({
-    chainId: syncRun.chainId,
-    walletAddress: syncRun.wallet.address,
-    fromBlock: range.fromBlock,
-    toBlock: range.toBlock,
-  });
-  const nativeScanWindows = buildNativeTransactionScanWindows({
-    fromBlock: range.fromBlock,
-    toBlock: range.toBlock,
-    maxWindowSize: 2_000n,
-  });
+  const hasEmptyRange = range.fromBlock > range.toBlock;
+  const counts = hasEmptyRange
+    ? {
+        rawBlocksPersistedCount: 0,
+        rawTransactionsPersistedCount: 0,
+        rawLogsPersistedCount: 0,
+      }
+    : await getTransferIngestionCounts({
+        chainId: syncRun.chainId,
+        walletAddress: syncRun.wallet.address,
+        fromBlock: range.fromBlock,
+        toBlock: range.toBlock,
+      });
+  const nativeScanWindows = hasEmptyRange
+    ? []
+    : buildNativeTransactionScanWindows({
+        fromBlock: range.fromBlock,
+        toBlock: range.toBlock,
+        maxWindowSize: 2_000n,
+      });
 
   return {
     operationId: syncRun.id,

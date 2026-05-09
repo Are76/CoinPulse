@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   getOperationStateReport,
@@ -407,6 +407,11 @@ describe("getOperationStateReport", () => {
 
   it("returns diagnostics for a transfer run with an empty requested range", async () => {
     const now = new Date("2026-05-08T19:00:00.000Z");
+    const getTransferIngestionCounts = vi.fn(async () => ({
+      rawBlocksPersistedCount: 0,
+      rawTransactionsPersistedCount: 0,
+      rawLogsPersistedCount: 0,
+    }));
     const report = await getOperationStateReport({
       now,
       listSyncRuns: async () => [
@@ -430,13 +435,10 @@ describe("getOperationStateReport", () => {
       ],
       getLastSuccessfulSyncRun: async () => null,
       getLastRebuildRun: async () => null,
-      getTransferIngestionCounts: async () => ({
-        rawBlocksPersistedCount: 0,
-        rawTransactionsPersistedCount: 0,
-        rawLogsPersistedCount: 0,
-      }),
+      getTransferIngestionCounts,
     });
 
+    expect(getTransferIngestionCounts).not.toHaveBeenCalled();
     expect(report.ingestionDiagnostics).toEqual([
       {
         operationId: "transfer-empty",
