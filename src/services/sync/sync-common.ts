@@ -17,7 +17,6 @@ import {
   persistRawBlocks,
   persistRawLogs,
   persistRawTransactions,
-  type PersistRawTransactionInput,
   readWalletRawTransactions,
   persistRawTokenTransfers,
   readWalletProtocolOperationTxHashes,
@@ -212,7 +211,6 @@ export async function ingestWalletTransferArtifacts(args: {
   let latestBlockHash: string | null = null;
   let scannedBlockCount = 0;
   let persistedBlockCount = 0;
-  const scannedRawTransactions: PersistRawTransactionInput[] = [];
 
   for (const window of nativeScanWindows) {
     const blocks = [];
@@ -269,7 +267,6 @@ export async function ingestWalletTransferArtifacts(args: {
     }
 
     scannedBlockCount += blocks.length;
-    scannedRawTransactions.push(...rawTransactions);
     persistedBlockCount += (await persistRawBlocks(blocks, args.db as never)).count;
     await persistRawTransactions(rawTransactions, args.db as never);
   }
@@ -357,29 +354,15 @@ export async function ingestWalletTransferArtifacts(args: {
     },
     args.db as never,
   );
-  const persistedTransactions =
-    typeof (args.db.rawTransaction as { findMany?: unknown }).findMany === "function"
-      ? await readWalletRawTransactions(
-          {
-            chainId: args.wallet.chainId,
-            walletAddress: args.wallet.address,
-            fromBlock: args.fromBlock,
-            toBlock: args.toBlock,
-          },
-          args.db as never,
-        )
-      : scannedRawTransactions.map((transaction) => ({
-          chainId: transaction.chainId,
-          txHash: transaction.txHash.toLowerCase(),
-          blockNumber: transaction.blockNumber,
-          blockHash: transaction.blockHash.toLowerCase(),
-          transactionIndex: transaction.transactionIndex,
-          fromAddress: transaction.fromAddress.toLowerCase(),
-          toAddress: transaction.toAddress?.toLowerCase() ?? null,
-          valueRaw: transaction.valueRaw,
-          gasPriceRaw: transaction.gasPriceRaw,
-          gasUsedRaw: transaction.gasUsedRaw,
-        }));
+  const persistedTransactions = await readWalletRawTransactions(
+    {
+      chainId: args.wallet.chainId,
+      walletAddress: args.wallet.address,
+      fromBlock: args.fromBlock,
+      toBlock: args.toBlock,
+    },
+    args.db as never,
+  );
   const protocolOperationTxHashes =
     typeof (args.db.rawDexSwap as { findMany?: unknown } | undefined)?.findMany ===
       "function" &&

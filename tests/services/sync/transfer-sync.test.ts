@@ -1172,6 +1172,34 @@ describe("transfer sync flow", () => {
         result,
         publicClient,
         cursor: stores.cursors.get("wallet_1:369:TRANSFERS"),
+        rawBlocks: Array.from(stores.rawBlocks.values())
+          .map((block) => ({
+            blockNumber: block.blockNumber,
+            blockHash: block.blockHash,
+            parentHash: block.parentHash,
+          }))
+          .sort((left, right) =>
+            left.blockNumber === right.blockNumber
+              ? left.blockHash.localeCompare(right.blockHash)
+              : Number(left.blockNumber - right.blockNumber),
+          ),
+        rawTransactions: Array.from(stores.rawTransactions.values())
+          .map((transaction) => ({
+            txHash: transaction.txHash,
+            blockNumber: transaction.blockNumber,
+            blockHash: transaction.blockHash,
+            transactionIndex: transaction.transactionIndex,
+            fromAddress: transaction.fromAddress,
+            toAddress: transaction.toAddress,
+            valueRaw: transaction.valueRaw,
+            gasPriceRaw: transaction.gasPriceRaw,
+            gasUsedRaw: transaction.gasUsedRaw,
+          }))
+          .sort((left, right) =>
+            left.txHash === right.txHash
+              ? left.transactionIndex - right.transactionIndex
+              : left.txHash.localeCompare(right.txHash),
+          ),
         ledgerEntries: Array.from(stores.ledgerEntries.values())
           .map((entry) => ({
             txHash: (entry as { txHash: string }).txHash,
@@ -1191,6 +1219,8 @@ describe("transfer sync flow", () => {
     const narrowWindow = await runWithMaxWindowSize(2n);
 
     expect(wideWindow.result.counts).toEqual(narrowWindow.result.counts);
+    expect(wideWindow.rawBlocks).toEqual(narrowWindow.rawBlocks);
+    expect(wideWindow.rawTransactions).toEqual(narrowWindow.rawTransactions);
     expect(wideWindow.ledgerEntries).toEqual(narrowWindow.ledgerEntries);
     expect(wideWindow.cursor).toEqual({
       fromBlock: 30n,
