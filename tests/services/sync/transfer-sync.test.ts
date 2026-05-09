@@ -1077,4 +1077,162 @@ describe("transfer sync flow", () => {
       ]),
     );
   });
+
+  it("preserves native normalization output and cursor metadata across smaller native scan windows", async () => {
+    const walletAddress = "0x1111111111111111111111111111111111111111";
+
+    function createPublicClient() {
+      return {
+        getLogs: vi.fn(async () => []),
+        getBlock: vi.fn(
+          async ({
+            blockNumber,
+            includeTransactions,
+          }: {
+            blockNumber: bigint;
+            includeTransactions?: boolean;
+          }) => ({
+            number: blockNumber,
+            hash: `0xblock${blockNumber}`,
+            parentHash: blockNumber === 30n ? "0xparent29" : `0xblock${blockNumber - 1n}`,
+            timestamp: 1_700_000_000n + blockNumber,
+            ...(includeTransactions
+              ? {
+                  transactions:
+                    blockNumber === 30n
+                      ? [
+                          {
+                            hash: "0xnative-send-windowed",
+                            blockHash: "0xblock30",
+                            blockNumber: 30n,
+                            transactionIndex: 0,
+                            from: walletAddress,
+                            to: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                            value: 1_000_000_000_000_000_000n,
+                            gasPrice: 2_000_000_000n,
+                            input: "0x",
+                          },
+                        ]
+                      : blockNumber === 34n
+                        ? [
+                            {
+                              hash: "0xnative-receive-windowed",
+                              blockHash: "0xblock34",
+                              blockNumber: 34n,
+                              transactionIndex: 0,
+                              from: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                              to: walletAddress,
+                              value: 500_000_000_000_000_000n,
+                              gasPrice: 2_000_000_000n,
+                              input: "0x",
+                            },
+                          ]
+                        : [],
+                }
+              : {}),
+          }),
+        ),
+        readContract: vi.fn(),
+        getTransaction: vi.fn(),
+        getTransactionReceipt: vi.fn(async ({ hash }: { hash: `0x${string}` }) => ({
+          transactionHash: hash,
+          blockHash:
+            hash === "0xnative-send-windowed" ? "0xblock30" : "0xblock34",
+          blockNumber: hash === "0xnative-send-windowed" ? 30n : 34n,
+          gasUsed: 21_000n,
+          effectiveGasPrice: 2_000_000_000n,
+          logs: [],
+        })),
+      };
+    }
+
+    async function runWithMaxWindowSize(maxWindowSize: bigint) {
+      const stores = createMemoryStores();
+      const publicClient = createPublicClient();
+      const dependencies = createSyncDependencies({
+        db: stores.db as never,
+        publicClient: publicClient as never,
+        maxWindowSize,
+      });
+
+      const result = await runWalletSync({
+        wallet: {
+          id: "wallet_1",
+          chainId: 369,
+          address: walletAddress,
+        },
+        sourceFamilies: ["TRANSFERS"],
+        startBlock: 30n,
+        endBlock: 34n,
+        policyLabel: "native-windowing",
+        dependencies,
+      });
+
+      return {
+        result,
+        publicClient,
+        cursor: stores.cursors.get("wallet_1:369:TRANSFERS"),
+        rawBlocks: Array.from(stores.rawBlocks.values())
+          .map((block) => ({
+            blockNumber: block.blockNumber,
+            blockHash: block.blockHash,
+            parentHash: block.parentHash,
+          }))
+          .sort((left, right) =>
+            left.blockNumber === right.blockNumber
+              ? left.blockHash.localeCompare(right.blockHash)
+              : Number(left.blockNumber - right.blockNumber),
+          ),
+        rawTransactions: Array.from(stores.rawTransactions.values())
+          .map((transaction) => ({
+            txHash: transaction.txHash,
+            blockNumber: transaction.blockNumber,
+            blockHash: transaction.blockHash,
+            transactionIndex: transaction.transactionIndex,
+            fromAddress: transaction.fromAddress,
+            toAddress: transaction.toAddress,
+            valueRaw: transaction.valueRaw,
+            gasPriceRaw: transaction.gasPriceRaw,
+            gasUsedRaw: transaction.gasUsedRaw,
+          }))
+          .sort((left, right) =>
+            left.txHash === right.txHash
+              ? left.transactionIndex - right.transactionIndex
+              : left.txHash.localeCompare(right.txHash),
+          ),
+        ledgerEntries: Array.from(stores.ledgerEntries.values())
+          .map((entry) => ({
+            txHash: (entry as { txHash: string }).txHash,
+            entryType: (entry as { entryType: string }).entryType,
+            assetId: (entry as { assetId: string }).assetId,
+            quantity: (entry as { quantity: string }).quantity,
+          }))
+          .sort((left, right) =>
+            left.txHash === right.txHash
+              ? left.entryType.localeCompare(right.entryType)
+              : left.txHash.localeCompare(right.txHash),
+          ),
+      };
+    }
+
+    const wideWindow = await runWithMaxWindowSize(10n);
+    const narrowWindow = await runWithMaxWindowSize(2n);
+
+    expect(wideWindow.result.counts).toEqual(narrowWindow.result.counts);
+    expect(wideWindow.rawBlocks).toEqual(narrowWindow.rawBlocks);
+    expect(wideWindow.rawTransactions).toEqual(narrowWindow.rawTransactions);
+    expect(wideWindow.ledgerEntries).toEqual(narrowWindow.ledgerEntries);
+    expect(wideWindow.cursor).toEqual({
+      fromBlock: 30n,
+      toBlock: 34n,
+      blockHash: "0xblock34",
+    });
+    expect(narrowWindow.cursor).toEqual(wideWindow.cursor);
+    expect(narrowWindow.publicClient.getBlock.mock.calls).toHaveLength(5);
+    expect(
+      narrowWindow.publicClient.getBlock.mock.calls.map(
+        ([args]: [{ blockNumber: bigint }]) => args.blockNumber,
+      ),
+    ).toEqual([30n, 31n, 32n, 33n, 34n]);
+  });
 });

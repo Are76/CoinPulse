@@ -260,6 +260,31 @@ function createMemoryStores() {
         }
         return { count };
       },
+      async findMany(args: {
+        where: {
+          chainId: number;
+          status: "ACTIVE";
+          blockNumber: { gte: bigint; lte: bigint };
+          OR: Array<{ fromAddress?: string; toAddress?: string }>;
+        };
+      }) {
+        const fromAddress = args.where.OR?.[0]?.fromAddress;
+        const toAddress = args.where.OR?.[1]?.toAddress;
+        return Array.from(rawTransactions.values())
+          .filter(
+            (item) =>
+              item.chainId === args.where.chainId &&
+              item.status === args.where.status &&
+              item.blockNumber >= args.where.blockNumber.gte &&
+              item.blockNumber <= args.where.blockNumber.lte &&
+              (item.fromAddress === fromAddress || item.toAddress === toAddress),
+          )
+          .sort((left, right) =>
+            left.blockNumber === right.blockNumber
+              ? left.transactionIndex - right.transactionIndex
+              : Number(left.blockNumber - right.blockNumber),
+          );
+      },
       updateMany: vi.fn(async () => ({ count: 0 })),
     },
     rawDexSwap: {
