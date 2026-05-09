@@ -77,16 +77,18 @@ export type TransferIngestionDiagnostic = {
   walletAddress: string | null;
   chainId: number;
   sourceFamily: "TRANSFERS";
-  requestedFromBlock: string;
-  requestedToBlock: string;
+  requestedFromBlock: string | null;
+  requestedToBlock: string | null;
+  rangeStatus: "exact" | "unavailable";
+  rangeWarning: string | null;
   nativeScanWindowCount: number;
   nativeScanWindows: Array<{
     fromBlock: string;
     toBlock: string;
   }>;
-  rawBlocksPersistedCount: number;
-  rawTransactionsPersistedCount: number;
-  rawLogsPersistedCount: number;
+  rawBlocksPersistedCount: number | null;
+  rawTransactionsPersistedCount: number | null;
+  rawLogsPersistedCount: number | null;
   warningCount: number;
 };
 
@@ -108,6 +110,9 @@ type SyncRunOperationRecord = {
   policyLabel?: string | null;
   startBlock?: bigint | null;
   endBlock?: bigint | null;
+  failedSourceFamily?: SourceFamily | null;
+  failedFromBlock?: bigint | null;
+  failedToBlock?: bigint | null;
 };
 
 type OperationStateDependencies = {
@@ -157,6 +162,9 @@ export async function getOperationStateReport(
           policyLabel: true,
           startBlock: true,
           endBlock: true,
+          failedSourceFamily: true,
+          failedFromBlock: true,
+          failedToBlock: true,
         },
       }));
   const getLastSuccessfulSyncRun =
@@ -190,6 +198,9 @@ export async function getOperationStateReport(
           policyLabel: true,
           startBlock: true,
           endBlock: true,
+          failedSourceFamily: true,
+          failedFromBlock: true,
+          failedToBlock: true,
         },
       }));
   const getLastRebuildRun =
@@ -223,6 +234,9 @@ export async function getOperationStateReport(
           policyLabel: true,
           startBlock: true,
           endBlock: true,
+          failedSourceFamily: true,
+          failedFromBlock: true,
+          failedToBlock: true,
         },
       }));
   const getTransferIngestionCounts =
@@ -468,24 +482,42 @@ async function projectTransferIngestionDiagnostic(
     OperationStateDependencies["getTransferIngestionCounts"]
   >,
 ): Promise<TransferIngestionDiagnostic | null> {
-  if (
-    !syncRun.sourceFamilies?.includes("TRANSFERS") ||
-    !syncRun.wallet?.address ||
-    typeof syncRun.startBlock !== "bigint" ||
-    typeof syncRun.endBlock !== "bigint"
-  ) {
+  if (!syncRun.sourceFamilies?.includes("TRANSFERS") || !syncRun.wallet?.address) {
     return null;
+  }
+
+  const range = deriveTransferDiagnosticRange(syncRun);
+
+  if (!range) {
+    return {
+      operationId: syncRun.id,
+      walletId: syncRun.walletId,
+      walletAddress: syncRun.wallet.address,
+      chainId: syncRun.chainId,
+      sourceFamily: "TRANSFERS",
+      requestedFromBlock: null,
+      requestedToBlock: null,
+      rangeStatus: "unavailable",
+      rangeWarning:
+        "TRANSFERS-specific requested range is not persisted for this multi-family run",
+      nativeScanWindowCount: 0,
+      nativeScanWindows: [],
+      rawBlocksPersistedCount: null,
+      rawTransactionsPersistedCount: null,
+      rawLogsPersistedCount: null,
+      warningCount: syncRun.warningCount,
+    };
   }
 
   const counts = await getTransferIngestionCounts({
     chainId: syncRun.chainId,
     walletAddress: syncRun.wallet.address,
-    fromBlock: syncRun.startBlock,
-    toBlock: syncRun.endBlock,
+    fromBlock: range.fromBlock,
+    toBlock: range.toBlock,
   });
   const nativeScanWindows = buildNativeTransactionScanWindows({
-    fromBlock: syncRun.startBlock,
-    toBlock: syncRun.endBlock,
+    fromBlock: range.fromBlock,
+    toBlock: range.toBlock,
     maxWindowSize: 2_000n,
   });
 
@@ -495,8 +527,10 @@ async function projectTransferIngestionDiagnostic(
     walletAddress: syncRun.wallet.address,
     chainId: syncRun.chainId,
     sourceFamily: "TRANSFERS",
-    requestedFromBlock: syncRun.startBlock.toString(),
-    requestedToBlock: syncRun.endBlock.toString(),
+    requestedFromBlock: range.fromBlock.toString(),
+    requestedToBlock: range.toBlock.toString(),
+    rangeStatus: "exact",
+    rangeWarning: null,
     nativeScanWindowCount: nativeScanWindows.length,
     nativeScanWindows: nativeScanWindows.map((window) => ({
       fromBlock: window.fromBlock.toString(),
@@ -507,4 +541,31 @@ async function projectTransferIngestionDiagnostic(
     rawLogsPersistedCount: counts.rawLogsPersistedCount,
     warningCount: syncRun.warningCount,
   };
+}
+
+function deriveTransferDiagnosticRange(syncRun: SyncRunOperationRecord) {
+  if (
+    syncRun.sourceFamilies?.length === 1 &&
+    syncRun.sourceFamilies[0] === "TRANSFERS" &&
+    typeof syncRun.startBlock === "bigint" &&
+    typeof syncRun.endBlock === "bigint"
+  ) {
+    return {
+      fromBlock: syncRun.startBlock,
+      toBlock: syncRun.endBlock,
+    };
+  }
+
+  if (
+    syncRun.failedSourceFamily === "TRANSFERS" &&
+    typeof syncRun.failedFromBlock === "bigint" &&
+    typeof syncRun.failedToBlock === "bigint"
+  ) {
+    return {
+      fromBlock: syncRun.failedFromBlock,
+      toBlock: syncRun.failedToBlock,
+    };
+  }
+
+  return null;
 }
