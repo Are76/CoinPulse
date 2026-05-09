@@ -295,7 +295,9 @@ describe("materializeCurrentPortfolioPositions", () => {
     expect(report.lpPositionsWritten).toBe(1);
     expect(report.stakePositionsWritten).toBe(1);
     expect(report.skippedCount).toBe(0);
-    expect(report.warnings).toEqual([]);
+    expect(report.warnings).toEqual([
+      `negative-token-balance:${NATIVE_ASSET_ID}:-0.0002`,
+    ]);
     expect(stores.portfolioTokenBalances.get(`${WALLET_ID}:${CHAIN_ID}:chain:369:erc20:0xtokena`))
       .toMatchObject({ balanceQuantity: "2", decimals: 6 });
     expect(stores.portfolioTokenBalances.get(`${WALLET_ID}:${CHAIN_ID}:chain:369:erc20:0xtokenb`))
@@ -377,6 +379,145 @@ describe("materializeCurrentPortfolioPositions", () => {
     expect(first.tokenBalancesWritten).toBe(1);
     expect(second.tokenBalancesWritten).toBe(1);
     expect(stores.portfolioTokenBalances.size).toBe(1);
+  });
+
+  it("cleans up zero balances on rerun", async () => {
+    const stores = createMemoryDb();
+    seedTokens(stores.tokens);
+    stores.portfolioTokenBalances.set(`${WALLET_ID}:${CHAIN_ID}:chain:369:erc20:0xtokena`, {
+      walletId: WALLET_ID,
+      walletAddress: WALLET_ADDRESS.toLowerCase(),
+      chainId: CHAIN_ID,
+      assetId: "chain:369:erc20:0xtokena",
+      assetAddress: "0xtokena",
+      balanceQuantity: "99",
+      decimals: 6,
+      updatedFromBlock: null,
+      updatedToBlock: null,
+    });
+    await seedLedger(stores.db, [
+      createDraft({
+        txHash: "0xtransfer-in",
+        actionGroupKey: "g1",
+        dedupeKey: "d1",
+        assetId: "chain:369:erc20:0xtokena",
+        quantity: "1",
+        entryType: "RECEIVE",
+        sourceLogKey: "log:0xtransfer-in:receive",
+      }),
+      createDraft({
+        txHash: "0xtransfer-out",
+        actionGroupKey: "g2",
+        dedupeKey: "d2",
+        assetId: "chain:369:erc20:0xtokena",
+        quantity: "1",
+        entryType: "SEND",
+        direction: "OUT",
+        sourceLogKey: "log:0xtransfer-out:send",
+      }),
+    ]);
+
+    const report = await materializeCurrentPortfolioPositions({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      db: stores.db as never,
+    });
+
+    expect(report.tokenBalancesWritten).toBe(0);
+    expect(report.warnings).toEqual([]);
+    expect(stores.portfolioTokenBalances.size).toBe(0);
+    expect(
+      stores.portfolioTokenBalances.get(`${WALLET_ID}:${CHAIN_ID}:chain:369:erc20:0xtokena`),
+    ).toBeUndefined();
+  });
+
+  it("materializes mixed native and ERC20 balances with fee impact and canonical asset identity", async () => {
+    const stores = createMemoryDb();
+    seedTokens(stores.tokens);
+
+    await seedLedger(stores.db, [
+      createDraft({
+        txHash: "0xnative-in",
+        actionGroupKey: "g1",
+        dedupeKey: "d1",
+        assetId: NATIVE_ASSET_ID,
+        quantity: "2",
+        entryType: "RECEIVE",
+        sourceLogKey: "log:0xnative-in:receive",
+      }),
+      createDraft({
+        txHash: "0xnative-fee",
+        actionType: "TRANSFER",
+        actionGroupKey: "g2",
+        dedupeKey: "d2",
+        assetId: NATIVE_ASSET_ID,
+        quantity: "0.0002",
+        entryType: "FEE",
+        direction: "OUT",
+        sourceLogKey: "log:0xnative-fee:fee",
+      }),
+      createDraft({
+        txHash: "0xerc20-in",
+        actionGroupKey: "g3",
+        dedupeKey: "d3",
+        assetId: "chain:369:erc20:0xtokena",
+        quantity: "5",
+        entryType: "RECEIVE",
+        sourceLogKey: "log:0xerc20-in:receive",
+      }),
+    ]);
+
+    const report = await materializeCurrentPortfolioPositions({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      db: stores.db as never,
+    });
+
+    expect(report.tokenBalancesWritten).toBe(2);
+    expect(report.warnings).toEqual([]);
+    expect(stores.portfolioTokenBalances.get(`${WALLET_ID}:${CHAIN_ID}:${NATIVE_ASSET_ID}`))
+      .toMatchObject({
+        assetAddress: null,
+        balanceQuantity: "1.9998",
+        decimals: 18,
+      });
+    expect(stores.portfolioTokenBalances.get(`${WALLET_ID}:${CHAIN_ID}:chain:369:erc20:0xtokena`))
+      .toMatchObject({
+        assetAddress: "0xtokena",
+        balanceQuantity: "5",
+        decimals: 6,
+      });
+  });
+
+  it("warns on negative token balances without dropping persisted state", async () => {
+    const stores = createMemoryDb();
+    seedTokens(stores.tokens);
+
+    await seedLedger(stores.db, [
+      createDraft({
+        txHash: "0xsend-only",
+        actionGroupKey: "g1",
+        dedupeKey: "d1",
+        assetId: NATIVE_ASSET_ID,
+        quantity: "1",
+        entryType: "SEND",
+        direction: "OUT",
+        sourceLogKey: "log:0xsend-only:send",
+      }),
+    ]);
+
+    const report = await materializeCurrentPortfolioPositions({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      db: stores.db as never,
+    });
+
+    expect(report.tokenBalancesWritten).toBe(1);
+    expect(report.warnings).toEqual([
+      `negative-token-balance:${NATIVE_ASSET_ID}:-1`,
+    ]);
+    expect(stores.portfolioTokenBalances.get(`${WALLET_ID}:${CHAIN_ID}:${NATIVE_ASSET_ID}`))
+      .toMatchObject({
+        assetAddress: null,
+        balanceQuantity: "-1",
+      });
   });
 
   it("scoped recompute does not affect unrelated wallet or chain state", async () => {
