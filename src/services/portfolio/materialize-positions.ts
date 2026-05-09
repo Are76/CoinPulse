@@ -156,6 +156,12 @@ export async function materializeCurrentPortfolioPositions(args: {
     }
   }
 
+  for (const [assetId, value] of tokenBalances.entries()) {
+    if (value < 0n) {
+      warnings.add(`negative-token-balance:${assetId}:${scaledBigIntToDecimal(value)}`);
+    }
+  }
+
   const walletAddress = args.wallet.address.toLowerCase();
   const tokenBalanceRows = Array.from(tokenBalances.entries())
     .filter(([, value]) => value !== 0n)
