@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 import { EmptyState } from "@/components/ui/data-state/empty-state";
 import { ErrorState } from "@/components/ui/data-state/error-state";
@@ -17,21 +17,14 @@ import { TimestampLabel } from "@/components/ui/value/timestamp-label";
 import {
   ApiClientError,
   SOURCE_FAMILY_OPTIONS,
-  fetchDebugHealth,
-  fetchDebugStatus,
-  runManualSync,
-  runRebuild,
-  type DebugStatusReportDto,
-  type HealthReportDto,
   type SourceFamily,
 } from "@/lib/api/debug-client";
+import { useDebugHealthQuery } from "@/lib/query/use-debug-health-query";
+import { useDebugStatusQuery } from "@/lib/query/use-debug-status-query";
+import { useManualSyncMutation } from "@/lib/query/use-manual-sync-mutation";
+import { useRebuildMutation } from "@/lib/query/use-rebuild-mutation";
 
 const DEFAULT_CHAIN_ID = "369";
-
-type MetaState =
-  | { kind: "loading" }
-  | { kind: "ready"; health: HealthReportDto; status: DebugStatusReportDto }
-  | { kind: "error"; message: string };
 
 type OperationState =
   | { kind: "idle" }
@@ -53,178 +46,140 @@ export function DebugSyncScreen() {
   const [policyLabel, setPolicyLabel] = useState("frontend-debug");
   const [rebuildFromBlock, setRebuildFromBlock] = useState("");
   const [rebuildToBlock, setRebuildToBlock] = useState("");
-  const [metaState, setMetaState] = useState<MetaState>({ kind: "loading" });
-  const [operationState, setOperationState] = useState<OperationState>({
-    kind: "idle",
-  });
 
-  useEffect(() => {
-    let active = true;
+  // Tracks which operation was last triggered so the panel shows the right result.
+  const [lastOperation, setLastOperation] = useState<"sync" | "rebuild" | null>(null);
+  // Holds pre-mutation validation errors that are cleared once a mutation starts.
+  const [validationError, setValidationError] = useState<{
+    operation: "sync" | "rebuild";
+    message: string;
+  } | null>(null);
 
-    async function loadReports() {
-      try {
-        const [health, status] = await Promise.all([
-          fetchDebugHealth(),
-          fetchDebugStatus(),
-        ]);
+  const healthQuery = useDebugHealthQuery();
+  const statusQuery = useDebugStatusQuery();
+  const syncMutation = useManualSyncMutation();
+  const rebuildMutation = useRebuildMutation();
 
-        if (!active) {
-          return;
-        }
+  // Derive the combined meta-loading state for the header cards.
+  const isMetaLoading = healthQuery.isPending || statusQuery.isPending;
+  const isMetaError = !isMetaLoading && (healthQuery.isError || statusQuery.isError);
+  const isMetaReady = healthQuery.isSuccess && statusQuery.isSuccess;
 
-        setMetaState({
-          kind: "ready",
-          health,
-          status,
-        });
-      } catch (error) {
-        if (!active) {
-          return;
-        }
+  const metaErrorMessage = isMetaError
+    ? getErrorMessage(healthQuery.error ?? statusQuery.error)
+    : null;
 
-        setMetaState({
+  // Derive current operation state for the panel from React Query mutation state.
+  const isBusy = syncMutation.isPending || rebuildMutation.isPending;
+
+  const operationState: OperationState = (() => {
+    if (lastOperation === "sync") {
+      if (syncMutation.isPending) return { kind: "loading", operation: "sync" };
+      if (syncMutation.isSuccess)
+        return { kind: "success", operation: "sync", payload: syncMutation.data.data };
+      if (syncMutation.isError)
+        return {
           kind: "error",
-          message: getErrorMessage(error),
-        });
-      }
+          operation: "sync",
+          message: getErrorMessage(syncMutation.error),
+          details: getErrorDetails(syncMutation.error),
+        };
     }
+    if (lastOperation === "rebuild") {
+      if (rebuildMutation.isPending) return { kind: "loading", operation: "rebuild" };
+      if (rebuildMutation.isSuccess)
+        return { kind: "success", operation: "rebuild", payload: rebuildMutation.data.data };
+      if (rebuildMutation.isError)
+        return {
+          kind: "error",
+          operation: "rebuild",
+          message: getErrorMessage(rebuildMutation.error),
+          details: getErrorDetails(rebuildMutation.error),
+        };
+    }
+    if (validationError) {
+      return {
+        kind: "error",
+        operation: validationError.operation,
+        message: validationError.message,
+        details: [],
+      };
+    }
+    return { kind: "idle" };
+  })();
 
-    void loadReports();
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  async function handleManualSync(event: FormEvent<HTMLFormElement>) {
+  function handleManualSync(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const parsedChainId = parseChainId(chainId);
     if (!parsedChainId.ok) {
-      setOperationState({
-        kind: "error",
-        operation: "sync",
-        message: parsedChainId.message,
-        details: [],
-      });
+      setValidationError({ operation: "sync", message: parsedChainId.message });
       return;
     }
 
     if (!walletAddress.trim()) {
-      setOperationState({
-        kind: "error",
-        operation: "sync",
-        message: "Wallet address is required.",
-        details: [],
-      });
+      setValidationError({ operation: "sync", message: "Wallet address is required." });
       return;
     }
 
     if (!syncEndBlock.trim()) {
-      setOperationState({
-        kind: "error",
+      setValidationError({
         operation: "sync",
         message: "End block is required for manual sync.",
-        details: [],
       });
       return;
     }
 
     if (!policyLabel.trim()) {
-      setOperationState({
-        kind: "error",
-        operation: "sync",
-        message: "Policy label is required.",
-        details: [],
-      });
+      setValidationError({ operation: "sync", message: "Policy label is required." });
       return;
     }
 
-    setOperationState({ kind: "loading", operation: "sync" });
-
-    try {
-      const response = await runManualSync({
-        walletAddress: walletAddress.trim(),
-        chainId: parsedChainId.value,
-        sourceFamilies,
-        startBlock: syncStartBlock.trim() || undefined,
-        endBlock: syncEndBlock.trim(),
-        policyLabel: policyLabel.trim(),
-      });
-
-      setOperationState({
-        kind: "success",
-        operation: "sync",
-        payload: response.data,
-      });
-    } catch (error) {
-      setOperationState({
-        kind: "error",
-        operation: "sync",
-        message: getErrorMessage(error),
-        details: getErrorDetails(error),
-      });
-    }
+    setValidationError(null);
+    setLastOperation("sync");
+    syncMutation.reset();
+    syncMutation.mutate({
+      walletAddress: walletAddress.trim(),
+      chainId: parsedChainId.value,
+      sourceFamilies,
+      startBlock: syncStartBlock.trim() || undefined,
+      endBlock: syncEndBlock.trim(),
+      policyLabel: policyLabel.trim(),
+    });
   }
 
-  async function handleRebuild(event: FormEvent<HTMLFormElement>) {
+  function handleRebuild(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const parsedChainId = parseChainId(chainId);
     if (!parsedChainId.ok) {
-      setOperationState({
-        kind: "error",
-        operation: "rebuild",
-        message: parsedChainId.message,
-        details: [],
-      });
+      setValidationError({ operation: "rebuild", message: parsedChainId.message });
       return;
     }
 
     if (!walletAddress.trim()) {
-      setOperationState({
-        kind: "error",
-        operation: "rebuild",
-        message: "Wallet address is required.",
-        details: [],
-      });
+      setValidationError({ operation: "rebuild", message: "Wallet address is required." });
       return;
     }
 
     if (!rebuildFromBlock.trim() || !rebuildToBlock.trim()) {
-      setOperationState({
-        kind: "error",
+      setValidationError({
         operation: "rebuild",
         message: "Both from-block and to-block are required for rebuild.",
-        details: [],
       });
       return;
     }
 
-    setOperationState({ kind: "loading", operation: "rebuild" });
-
-    try {
-      const response = await runRebuild({
-        walletAddress: walletAddress.trim(),
-        chainId: parsedChainId.value,
-        sourceFamilies,
-        fromBlock: rebuildFromBlock.trim(),
-        toBlock: rebuildToBlock.trim(),
-      });
-
-      setOperationState({
-        kind: "success",
-        operation: "rebuild",
-        payload: response.data,
-      });
-    } catch (error) {
-      setOperationState({
-        kind: "error",
-        operation: "rebuild",
-        message: getErrorMessage(error),
-        details: getErrorDetails(error),
-      });
-    }
+    setValidationError(null);
+    setLastOperation("rebuild");
+    rebuildMutation.reset();
+    rebuildMutation.mutate({
+      walletAddress: walletAddress.trim(),
+      chainId: parsedChainId.value,
+      sourceFamilies,
+      fromBlock: rebuildFromBlock.trim(),
+      toBlock: rebuildToBlock.trim(),
+    });
   }
 
   function toggleSourceFamily(value: SourceFamily) {
@@ -236,8 +191,6 @@ export function DebugSyncScreen() {
       return [...current, value];
     });
   }
-
-  const isBusy = operationState.kind === "loading";
 
   return (
     <PageContainer className="flex flex-col gap-6">
@@ -259,16 +212,16 @@ export function DebugSyncScreen() {
           <div className="flex flex-wrap gap-2">
             <LabelBadge
               label={
-                metaState.kind === "ready"
-                  ? `backend ${metaState.health.status}`
-                  : metaState.kind === "error"
+                healthQuery.isSuccess
+                  ? `backend ${healthQuery.data.status}`
+                  : healthQuery.isError
                     ? "backend error"
                     : "backend loading"
               }
               tone={
-                metaState.kind === "ready" && metaState.health.status === "ok"
+                healthQuery.isSuccess && healthQuery.data.status === "ok"
                   ? "fresh"
-                  : metaState.kind === "error"
+                  : healthQuery.isError
                     ? "danger"
                     : "warn"
               }
@@ -278,53 +231,53 @@ export function DebugSyncScreen() {
         </div>
       </SurfaceCard>
 
-      {metaState.kind === "loading" ? (
+      {isMetaLoading ? (
         <SurfaceCard>
           <LoadingState blocks={3} className="grid gap-4 md:grid-cols-3" />
         </SurfaceCard>
       ) : null}
 
-      {metaState.kind === "error" ? (
+      {isMetaError ? (
         <ErrorState
           title="Backend debug metadata failed"
-          message={metaState.message}
+          message={metaErrorMessage ?? "Unknown error."}
         />
       ) : null}
 
-      {metaState.kind === "ready" ? (
+      {isMetaReady ? (
         <>
           <SurfaceCard className="grid gap-4 md:grid-cols-3">
             <MetaCard
               label="Database"
-              value={metaState.health.dependencies.database.status}
+              value={healthQuery.data.dependencies.database.status}
             />
             <MetaCard
               label="Redis"
-              value={metaState.health.dependencies.redis.status}
+              value={healthQuery.data.dependencies.redis.status}
             />
-            <MetaCard label="Environment" value={metaState.health.app.env} />
+            <MetaCard label="Environment" value={healthQuery.data.app.env} />
           </SurfaceCard>
 
           <SurfaceCard className="grid gap-4 md:grid-cols-3">
             <MetaCard
               label="Supported chains"
-              value={metaState.status.supportedChains
+              value={statusQuery.data.supportedChains
                 .map((chain) => `${chain.name} (${chain.chainId})`)
                 .join(", ")}
             />
             <MetaCard
               label="Source families"
-              value={metaState.status.sourceFamilies.join(", ")}
+              value={statusQuery.data.sourceFamilies.join(", ")}
             />
             <MetaCard
               label="Pricing mode"
               value={
-                metaState.status.pricing.persistedObservationsOnly
+                statusQuery.data.pricing.persistedObservationsOnly
                   ? "persisted observations only"
                   : "not provided"
               }
               hint={
-                metaState.status.pricing.liveAdaptersEnabled
+                statusQuery.data.pricing.liveAdaptersEnabled
                   ? "live adapters enabled"
                   : "live adapters disabled"
               }
@@ -334,12 +287,12 @@ export function DebugSyncScreen() {
           <SurfaceCard className="grid gap-4 md:grid-cols-2">
             <MetaCard
               label="Health timestamp"
-              value={metaState.health.timestamp}
+              value={healthQuery.data.timestamp}
               isTimestamp
             />
             <MetaCard
               label="Status timestamp"
-              value={metaState.status.timestamp}
+              value={statusQuery.data.timestamp}
               isTimestamp
             />
           </SurfaceCard>
