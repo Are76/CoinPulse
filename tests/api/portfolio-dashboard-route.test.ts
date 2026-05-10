@@ -131,4 +131,28 @@ describe("GET /api/portfolio/dashboard", () => {
     });
     expect(assemblePortfolioDashboard).not.toHaveBeenCalled();
   });
+
+  it("returns a stable internal error response when dashboard assembly throws", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-1",
+      address: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+    });
+    assemblePortfolioDashboard.mockRejectedValue(new Error("dashboard exploded"));
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        "http://localhost/api/portfolio/dashboard?walletAddress=0x1111111111111111111111111111111111111111&chainId=369&quoteAsset=fiat:usd",
+      ),
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Internal server error.",
+      },
+    });
+  });
 });
