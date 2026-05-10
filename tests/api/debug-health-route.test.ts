@@ -93,6 +93,10 @@ describe("GET /api/debug/status", () => {
         lastRebuildAt: null,
         warnings: [],
       },
+      materializationDiagnostics: {
+        updatedAt: "2026-05-08T12:00:00.000Z",
+        wallets: [],
+      },
     });
 
     const { GET } = await import("../../app/api/debug/status/route");
@@ -127,6 +131,10 @@ describe("GET /api/debug/status", () => {
           lastSuccessfulSyncAt: null,
           lastRebuildAt: null,
           warnings: [],
+        },
+        materializationDiagnostics: {
+          updatedAt: "2026-05-08T12:00:00.000Z",
+          wallets: [],
         },
       },
     });
