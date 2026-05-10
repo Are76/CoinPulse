@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { type FormEvent, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { PageContainer } from "@/components/ui/page-container";
 import {
@@ -19,91 +21,86 @@ import {
   ApiClientError,
   fetchDebugHealth,
   fetchDebugStatus,
-  fetchPortfolioDashboard,
-  type DebugStatusReportDto,
-  type HealthReportDto,
 } from "@/lib/api/dashboard-client";
-import type { PortfolioDashboardDto } from "@/services/dashboard/types";
-
-type DashboardState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ready"; data: PortfolioDashboardDto }
-  | { kind: "error"; message: string };
+import { queryKeys } from "@/lib/query/query-keys";
+import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
 
 const DEFAULT_CHAIN_ID = "369";
 const DEFAULT_QUOTE_ASSET = "fiat:usd";
+const DASHBOARD_SCHEMA_VERSION = "v1" as const;
+
+type SubmittedParams = {
+  walletAddress: string;
+  chainId: number;
+};
 
 export function DashboardScreen() {
+  const queryClient = useQueryClient();
   const [walletAddress, setWalletAddress] = useState("");
   const [chainId, setChainId] = useState(DEFAULT_CHAIN_ID);
-  const [dashboardState, setDashboardState] = useState<DashboardState>({
-    kind: "idle",
+  const [submittedParams, setSubmittedParams] = useState<SubmittedParams | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  const healthQuery = useQuery({
+    queryKey: queryKeys.debug.health(),
+    queryFn: fetchDebugHealth,
+    staleTime: 15_000,
+    gcTime: 5 * 60_000,
   });
-  const [health, setHealth] = useState<HealthReportDto | null>(null);
-  const [debugStatus, setDebugStatus] = useState<DebugStatusReportDto | null>(null);
-  const [metaError, setMetaError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let active = true;
+  const statusQuery = useQuery({
+    queryKey: queryKeys.debug.status(),
+    queryFn: fetchDebugStatus,
+    staleTime: 10_000,
+    gcTime: 5 * 60_000,
+  });
 
-    async function loadMetaReports() {
-      try {
-        const [healthReport, statusReport] = await Promise.all([
-          fetchDebugHealth(),
-          fetchDebugStatus(),
-        ]);
+  const dashboardQuery = useDashboardQuery({
+    walletAddress: submittedParams?.walletAddress ?? "",
+    chainId: submittedParams?.chainId ?? 0,
+    quoteAsset: DEFAULT_QUOTE_ASSET,
+    enabled: submittedParams !== null,
+  });
 
-        if (!active) {
-          return;
-        }
-
-        setHealth(healthReport);
-        setDebugStatus(statusReport);
-      } catch (error) {
-        if (!active) {
-          return;
-        }
-
-        setMetaError(getErrorMessage(error));
-      }
-    }
-
-    void loadMetaReports();
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setDashboardState({ kind: "loading" });
 
     const parsedChainId = Number(chainId);
     if (!Number.isInteger(parsedChainId) || parsedChainId <= 0) {
-      setDashboardState({
-        kind: "error",
-        message: "Chain ID must be a positive integer.",
-      });
+      setValidationError("Chain ID must be a positive integer.");
+      setSubmittedParams(null);
       return;
     }
 
-    try {
-      const dashboard = await fetchPortfolioDashboard({
-        walletAddress: walletAddress.trim(),
-        chainId: parsedChainId,
-        quoteAsset: DEFAULT_QUOTE_ASSET,
-      });
+    setValidationError(null);
+    const params: SubmittedParams = {
+      walletAddress: walletAddress.trim(),
+      chainId: parsedChainId,
+    };
 
-      setDashboardState({ kind: "ready", data: dashboard });
-    } catch (error) {
-      setDashboardState({
-        kind: "error",
-        message: getErrorMessage(error),
-      });
-    }
+    // Remove any cached data for this key so the loading state is always shown
+    // on an explicit submit, preserving the original always-shows-loading behavior.
+    queryClient.removeQueries({
+      queryKey: queryKeys.dashboard({
+        schemaVersion: DASHBOARD_SCHEMA_VERSION,
+        chainId: params.chainId,
+        walletAddress: params.walletAddress,
+        quoteAsset: DEFAULT_QUOTE_ASSET,
+      }),
+    });
+
+    setSubmittedParams(params);
   }
+
+  const health = healthQuery.data ?? null;
+  const debugStatus = statusQuery.data ?? null;
+  const metaError =
+    healthQuery.isError || statusQuery.isError ? "Could not load backend status." : null;
+
+  const isIdle = submittedParams === null && validationError === null;
+  const errorMessage =
+    validationError ??
+    (dashboardQuery.isError ? getErrorMessage(dashboardQuery.error) : null);
 
   return (
     <PageContainer className="flex flex-col gap-6">
@@ -123,24 +120,22 @@ export function DashboardScreen() {
       <WalletQueryForm
         walletAddress={walletAddress}
         chainId={chainId}
-        isLoading={dashboardState.kind === "loading"}
+        isLoading={submittedParams !== null && dashboardQuery.isFetching}
         onWalletAddressChange={setWalletAddress}
         onChainIdChange={setChainId}
         onSubmit={handleSubmit}
       />
 
-      {dashboardState.kind === "idle" ? <IdleStateCard /> : null}
-      {dashboardState.kind === "error" ? (
-        <ErrorStateCard message={dashboardState.message} />
-      ) : null}
-      {dashboardState.kind === "loading" ? <LoadingStateCard /> : null}
+      {isIdle ? <IdleStateCard /> : null}
+      {errorMessage !== null ? <ErrorStateCard message={errorMessage} /> : null}
+      {submittedParams !== null && dashboardQuery.isLoading ? <LoadingStateCard /> : null}
 
-      {dashboardState.kind === "ready" ? (
+      {dashboardQuery.data !== undefined ? (
         <>
-          <PortfolioSummarySection dashboard={dashboardState.data} />
-          <TokenPositionsTable positions={dashboardState.data.tokenPositions} />
-          <LpPositionsTable positions={dashboardState.data.lpPositions} />
-          <StakePositionsTable positions={dashboardState.data.stakePositions} />
+          <PortfolioSummarySection dashboard={dashboardQuery.data} />
+          <TokenPositionsTable positions={dashboardQuery.data.tokenPositions} />
+          <LpPositionsTable positions={dashboardQuery.data.lpPositions} />
+          <StakePositionsTable positions={dashboardQuery.data.stakePositions} />
         </>
       ) : null}
     </PageContainer>
