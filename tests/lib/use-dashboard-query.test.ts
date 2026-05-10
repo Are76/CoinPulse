@@ -9,7 +9,21 @@ import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
 function makeWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: {
-      queries: { retryDelay: 1 },
+      queries: { retry: false },
+    },
+  });
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return React.createElement(QueryClientProvider, { client: queryClient }, children);
+  };
+}
+
+function makeRetryingWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: 3,
+        retryDelay: 1,
+      },
     },
   });
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -161,7 +175,7 @@ describe("useDashboardQuery", () => {
           walletAddress: "0x1111111111111111111111111111111111111111",
           chainId: 369,
         }),
-      { wrapper: makeWrapper() },
+      { wrapper: makeRetryingWrapper() },
     );
 
     await waitFor(() => expect(result.current.isError).toBe(true));
