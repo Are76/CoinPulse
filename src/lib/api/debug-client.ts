@@ -135,6 +135,21 @@ export async function runRebuild(args: {
   });
 }
 
+export async function importWallet(args: {
+  walletAddress: string;
+  chainId: number;
+  label?: string;
+}) {
+  return fetchJson<ApiDataResponse<unknown>>("/api/wallets/import", {
+    method: "POST",
+    body: JSON.stringify({
+      walletAddress: args.walletAddress,
+      chainId: args.chainId,
+      label: args.label,
+    }),
+  });
+}
+
 async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
     ...init,
