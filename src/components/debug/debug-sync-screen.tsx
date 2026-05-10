@@ -17,13 +17,13 @@ import { TimestampLabel } from "@/components/ui/value/timestamp-label";
 import {
   ApiClientError,
   SOURCE_FAMILY_OPTIONS,
-  runManualSync,
-  runRebuild,
   type DebugStatusReportDto,
   type HealthReportDto,
   type SourceFamily,
 } from "@/lib/api/debug-client";
 import { useDebugHealthQuery } from "@/lib/query/use-debug-health-query";
+import { useManualSyncMutation } from "@/lib/query/use-manual-sync-mutation";
+import { useRebuildMutation } from "@/lib/query/use-rebuild-mutation";
 import { useDebugStatusQuery } from "@/lib/query/use-debug-status-query";
 
 const DEFAULT_CHAIN_ID = "369";
@@ -63,6 +63,8 @@ export function DebugSyncScreen() {
   });
 
   const healthQuery = useDebugHealthQuery();
+  const manualSyncMutation = useManualSyncMutation();
+  const rebuildMutation = useRebuildMutation();
   const statusQuery = useDebugStatusQuery();
 
   const metaState = getMetaState({
@@ -119,7 +121,7 @@ export function DebugSyncScreen() {
     setOperationState({ kind: "loading", operation: "sync" });
 
     try {
-      const response = await runManualSync({
+      const response = await manualSyncMutation.mutateAsync({
         walletAddress: walletAddress.trim(),
         chainId: parsedChainId.value,
         sourceFamilies,
@@ -180,7 +182,7 @@ export function DebugSyncScreen() {
     setOperationState({ kind: "loading", operation: "rebuild" });
 
     try {
-      const response = await runRebuild({
+      const response = await rebuildMutation.mutateAsync({
         walletAddress: walletAddress.trim(),
         chainId: parsedChainId.value,
         sourceFamilies,
