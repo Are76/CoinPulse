@@ -9,6 +9,8 @@ import { resolveBestPriceFromStore } from "@/services/pricing/price-resolver";
 import type { ResolveBestPriceResult } from "@/services/pricing/types";
 import type {
   DashboardDbClient,
+  DashboardMaterializationDto,
+  DashboardMaterializationWarningDto,
   DashboardPnlCalculator,
   DashboardPnlDto,
   DashboardPriceResolver,
@@ -51,7 +53,7 @@ export async function assemblePortfolioDashboard(args: {
     });
   const calculatePnl = args.calculatePnl ?? calculateAverageCostPnl;
 
-  const [tokenBalances, lpPositions, stakePositions, ledgerEntries] = await Promise.all([
+  const [tokenBalances, lpPositions, stakePositions, materializationState, ledgerEntries] = await Promise.all([
     db.portfolioTokenBalance.findMany({
       where: { walletId: args.wallet.id, chainId: args.wallet.chainId },
       orderBy: [{ assetId: "asc" }],
@@ -64,6 +66,14 @@ export async function assemblePortfolioDashboard(args: {
       where: { walletId: args.wallet.id, chainId: args.wallet.chainId },
       orderBy: [{ stakeKey: "asc" }],
     }),
+    db.portfolioMaterializationState?.findUnique({
+      where: {
+        walletId_chainId: {
+          walletId: args.wallet.id,
+          chainId: args.wallet.chainId,
+        },
+      },
+    }) ?? Promise.resolve(null),
     db.ledgerEntry.findMany({
       where: { walletId: args.wallet.id, chainId: args.wallet.chainId },
       orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
@@ -201,12 +211,14 @@ export async function assemblePortfolioDashboard(args: {
         : valuedPositions === 0
           ? tokenPositionDtos[0]?.valuation.status ?? "unavailable"
           : "partial";
+  const materialization = toMaterializationDto(tokenBalances, materializationState);
 
   return {
     schemaVersion: "v1",
     wallet: args.wallet,
     quoteAsset: args.quoteAsset,
     asOf: args.asOf.toISOString(),
+    materialization,
     summary: {
       totalValueQuote: valuedPositions === 0 ? null : toOutput(totalValue),
       valuationStatus,
@@ -220,6 +232,47 @@ export async function assemblePortfolioDashboard(args: {
     tokenPositions: tokenPositionDtos,
     lpPositions: lpDtos,
     stakePositions: stakeDtos,
+  };
+}
+
+function toMaterializationDto(
+  tokenBalances: Awaited<ReturnType<DashboardDbClient["portfolioTokenBalance"]["findMany"]>>,
+  materializationState: Awaited<
+    ReturnType<NonNullable<DashboardDbClient["portfolioMaterializationState"]>["findUnique"]>
+  >,
+): DashboardMaterializationDto {
+  const negativeBalances = tokenBalances
+    .filter((row) => isNegativeDecimal(toStringValue(row.balanceQuantity)))
+    .map((row) => ({
+      assetId: row.assetId,
+      assetAddress: row.assetAddress,
+      balanceQuantity: toStringValue(row.balanceQuantity),
+      decimals: row.decimals,
+    }))
+    .sort((left, right) => left.assetId.localeCompare(right.assetId));
+
+  const warnings = mergeMaterializationWarnings(
+    normalizePersistedWarnings(materializationState?.warningDetails),
+    negativeBalances.map((negativeBalance) => ({
+      code: "negative_token_balance" as const,
+      message: `Negative materialized token balance for ${negativeBalance.assetId}: ${negativeBalance.balanceQuantity}`,
+    })),
+  );
+
+  return {
+    status: materializationState?.status ?? null,
+    completedSuccessfully: materializationState?.completedSuccessfully ?? null,
+    lastAttemptedAt: materializationState?.lastAttemptedAt?.toISOString() ?? null,
+    latestMaterializedAt: materializationState?.latestMaterializedAt?.toISOString() ?? null,
+    updatedFromBlock: bigintToString(materializationState?.updatedFromBlock ?? null),
+    updatedToBlock: bigintToString(materializationState?.updatedToBlock ?? null),
+    sourceLedgerFromBlock: bigintToString(materializationState?.sourceLedgerFromBlock ?? null),
+    sourceLedgerToBlock: bigintToString(materializationState?.sourceLedgerToBlock ?? null),
+    warningCount: warnings.length,
+    warnings,
+    errorMessage: materializationState?.errorMessage ?? null,
+    hasNegativeBalances: negativeBalances.length > 0,
+    negativeBalances,
   };
 }
 
@@ -322,6 +375,61 @@ function nullableToString(value: string | { toString(): string } | null) {
 
 function bigintToString(value: bigint | null) {
   return value === null ? null : value.toString();
+}
+
+function normalizePersistedWarnings(value: unknown): DashboardMaterializationWarningDto[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .flatMap<DashboardMaterializationWarningDto>((item) => {
+      if (typeof item !== "string") {
+        return [];
+      }
+
+      if (item.startsWith("negative-token-balance:")) {
+        const prefix = "negative-token-balance:";
+        const remainder = item.slice(prefix.length);
+        const separatorIndex = remainder.lastIndexOf(":");
+        if (separatorIndex === -1) {
+          return [];
+        }
+
+        const assetId = remainder.slice(0, separatorIndex);
+        const balanceQuantity = remainder.slice(separatorIndex + 1);
+        return [
+          {
+            code: "negative_token_balance",
+            message: `Negative materialized token balance for ${assetId}: ${balanceQuantity}`,
+          },
+        ];
+      }
+
+      return [
+        {
+          code: "generic_persisted_warning",
+          message: item,
+        },
+      ];
+    })
+    .sort((left, right) => left.message.localeCompare(right.message));
+}
+
+function mergeMaterializationWarnings(
+  persistedWarnings: DashboardMaterializationWarningDto[],
+  derivedWarnings: DashboardMaterializationWarningDto[],
+) {
+  const merged = new Map<string, DashboardMaterializationWarningDto>();
+  for (const warning of [...persistedWarnings, ...derivedWarnings]) {
+    merged.set(`${warning.code}:${warning.message}`, warning);
+  }
+
+  return Array.from(merged.values()).sort((left, right) => left.message.localeCompare(right.message));
+}
+
+function isNegativeDecimal(value: string) {
+  return value.trim().startsWith("-") && value.trim() !== "-0" && value.trim() !== "-0.0";
 }
 
 function toOutput(value: Decimal | string) {

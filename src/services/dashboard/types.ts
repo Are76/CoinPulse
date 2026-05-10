@@ -37,6 +37,38 @@ export type DashboardPnlDto = {
   warnings: PnLWarning[];
 };
 
+export type DashboardMaterializationWarningCode =
+  | "negative_token_balance"
+  | "generic_persisted_warning";
+
+export type DashboardMaterializationWarningDto = {
+  code: DashboardMaterializationWarningCode;
+  message: string;
+};
+
+export type DashboardNegativeBalanceDto = {
+  assetId: string;
+  assetAddress: string | null;
+  balanceQuantity: string;
+  decimals: number | null;
+};
+
+export type DashboardMaterializationDto = {
+  status: "RUNNING" | "FAILED" | "COMPLETED" | null;
+  completedSuccessfully: boolean | null;
+  lastAttemptedAt: string | null;
+  latestMaterializedAt: string | null;
+  updatedFromBlock: string | null;
+  updatedToBlock: string | null;
+  sourceLedgerFromBlock: string | null;
+  sourceLedgerToBlock: string | null;
+  warningCount: number;
+  warnings: DashboardMaterializationWarningDto[];
+  errorMessage: string | null;
+  hasNegativeBalances: boolean;
+  negativeBalances: DashboardNegativeBalanceDto[];
+};
+
 export type PortfolioSummaryDto = {
   totalValueQuote: string | null;
   valuationStatus: DashboardStatus;
@@ -102,6 +134,7 @@ export type PortfolioDashboardDto = {
   };
   quoteAsset: string;
   asOf: string;
+  materialization: DashboardMaterializationDto;
   summary: PortfolioSummaryDto;
   tokenPositions: DashboardTokenPositionDto[];
   lpPositions: DashboardLpPositionDto[];
@@ -165,6 +198,25 @@ export type DashboardDbClient = {
         endBlock: bigint | null;
       }>
     >;
+  };
+  portfolioMaterializationState?: {
+    findUnique(args: {
+      where: { walletId_chainId: { walletId: string; chainId: number } };
+    }): Promise<{
+      walletId: string;
+      chainId: number;
+      status: "RUNNING" | "FAILED" | "COMPLETED";
+      completedSuccessfully: boolean;
+      lastAttemptedAt: Date;
+      latestMaterializedAt: Date | null;
+      sourceLedgerFromBlock: bigint | null;
+      sourceLedgerToBlock: bigint | null;
+      updatedFromBlock: bigint | null;
+      updatedToBlock: bigint | null;
+      warningCount: number;
+      warningDetails: unknown;
+      errorMessage: string | null;
+    } | null>;
   };
   ledgerEntry: {
     findMany(args: {
