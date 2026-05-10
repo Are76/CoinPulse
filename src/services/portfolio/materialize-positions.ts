@@ -1,6 +1,10 @@
 import "server-only";
 
 import { getDb } from "@/lib/db";
+import {
+  persistMaterializationState,
+  type MaterializationProvenanceInput,
+} from "@/services/portfolio/materialization-provenance";
 
 const CANONICAL_SCALE = 18;
 
@@ -44,6 +48,13 @@ type MaterializeDbClient = {
   portfolioStakePosition: {
     deleteMany(args: { where: { walletId: string; chainId: number } }): Promise<{ count: number }>;
     createMany(args: { data: Array<Record<string, unknown>> }): Promise<{ count: number }>;
+  };
+  portfolioMaterializationState?: {
+    upsert(args: {
+      where: { walletId_chainId: { walletId: string; chainId: number } };
+      create: Record<string, unknown>;
+      update: Record<string, unknown>;
+    }): Promise<unknown>;
   };
   $transaction?<T>(callback: (client: MaterializeDbClient) => Promise<T>): Promise<T>;
 };
@@ -92,9 +103,11 @@ export type MaterializePortfolioPositionsReport = {
 
 export async function materializeCurrentPortfolioPositions(args: {
   wallet: { id: string; address: string; chainId: number };
+  provenance?: MaterializationProvenanceInput;
   db?: MaterializeDbClient;
 }): Promise<MaterializePortfolioPositionsReport> {
   const db = args.db ?? (getDb() as unknown as MaterializeDbClient);
+  const attemptedAt = new Date();
   const [tokens, ledgerEntries] = await Promise.all([
     db.token.findMany({ where: { chainId: args.wallet.chainId } }),
     db.ledgerEntry.findMany({
@@ -176,8 +189,8 @@ export async function materializeCurrentPortfolioPositions(args: {
         assetAddress: token?.isNative ? null : token?.addressLower ?? parseAssetAddress(assetId),
         balanceQuantity: scaledBigIntToDecimal(value),
         decimals: token?.decimals ?? null,
-        updatedFromBlock: null,
-        updatedToBlock: null,
+        updatedFromBlock: args.provenance?.updatedFromBlock ?? null,
+        updatedToBlock: args.provenance?.updatedToBlock ?? null,
       };
     });
 
@@ -208,8 +221,8 @@ export async function materializeCurrentPortfolioPositions(args: {
         position.token1NetQuantityScaled === null
           ? null
           : scaledBigIntToDecimal(position.token1NetQuantityScaled),
-      updatedFromBlock: null,
-      updatedToBlock: null,
+      updatedFromBlock: args.provenance?.updatedFromBlock ?? null,
+      updatedToBlock: args.provenance?.updatedToBlock ?? null,
     }));
 
   const stakeRows = Array.from(stakePositions.values())
@@ -260,18 +273,52 @@ export async function materializeCurrentPortfolioPositions(args: {
     };
   };
 
-  const persisted = db.$transaction ? await db.$transaction(persist) : await persist(db);
+  const sortedWarnings = Array.from(warnings).sort();
 
-  return {
-    wallet: args.wallet.address,
-    chainId: args.wallet.chainId,
-    ledgerEntriesProcessed: ledgerEntries.length,
-    tokenBalancesWritten: persisted.tokenCount,
-    lpPositionsWritten: persisted.lpCount,
-    stakePositionsWritten: persisted.stakeCount,
-    skippedCount,
-    warnings: Array.from(warnings).sort(),
-  };
+  try {
+    const persisted = db.$transaction ? await db.$transaction(persist) : await persist(db);
+    const latestMaterializedAt = new Date();
+
+    if (db.portfolioMaterializationState) {
+      await persistMaterializationState({
+        wallet: args.wallet,
+        provenance: args.provenance,
+        status: "COMPLETED",
+        completedSuccessfully: true,
+        attemptedAt,
+        latestMaterializedAt,
+        warnings: sortedWarnings,
+        errorMessage: null,
+        db,
+      });
+    }
+
+    return {
+      wallet: args.wallet.address,
+      chainId: args.wallet.chainId,
+      ledgerEntriesProcessed: ledgerEntries.length,
+      tokenBalancesWritten: persisted.tokenCount,
+      lpPositionsWritten: persisted.lpCount,
+      stakePositionsWritten: persisted.stakeCount,
+      skippedCount,
+      warnings: sortedWarnings,
+    };
+  } catch (error) {
+    if (db.portfolioMaterializationState) {
+      await persistMaterializationState({
+        wallet: args.wallet,
+        provenance: args.provenance,
+        status: "FAILED",
+        completedSuccessfully: false,
+        attemptedAt,
+        warnings: sortedWarnings,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        db,
+      });
+    }
+
+    throw error;
+  }
 }
 
 function accumulateLpPosition(args: {

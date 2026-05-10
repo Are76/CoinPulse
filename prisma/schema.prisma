@@ -69,6 +69,12 @@ enum PriceSourceType {
   DEXSCREENER
 }
 
+enum MaterializationStatus {
+  RUNNING
+  FAILED
+  COMPLETED
+}
+
 model Chain {
   id                Int                 @id
   slug              String              @unique
@@ -93,6 +99,7 @@ model Chain {
   portfolioTokenBalances PortfolioTokenBalance[]
   portfolioLpPositions PortfolioLpPosition[]
   portfolioStakePositions PortfolioStakePosition[]
+  portfolioMaterializationStates PortfolioMaterializationState[]
   priceObservations PriceObservation[]
   protocols         Protocol[]
   rpcRequestLogs    RpcRequestLog[]
@@ -115,6 +122,7 @@ model Wallet {
   portfolioTokenBalances PortfolioTokenBalance[]
   portfolioLpPositions PortfolioLpPosition[]
   portfolioStakePositions PortfolioStakePosition[]
+  portfolioMaterializationStates PortfolioMaterializationState[]
 
   @@unique([chainId, addressLower])
   @@index([chainId, addressLower])
@@ -550,6 +558,30 @@ model PortfolioStakePosition {
 
   @@unique([walletId, chainId, stakeKey])
   @@index([chainId, walletAddress])
+}
+
+model PortfolioMaterializationState {
+  id                    String                @id @default(cuid())
+  walletId              String
+  chainId               Int
+  status                MaterializationStatus
+  completedSuccessfully Boolean               @default(false)
+  lastAttemptedAt       DateTime
+  latestMaterializedAt  DateTime?
+  sourceLedgerFromBlock BigInt?
+  sourceLedgerToBlock   BigInt?
+  updatedFromBlock      BigInt?
+  updatedToBlock        BigInt?
+  warningCount          Int                   @default(0)
+  warningDetails        Json?
+  errorMessage          String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  wallet                Wallet                @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  chain                 Chain                 @relation(fields: [chainId], references: [id], onDelete: Restrict)
+
+  @@unique([walletId, chainId])
+  @@index([chainId, walletId])
 }
 
 model PriceObservation {
