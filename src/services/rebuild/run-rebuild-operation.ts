@@ -101,6 +101,10 @@ export async function runRebuildOperation(args: {
 
     const materialized = await materializePortfolio({
       wallet: args.wallet,
+      provenance: {
+        updatedFromBlock: args.fromBlock,
+        updatedToBlock: args.toBlock,
+      },
     });
 
     warningCount += materialized.warnings.length;

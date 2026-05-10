@@ -79,6 +79,18 @@ describe("runRebuildOperation", () => {
       warningCount: 1,
       warningDetails: ["rebuild-warning"],
     });
+    expect(materializeCurrentPortfolioPositions).toHaveBeenCalledTimes(1);
+    expect(materializeCurrentPortfolioPositions).toHaveBeenCalledWith({
+      wallet: {
+        id: "wallet-1",
+        address: "0x1111111111111111111111111111111111111111",
+        chainId: 369,
+      },
+      provenance: {
+        updatedFromBlock: 100n,
+        updatedToBlock: 200n,
+      },
+    });
     expect(updateRun).toHaveBeenNthCalledWith(3, {
       runId: "rebuild-run-1",
       status: "COMPLETED",

@@ -36,14 +36,35 @@ type StakePositionRecord = {
   updatedAt: Date;
 };
 
+type MaterializationStateRecord = {
+  walletId: string;
+  walletAddress: string;
+  chainId: number;
+  status: "RUNNING" | "FAILED" | "COMPLETED";
+  completedSuccessfully: boolean;
+  lastAttemptedAt: Date;
+  latestMaterializedAt: Date | null;
+  sourceLedgerFromBlock: bigint | null;
+  sourceLedgerToBlock: bigint | null;
+  updatedFromBlock: bigint | null;
+  updatedToBlock: bigint | null;
+  warningCount: number;
+  warningDetails: unknown;
+  errorMessage: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 function createMemoryDb(args?: {
   tokenBalances?: TokenBalanceRecord[];
   lpPositions?: LpPositionRecord[];
   stakePositions?: StakePositionRecord[];
+  materializationStates?: MaterializationStateRecord[];
 }) {
   const tokenBalances = args?.tokenBalances ?? [];
   const lpPositions = args?.lpPositions ?? [];
   const stakePositions = args?.stakePositions ?? [];
+  const materializationStates = args?.materializationStates ?? [];
 
   return new Proxy(
     {
@@ -60,6 +81,11 @@ function createMemoryDb(args?: {
       portfolioStakePosition: {
         async findMany() {
           return stakePositions;
+        },
+      },
+      portfolioMaterializationState: {
+        async findMany() {
+          return materializationStates;
         },
       },
     },
@@ -127,6 +153,26 @@ describe("getMaterializationDiagnosticsReport", () => {
             updatedAt: new Date("2026-05-10T09:07:00.000Z"),
           },
         ],
+        materializationStates: [
+          {
+            walletId: "wallet-1",
+            walletAddress: "0x1111111111111111111111111111111111111111",
+            chainId: 369,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-10T09:06:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-10T09:06:30.000Z"),
+            sourceLedgerFromBlock: 90n,
+            sourceLedgerToBlock: 130n,
+            updatedFromBlock: 95n,
+            updatedToBlock: 125n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+            createdAt: new Date("2026-05-10T09:06:30.000Z"),
+            updatedAt: new Date("2026-05-10T09:06:30.000Z"),
+          },
+        ],
       }) as never,
       now: new Date("2026-05-10T10:00:00.000Z"),
     });
@@ -138,9 +184,14 @@ describe("getMaterializationDiagnosticsReport", () => {
           walletId: "wallet-1",
           walletAddress: "0x1111111111111111111111111111111111111111",
           chainId: 369,
-          latestMaterializedAt: "2026-05-10T09:07:00.000Z",
-          updatedFromBlock: "100",
-          updatedToBlock: "120",
+          status: "COMPLETED",
+          completedSuccessfully: true,
+          lastAttemptedAt: "2026-05-10T09:06:00.000Z",
+          latestMaterializedAt: "2026-05-10T09:06:30.000Z",
+          sourceLedgerFromBlock: "90",
+          sourceLedgerToBlock: "130",
+          updatedFromBlock: "95",
+          updatedToBlock: "125",
           tokenBalanceCount: 1,
           lpPositionCount: 1,
           stakePositionCount: 1,
@@ -148,6 +199,7 @@ describe("getMaterializationDiagnosticsReport", () => {
           warningHistoryCount: null,
           warningHistoryAvailable: false,
           warnings: [],
+          errorMessage: null,
           hasNegativeBalances: false,
           negativeBalances: [],
         },
@@ -173,6 +225,26 @@ describe("getMaterializationDiagnosticsReport", () => {
             updatedAt: new Date("2026-05-10T09:05:00.000Z"),
           },
         ],
+        materializationStates: [
+          {
+            walletId: "wallet-1",
+            walletAddress: "0x1111111111111111111111111111111111111111",
+            chainId: 369,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-10T09:04:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-10T09:05:30.000Z"),
+            sourceLedgerFromBlock: 200n,
+            sourceLedgerToBlock: 220n,
+            updatedFromBlock: 200n,
+            updatedToBlock: 220n,
+            warningCount: 1,
+            warningDetails: ["negative-token-balance:chain:369:native:PLS:-0.25"],
+            errorMessage: null,
+            createdAt: new Date("2026-05-10T09:05:30.000Z"),
+            updatedAt: new Date("2026-05-10T09:05:30.000Z"),
+          },
+        ],
       }) as never,
       now: new Date("2026-05-10T10:00:00.000Z"),
     });
@@ -181,9 +253,14 @@ describe("getMaterializationDiagnosticsReport", () => {
       walletId: "wallet-1",
       walletAddress: "0x1111111111111111111111111111111111111111",
       chainId: 369,
-      latestMaterializedAt: "2026-05-10T09:05:00.000Z",
-      updatedFromBlock: null,
-      updatedToBlock: null,
+      status: "COMPLETED",
+      completedSuccessfully: true,
+      lastAttemptedAt: "2026-05-10T09:04:00.000Z",
+      latestMaterializedAt: "2026-05-10T09:05:30.000Z",
+      sourceLedgerFromBlock: "200",
+      sourceLedgerToBlock: "220",
+      updatedFromBlock: "200",
+      updatedToBlock: "220",
       tokenBalanceCount: 1,
       lpPositionCount: 0,
       stakePositionCount: 0,
@@ -196,6 +273,7 @@ describe("getMaterializationDiagnosticsReport", () => {
           message: "Negative materialized token balance for chain:369:native:PLS: -0.25",
         },
       ],
+      errorMessage: null,
       hasNegativeBalances: true,
       negativeBalances: [
         {
@@ -205,6 +283,195 @@ describe("getMaterializationDiagnosticsReport", () => {
           decimals: 18,
         },
       ],
+    });
+  });
+
+  it("reports persisted provenance even when no materialized rows currently exist", async () => {
+    const report = await getMaterializationDiagnosticsReport({
+      db: createMemoryDb({
+        materializationStates: [
+          {
+            walletId: "wallet-2",
+            walletAddress: "0x2222222222222222222222222222222222222222",
+            chainId: 369,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-10T09:10:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-10T09:10:30.000Z"),
+            sourceLedgerFromBlock: 300n,
+            sourceLedgerToBlock: 330n,
+            updatedFromBlock: 300n,
+            updatedToBlock: 330n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+            createdAt: new Date("2026-05-10T09:10:30.000Z"),
+            updatedAt: new Date("2026-05-10T09:10:30.000Z"),
+          },
+        ],
+      }) as never,
+      now: new Date("2026-05-10T10:00:00.000Z"),
+    });
+
+    expect(report.wallets).toEqual([
+      {
+        walletId: "wallet-2",
+        walletAddress: "0x2222222222222222222222222222222222222222",
+        chainId: 369,
+        status: "COMPLETED",
+        completedSuccessfully: true,
+        lastAttemptedAt: "2026-05-10T09:10:00.000Z",
+        latestMaterializedAt: "2026-05-10T09:10:30.000Z",
+        sourceLedgerFromBlock: "300",
+        sourceLedgerToBlock: "330",
+        updatedFromBlock: "300",
+        updatedToBlock: "330",
+        tokenBalanceCount: 0,
+        lpPositionCount: 0,
+        stakePositionCount: 0,
+        warningCount: 0,
+        warningHistoryCount: null,
+        warningHistoryAvailable: false,
+        warnings: [],
+        errorMessage: null,
+        hasNegativeBalances: false,
+        negativeBalances: [],
+      },
+    ]);
+  });
+
+  it("falls back to aggregated row timestamps and coverage when no persisted provenance row exists", async () => {
+    const report = await getMaterializationDiagnosticsReport({
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: "wallet-3",
+            walletAddress: "0x3333333333333333333333333333333333333333",
+            chainId: 369,
+            assetId: "chain:369:erc20:0xtokena",
+            assetAddress: "0xtokena",
+            balanceQuantity: "1",
+            decimals: 6,
+            updatedFromBlock: 150n,
+            updatedToBlock: 200n,
+            createdAt: new Date("2026-05-10T09:00:00.000Z"),
+            updatedAt: new Date("2026-05-10T09:01:00.000Z"),
+          },
+        ],
+        lpPositions: [
+          {
+            walletId: "wallet-3",
+            walletAddress: "0x3333333333333333333333333333333333333333",
+            chainId: 369,
+            lpAssetId: "chain:369:erc20:0xlp",
+            updatedFromBlock: 120n,
+            updatedToBlock: 210n,
+            createdAt: new Date("2026-05-10T09:02:00.000Z"),
+            updatedAt: new Date("2026-05-10T09:03:00.000Z"),
+          },
+        ],
+        stakePositions: [
+          {
+            walletId: "wallet-3",
+            walletAddress: "0x3333333333333333333333333333333333333333",
+            chainId: 369,
+            stakeKey: "stake-3",
+            createdAt: new Date("2026-05-10T09:04:00.000Z"),
+            updatedAt: new Date("2026-05-10T09:06:00.000Z"),
+          },
+        ],
+      }) as never,
+      now: new Date("2026-05-10T10:00:00.000Z"),
+    });
+
+    expect(report.wallets).toEqual([
+      {
+        walletId: "wallet-3",
+        walletAddress: "0x3333333333333333333333333333333333333333",
+        chainId: 369,
+        status: null,
+        completedSuccessfully: null,
+        lastAttemptedAt: null,
+        latestMaterializedAt: "2026-05-10T09:06:00.000Z",
+        sourceLedgerFromBlock: null,
+        sourceLedgerToBlock: null,
+        updatedFromBlock: "120",
+        updatedToBlock: "210",
+        tokenBalanceCount: 1,
+        lpPositionCount: 1,
+        stakePositionCount: 1,
+        warningCount: 0,
+        warningHistoryCount: null,
+        warningHistoryAvailable: false,
+        warnings: [],
+        errorMessage: null,
+        hasNegativeBalances: false,
+        negativeBalances: [],
+      },
+    ]);
+  });
+
+  it("preserves non-balance persisted warnings and surfaces persisted failure message", async () => {
+    const report = await getMaterializationDiagnosticsReport({
+      db: createMemoryDb({
+        materializationStates: [
+          {
+            walletId: "wallet-4",
+            walletAddress: "0x4444444444444444444444444444444444444444",
+            chainId: 369,
+            status: "FAILED",
+            completedSuccessfully: false,
+            lastAttemptedAt: new Date("2026-05-10T09:10:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-10T09:00:00.000Z"),
+            sourceLedgerFromBlock: null,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: 50n,
+            updatedToBlock: 90n,
+            warningCount: 2,
+            warningDetails: [
+              "negative-token-balance:chain:369:native:PLS:-0.25",
+              "stake-key-missing:null",
+            ],
+            errorMessage: "materialization exploded",
+            createdAt: new Date("2026-05-10T09:10:00.000Z"),
+            updatedAt: new Date("2026-05-10T09:10:00.000Z"),
+          },
+        ],
+      }) as never,
+      now: new Date("2026-05-10T10:00:00.000Z"),
+    });
+
+    expect(report.wallets[0]).toEqual({
+      walletId: "wallet-4",
+      walletAddress: "0x4444444444444444444444444444444444444444",
+      chainId: 369,
+      status: "FAILED",
+      completedSuccessfully: false,
+      lastAttemptedAt: "2026-05-10T09:10:00.000Z",
+      latestMaterializedAt: "2026-05-10T09:00:00.000Z",
+      sourceLedgerFromBlock: null,
+      sourceLedgerToBlock: null,
+      updatedFromBlock: "50",
+      updatedToBlock: "90",
+      tokenBalanceCount: 0,
+      lpPositionCount: 0,
+      stakePositionCount: 0,
+      warningCount: 2,
+      warningHistoryCount: null,
+      warningHistoryAvailable: false,
+      warnings: [
+        {
+          code: "negative_token_balance",
+          message: "Negative materialized token balance for chain:369:native:PLS: -0.25",
+        },
+        {
+          code: "generic_persisted_warning",
+          message: "stake-key-missing:null",
+        },
+      ],
+      errorMessage: "materialization exploded",
+      hasNegativeBalances: false,
+      negativeBalances: [],
     });
   });
 
