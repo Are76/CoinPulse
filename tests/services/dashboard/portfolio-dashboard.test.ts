@@ -78,6 +78,22 @@ type LedgerEntryRecord = {
   sourceLogKey: string | null;
 };
 
+type MaterializationStateRecord = {
+  walletId: string;
+  chainId: number;
+  status: "RUNNING" | "FAILED" | "COMPLETED";
+  completedSuccessfully: boolean;
+  lastAttemptedAt: Date;
+  latestMaterializedAt: Date | null;
+  sourceLedgerFromBlock: bigint | null;
+  sourceLedgerToBlock: bigint | null;
+  updatedFromBlock: bigint | null;
+  updatedToBlock: bigint | null;
+  warningCount: number;
+  warningDetails: unknown;
+  errorMessage: string | null;
+};
+
 function createPriceObservation(
   overrides: Partial<PersistedPriceObservation> = {},
 ): PersistedPriceObservation {
@@ -147,11 +163,13 @@ function createMemoryDb(overrides?: {
   lpPositions?: LpPositionRecord[];
   stakePositions?: StakePositionRecord[];
   ledgerEntries?: LedgerEntryRecord[];
+  materializationStates?: MaterializationStateRecord[];
 }) {
   const tokenBalances = overrides?.tokenBalances ?? [];
   const lpPositions = overrides?.lpPositions ?? [];
   const stakePositions = overrides?.stakePositions ?? [];
   const ledgerEntries = overrides?.ledgerEntries ?? [];
+  const materializationStates = overrides?.materializationStates ?? [];
 
   return new Proxy(
     {
@@ -184,6 +202,19 @@ function createMemoryDb(overrides?: {
           return ledgerEntries.filter(
             (row) =>
               row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+          );
+        },
+      },
+      portfolioMaterializationState: {
+        async findUnique(args: {
+          where: { walletId_chainId: { walletId: string; chainId: number } };
+        }) {
+          return (
+            materializationStates.find(
+              (row) =>
+                row.walletId === args.where.walletId_chainId.walletId &&
+                row.chainId === args.where.walletId_chainId.chainId,
+            ) ?? null
           );
         },
       },
@@ -251,6 +282,183 @@ describe("assemblePortfolioDashboard", () => {
         }),
       }),
     ]);
+    expect(result.materialization).toEqual({
+      status: null,
+      completedSuccessfully: null,
+      lastAttemptedAt: null,
+      latestMaterializedAt: null,
+      updatedFromBlock: null,
+      updatedToBlock: null,
+      sourceLedgerFromBlock: null,
+      sourceLedgerToBlock: null,
+      warningCount: 0,
+      warnings: [],
+      errorMessage: null,
+      hasNegativeBalances: false,
+      negativeBalances: [],
+    });
+  });
+
+  it("includes persisted materialization metadata when provenance exists", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: null,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    expect(result.materialization).toEqual({
+      status: "COMPLETED",
+      completedSuccessfully: true,
+      lastAttemptedAt: "2026-05-08T12:03:00.000Z",
+      latestMaterializedAt: "2026-05-08T12:03:30.000Z",
+      updatedFromBlock: "100",
+      updatedToBlock: "120",
+      sourceLedgerFromBlock: null,
+      sourceLedgerToBlock: null,
+      warningCount: 0,
+      warnings: [],
+      errorMessage: null,
+      hasNegativeBalances: false,
+      negativeBalances: [],
+    });
+  });
+
+  it("surfaces failed materialization status, warnings, and error without changing portfolio numbers", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: "chain:369:native:PLS",
+            assetAddress: null,
+            balanceQuantity: "-0.25",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "FAILED",
+            completedSuccessfully: false,
+            lastAttemptedAt: new Date("2026-05-08T12:04:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: null,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 2,
+            warningDetails: [
+              "negative-token-balance:chain:369:native:PLS:-0.25",
+              "stake-key-missing:null",
+            ],
+            errorMessage: "materialization exploded",
+          },
+        ],
+      }) as never,
+      resolvePrice: async ({ assetId }) =>
+        assetId === TOKEN_ASSET
+          ? createResolvedPrice()
+          : createResolvedPrice({
+              selected: createPriceObservation({
+                assetId: "chain:369:native:PLS",
+                assetAddress: null,
+                price: "1",
+              }),
+            }),
+      calculatePnl: async (args) =>
+        createPnlResult({
+          assetId: args.assetId,
+          holdingsQuantity: args.assetId === TOKEN_ASSET ? "5" : "-0.25",
+          markPrice: args.assetId === TOKEN_ASSET ? "2" : "1",
+          unrealizedPnl: args.assetId === TOKEN_ASSET ? "2.5" : "-0.25",
+        }),
+    });
+
+    expect(result.summary.totalValueQuote).toBe("9.75");
+    expect(result.materialization).toEqual({
+      status: "FAILED",
+      completedSuccessfully: false,
+      lastAttemptedAt: "2026-05-08T12:04:00.000Z",
+      latestMaterializedAt: "2026-05-08T12:03:30.000Z",
+      updatedFromBlock: "100",
+      updatedToBlock: "120",
+      sourceLedgerFromBlock: null,
+      sourceLedgerToBlock: null,
+      warningCount: 2,
+      warnings: [
+        {
+          code: "negative_token_balance",
+          message: "Negative materialized token balance for chain:369:native:PLS: -0.25",
+        },
+        {
+          code: "generic_persisted_warning",
+          message: "stake-key-missing:null",
+        },
+      ],
+      errorMessage: "materialization exploded",
+      hasNegativeBalances: true,
+      negativeBalances: [
+        {
+          assetId: "chain:369:native:PLS",
+          assetAddress: null,
+          balanceQuantity: "-0.25",
+          decimals: 18,
+        },
+      ],
+    });
   });
 
   it("returns an explicit unpriced token position status", async () => {
