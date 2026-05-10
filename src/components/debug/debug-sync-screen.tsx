@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 import { EmptyState } from "@/components/ui/data-state/empty-state";
 import { ErrorState } from "@/components/ui/data-state/error-state";
@@ -17,14 +17,14 @@ import { TimestampLabel } from "@/components/ui/value/timestamp-label";
 import {
   ApiClientError,
   SOURCE_FAMILY_OPTIONS,
-  fetchDebugHealth,
-  fetchDebugStatus,
   runManualSync,
   runRebuild,
   type DebugStatusReportDto,
   type HealthReportDto,
   type SourceFamily,
 } from "@/lib/api/debug-client";
+import { useDebugHealthQuery } from "@/lib/query/use-debug-health-query";
+import { useDebugStatusQuery } from "@/lib/query/use-debug-status-query";
 
 const DEFAULT_CHAIN_ID = "369";
 
@@ -37,7 +37,12 @@ type OperationState =
   | { kind: "idle" }
   | { kind: "loading"; operation: "sync" | "rebuild" }
   | { kind: "success"; operation: "sync" | "rebuild"; payload: unknown }
-  | { kind: "error"; operation: "sync" | "rebuild"; message: string; details: string[] };
+  | {
+      kind: "error";
+      operation: "sync" | "rebuild";
+      message: string;
+      details: string[];
+    };
 
 export function DebugSyncScreen() {
   const [walletAddress, setWalletAddress] = useState("");
@@ -53,48 +58,19 @@ export function DebugSyncScreen() {
   const [policyLabel, setPolicyLabel] = useState("frontend-debug");
   const [rebuildFromBlock, setRebuildFromBlock] = useState("");
   const [rebuildToBlock, setRebuildToBlock] = useState("");
-  const [metaState, setMetaState] = useState<MetaState>({ kind: "loading" });
   const [operationState, setOperationState] = useState<OperationState>({
     kind: "idle",
   });
 
-  useEffect(() => {
-    let active = true;
+  const healthQuery = useDebugHealthQuery();
+  const statusQuery = useDebugStatusQuery();
 
-    async function loadReports() {
-      try {
-        const [health, status] = await Promise.all([
-          fetchDebugHealth(),
-          fetchDebugStatus(),
-        ]);
-
-        if (!active) {
-          return;
-        }
-
-        setMetaState({
-          kind: "ready",
-          health,
-          status,
-        });
-      } catch (error) {
-        if (!active) {
-          return;
-        }
-
-        setMetaState({
-          kind: "error",
-          message: getErrorMessage(error),
-        });
-      }
-    }
-
-    void loadReports();
-
-    return () => {
-      active = false;
-    };
-  }, []);
+  const metaState = getMetaState({
+    health: healthQuery.data,
+    healthError: healthQuery.error,
+    status: statusQuery.data,
+    statusError: statusQuery.error,
+  });
 
   async function handleManualSync(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -499,6 +475,30 @@ export function DebugSyncScreen() {
       <OperationStatePanel state={operationState} />
     </PageContainer>
   );
+}
+
+function getMetaState({
+  health,
+  healthError,
+  status,
+  statusError,
+}: {
+  health: HealthReportDto | undefined;
+  healthError: Error | null;
+  status: DebugStatusReportDto | undefined;
+  statusError: Error | null;
+}): MetaState {
+  if (health && status) {
+    return { kind: "ready", health, status };
+  }
+
+  const error = healthError ?? statusError;
+
+  if (error) {
+    return { kind: "error", message: getErrorMessage(error) };
+  }
+
+  return { kind: "loading" };
 }
 
 function OperationStatePanel({ state }: { state: OperationState }) {
