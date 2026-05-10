@@ -6,6 +6,10 @@ import { env } from "@/lib/env";
 import { serverEnv } from "@/lib/server-env";
 import { SUPPORTED_CHAINS } from "@/config/chains";
 import { getOperationStateReport, type OperationStateReport } from "@/services/debug/operation-state";
+import {
+  getMaterializationDiagnosticsReport,
+  type MaterializationDiagnosticsReport,
+} from "@/services/portfolio";
 
 export type DependencyState = "ready" | "degraded" | "unavailable";
 
@@ -42,6 +46,7 @@ export type DebugStatusReport = {
     liveAdaptersEnabled: false;
   };
   operationState: OperationStateReport;
+  materializationDiagnostics: MaterializationDiagnosticsReport;
 };
 
 type HealthDependencies = {
@@ -103,6 +108,7 @@ export async function getDebugStatusReport(): Promise<DebugStatusReport> {
       liveAdaptersEnabled: false,
     },
     operationState: await getOperationStateReport(),
+    materializationDiagnostics: await getMaterializationDiagnosticsReport(),
   };
 }
 
