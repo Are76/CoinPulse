@@ -1,8 +1,7 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 
 import { PageContainer } from "@/components/ui/page-container";
 import {
@@ -18,21 +17,21 @@ import {
   WalletQueryForm,
 } from "@/components/dashboard/dashboard-presenters";
 import {
-  ApiClientError,
   fetchDebugHealth,
   fetchDebugStatus,
 } from "@/lib/api/dashboard-client";
+import {
+  getDashboardErrorMessage,
+  getDashboardMetaErrorMessage,
+  resolveDashboardSubmission,
+  type SubmittedParams,
+} from "@/components/dashboard/dashboard-screen-helpers";
 import { queryKeys } from "@/lib/query/query-keys";
 import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
 
 const DEFAULT_CHAIN_ID = "369";
 const DEFAULT_QUOTE_ASSET = "fiat:usd";
 const DASHBOARD_SCHEMA_VERSION = "v1" as const;
-
-type SubmittedParams = {
-  walletAddress: string;
-  chainId: number;
-};
 
 export function DashboardScreen() {
   const queryClient = useQueryClient();
@@ -44,6 +43,7 @@ export function DashboardScreen() {
   const healthQuery = useQuery({
     queryKey: queryKeys.debug.health(),
     queryFn: fetchDebugHealth,
+    retry: false,
     staleTime: 15_000,
     gcTime: 5 * 60_000,
   });
@@ -51,6 +51,7 @@ export function DashboardScreen() {
   const statusQuery = useQuery({
     queryKey: queryKeys.debug.status(),
     queryFn: fetchDebugStatus,
+    retry: false,
     staleTime: 10_000,
     gcTime: 5 * 60_000,
   });
@@ -64,19 +65,18 @@ export function DashboardScreen() {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
-    const parsedChainId = Number(chainId);
-    if (!Number.isInteger(parsedChainId) || parsedChainId <= 0) {
-      setValidationError("Chain ID must be a positive integer.");
+    const submission = resolveDashboardSubmission({
+      walletAddress,
+      chainId,
+    });
+    if (submission.validationError !== null) {
+      setValidationError(submission.validationError);
       setSubmittedParams(null);
       return;
     }
 
     setValidationError(null);
-    const params: SubmittedParams = {
-      walletAddress: walletAddress.trim(),
-      chainId: parsedChainId,
-    };
+    const params: SubmittedParams = submission.submittedParams;
 
     // Remove any cached data for this key so the loading state is always shown
     // on an explicit submit, preserving the original always-shows-loading behavior.
@@ -94,13 +94,15 @@ export function DashboardScreen() {
 
   const health = healthQuery.data ?? null;
   const debugStatus = statusQuery.data ?? null;
-  const metaError =
-    healthQuery.isError || statusQuery.isError ? "Could not load backend status." : null;
+  const metaError = getDashboardMetaErrorMessage({
+    healthError: healthQuery.isError ? healthQuery.error : null,
+    statusError: statusQuery.isError ? statusQuery.error : null,
+  });
 
   const isIdle = submittedParams === null && validationError === null;
   const errorMessage =
     validationError ??
-    (dashboardQuery.isError ? getErrorMessage(dashboardQuery.error) : null);
+    (dashboardQuery.isError ? getDashboardErrorMessage(dashboardQuery.error) : null);
 
   return (
     <PageContainer className="flex flex-col gap-6">
@@ -140,14 +142,4 @@ export function DashboardScreen() {
       ) : null}
     </PageContainer>
   );
-}
-
-function getErrorMessage(error: unknown) {
-  if (error instanceof ApiClientError) {
-    return error.message;
-  }
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return "Unknown frontend error.";
 }

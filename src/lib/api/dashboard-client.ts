@@ -75,12 +75,16 @@ export async function fetchPortfolioDashboard(args: {
   walletAddress: string;
   chainId: number;
   quoteAsset?: string;
+  asOf?: string | null;
 }) {
   const params = new URLSearchParams({
     walletAddress: args.walletAddress,
     chainId: String(args.chainId),
     quoteAsset: args.quoteAsset ?? "fiat:usd",
   });
+  if (args.asOf !== undefined && args.asOf !== null) {
+    params.set("asOf", args.asOf);
+  }
 
   const response = await fetchJson<ApiDataResponse<PortfolioDashboardDto>>(
     `/api/portfolio/dashboard?${params.toString()}`,

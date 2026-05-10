@@ -9,7 +9,7 @@ import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
 function makeWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: {
-      queries: { retry: false },
+      queries: { retryDelay: 1 },
     },
   });
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -187,5 +187,48 @@ describe("useDashboardQuery", () => {
         quoteAsset: "fiat:usd",
       }),
     );
+  });
+
+  it("forwards asOf to fetchPortfolioDashboard when provided", async () => {
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
+
+    const { result } = renderHook(
+      () =>
+        useDashboardQuery({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          asOf: "2026-02-02T00:00:00.000Z",
+        }),
+      { wrapper: makeWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(dashboardClient.fetchPortfolioDashboard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asOf: "2026-02-02T00:00:00.000Z",
+      }),
+    );
+  });
+
+  it("does not retry failed dashboard queries", async () => {
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockRejectedValue(
+      new dashboardClient.ApiClientError({
+        status: 400,
+        code: "INVALID_INPUT",
+        message: "Invalid request input.",
+      }),
+    );
+
+    const { result } = renderHook(
+      () =>
+        useDashboardQuery({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+        }),
+      { wrapper: makeWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(dashboardClient.fetchPortfolioDashboard).toHaveBeenCalledTimes(1);
   });
 });

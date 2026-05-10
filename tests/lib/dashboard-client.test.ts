@@ -40,6 +40,29 @@ describe("dashboard client", () => {
     );
   });
 
+  it("forwards asOf when requesting the dashboard route", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: { schemaVersion: "v1", tokenPositions: [], lpPositions: [], stakePositions: [] },
+        }),
+        { status: 200 },
+      ),
+    ) as typeof fetch;
+
+    await fetchPortfolioDashboard({
+      walletAddress: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+      quoteAsset: "fiat:usd",
+      asOf: "2026-02-02T00:00:00.000Z",
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/portfolio/dashboard?walletAddress=0x1111111111111111111111111111111111111111&chainId=369&quoteAsset=fiat%3Ausd&asOf=2026-02-02T00%3A00%3A00.000Z",
+      expect.any(Object),
+    );
+  });
+
   it("throws structured API errors", async () => {
     global.fetch = vi.fn().mockResolvedValue(
       new Response(

@@ -46,8 +46,10 @@ export function useDashboardQuery({
         walletAddress: walletAddress.trim(),
         chainId,
         quoteAsset,
+        asOf,
       }),
     enabled: enabled && walletAddress.trim().length > 0,
+    retry: false,
     staleTime: DASHBOARD_STALE_TIME,
     gcTime: DASHBOARD_GC_TIME,
   });
