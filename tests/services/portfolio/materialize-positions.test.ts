@@ -98,6 +98,7 @@ function createMemoryDb() {
   const portfolioLpPositions = new Map<string, Record<string, unknown>>();
   const portfolioStakePositions = new Map<string, Record<string, unknown>>();
   const portfolioMaterializationStates = new Map<string, MaterializationStateRecord>();
+  let failTokenBalanceCreateMany: Error | null = null;
 
   const db = {
     token: {
@@ -160,6 +161,9 @@ function createMemoryDb() {
         return { count };
       },
       async createMany(args: { data: Array<Record<string, unknown>> }) {
+        if (failTokenBalanceCreateMany) {
+          throw failTokenBalanceCreateMany;
+        }
         for (const record of args.data) {
           portfolioTokenBalances.set(
             `${record.walletId}:${record.chainId}:${record.assetId}`,
@@ -256,6 +260,9 @@ function createMemoryDb() {
     portfolioLpPositions,
     portfolioStakePositions,
     portfolioMaterializationStates,
+    setFailTokenBalanceCreateMany(error: Error | null) {
+      failTokenBalanceCreateMany = error;
+    },
   };
 }
 
@@ -446,8 +453,6 @@ describe("materializeCurrentPortfolioPositions", () => {
       await materializeCurrentPortfolioPositions({
         wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
         provenance: {
-          sourceLedgerFromBlock: 100n,
-          sourceLedgerToBlock: 120n,
           updatedFromBlock: 100n,
           updatedToBlock: 120n,
         },
@@ -465,8 +470,8 @@ describe("materializeCurrentPortfolioPositions", () => {
         completedSuccessfully: true,
         lastAttemptedAt: new Date("2026-05-10T12:00:00.000Z"),
         latestMaterializedAt: new Date("2026-05-10T12:00:00.000Z"),
-        sourceLedgerFromBlock: 100n,
-        sourceLedgerToBlock: 120n,
+        sourceLedgerFromBlock: null,
+        sourceLedgerToBlock: null,
         updatedFromBlock: 100n,
         updatedToBlock: 120n,
         warningCount: 0,
@@ -645,8 +650,6 @@ describe("materializeCurrentPortfolioPositions", () => {
       await materializeCurrentPortfolioPositions({
         wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
         provenance: {
-          sourceLedgerFromBlock: 100n,
-          sourceLedgerToBlock: 120n,
           updatedFromBlock: 100n,
           updatedToBlock: 120n,
         },
@@ -657,8 +660,6 @@ describe("materializeCurrentPortfolioPositions", () => {
       await materializeCurrentPortfolioPositions({
         wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
         provenance: {
-          sourceLedgerFromBlock: 121n,
-          sourceLedgerToBlock: 150n,
           updatedFromBlock: 121n,
           updatedToBlock: 150n,
         },
@@ -670,8 +671,8 @@ describe("materializeCurrentPortfolioPositions", () => {
         completedSuccessfully: true,
         lastAttemptedAt: new Date("2026-05-10T12:05:00.000Z"),
         latestMaterializedAt: new Date("2026-05-10T12:05:00.000Z"),
-        sourceLedgerFromBlock: 121n,
-        sourceLedgerToBlock: 150n,
+        sourceLedgerFromBlock: null,
+        sourceLedgerToBlock: null,
         updatedFromBlock: 121n,
         updatedToBlock: 150n,
       });
@@ -680,6 +681,63 @@ describe("materializeCurrentPortfolioPositions", () => {
       ).toMatchObject({
         updatedFromBlock: 121n,
         updatedToBlock: 150n,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps successful materialization coverage when a later attempt fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const stores = createMemoryDb();
+      seedTokens(stores.tokens);
+      await seedLedger(stores.db, [
+        createDraft({
+          txHash: "0xtransfer",
+          actionGroupKey: "g1",
+          dedupeKey: "d1",
+          assetId: "chain:369:erc20:0xtokena",
+          quantity: "1",
+          entryType: "RECEIVE",
+          sourceLogKey: "log:0xtransfer:receive",
+        }),
+      ]);
+
+      vi.setSystemTime(new Date("2026-05-10T12:00:00.000Z"));
+      await materializeCurrentPortfolioPositions({
+        wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+        provenance: {
+          updatedFromBlock: 100n,
+          updatedToBlock: 120n,
+        },
+        db: stores.db as never,
+      });
+
+      stores.setFailTokenBalanceCreateMany(new Error("persist exploded"));
+      vi.setSystemTime(new Date("2026-05-10T12:05:00.000Z"));
+
+      await expect(
+        materializeCurrentPortfolioPositions({
+          wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+          provenance: {
+            updatedFromBlock: 121n,
+            updatedToBlock: 150n,
+          },
+          db: stores.db as never,
+        }),
+      ).rejects.toThrow("persist exploded");
+
+      expect(stores.portfolioMaterializationStates.get(`${WALLET_ID}:${CHAIN_ID}`)).toMatchObject({
+        status: "FAILED",
+        completedSuccessfully: false,
+        lastAttemptedAt: new Date("2026-05-10T12:05:00.000Z"),
+        latestMaterializedAt: new Date("2026-05-10T12:00:00.000Z"),
+        sourceLedgerFromBlock: null,
+        sourceLedgerToBlock: null,
+        updatedFromBlock: 100n,
+        updatedToBlock: 120n,
+        errorMessage: "persist exploded",
       });
     } finally {
       vi.useRealTimers();

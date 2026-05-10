@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 export type MaterializationProvenanceInput = {
   sourceLedgerFromBlock?: bigint | null;
   sourceLedgerToBlock?: bigint | null;
+  sourceLedgerCoverageExact?: boolean;
   updatedFromBlock?: bigint | null;
   updatedToBlock?: bigint | null;
 };
@@ -61,6 +62,40 @@ export async function persistMaterializationState(args: {
   if (!db.portfolioMaterializationState) {
     throw new Error("materialization provenance persistence is unavailable");
   }
+  const sourceLedgerCoverage =
+    args.status === "COMPLETED" && args.provenance?.sourceLedgerCoverageExact
+      ? {
+          sourceLedgerFromBlock: args.provenance?.sourceLedgerFromBlock ?? null,
+          sourceLedgerToBlock: args.provenance?.sourceLedgerToBlock ?? null,
+        }
+      : {};
+  const sourceLedgerCoverageForCreate =
+    args.status === "COMPLETED" && args.provenance?.sourceLedgerCoverageExact
+      ? {
+          sourceLedgerFromBlock: args.provenance?.sourceLedgerFromBlock ?? null,
+          sourceLedgerToBlock: args.provenance?.sourceLedgerToBlock ?? null,
+        }
+      : {
+          sourceLedgerFromBlock: null,
+          sourceLedgerToBlock: null,
+        };
+  const updatedCoverage =
+    args.status === "COMPLETED"
+      ? {
+          updatedFromBlock: args.provenance?.updatedFromBlock ?? null,
+          updatedToBlock: args.provenance?.updatedToBlock ?? null,
+        }
+      : {};
+  const updatedCoverageForCreate =
+    args.status === "COMPLETED"
+      ? {
+          updatedFromBlock: args.provenance?.updatedFromBlock ?? null,
+          updatedToBlock: args.provenance?.updatedToBlock ?? null,
+        }
+      : {
+          updatedFromBlock: null,
+          updatedToBlock: null,
+        };
 
   await db.portfolioMaterializationState.upsert({
     where: {
@@ -76,10 +111,8 @@ export async function persistMaterializationState(args: {
       completedSuccessfully: args.completedSuccessfully,
       lastAttemptedAt: attemptedAt,
       latestMaterializedAt: args.latestMaterializedAt ?? null,
-      sourceLedgerFromBlock: args.provenance?.sourceLedgerFromBlock ?? null,
-      sourceLedgerToBlock: args.provenance?.sourceLedgerToBlock ?? null,
-      updatedFromBlock: args.provenance?.updatedFromBlock ?? null,
-      updatedToBlock: args.provenance?.updatedToBlock ?? null,
+      ...sourceLedgerCoverageForCreate,
+      ...updatedCoverageForCreate,
       warningCount: args.warnings.length,
       warningDetails: [...args.warnings],
       errorMessage: args.errorMessage ?? null,
@@ -91,10 +124,8 @@ export async function persistMaterializationState(args: {
       ...(args.latestMaterializedAt !== undefined
         ? { latestMaterializedAt: args.latestMaterializedAt }
         : {}),
-      sourceLedgerFromBlock: args.provenance?.sourceLedgerFromBlock ?? null,
-      sourceLedgerToBlock: args.provenance?.sourceLedgerToBlock ?? null,
-      updatedFromBlock: args.provenance?.updatedFromBlock ?? null,
-      updatedToBlock: args.provenance?.updatedToBlock ?? null,
+      ...sourceLedgerCoverage,
+      ...updatedCoverage,
       warningCount: args.warnings.length,
       warningDetails: [...args.warnings],
       errorMessage: args.errorMessage ?? null,

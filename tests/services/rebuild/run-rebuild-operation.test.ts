@@ -79,6 +79,7 @@ describe("runRebuildOperation", () => {
       warningCount: 1,
       warningDetails: ["rebuild-warning"],
     });
+    expect(materializeCurrentPortfolioPositions).toHaveBeenCalledTimes(1);
     expect(materializeCurrentPortfolioPositions).toHaveBeenCalledWith({
       wallet: {
         id: "wallet-1",
@@ -86,8 +87,6 @@ describe("runRebuildOperation", () => {
         chainId: 369,
       },
       provenance: {
-        sourceLedgerFromBlock: 100n,
-        sourceLedgerToBlock: 200n,
         updatedFromBlock: 100n,
         updatedToBlock: 200n,
       },

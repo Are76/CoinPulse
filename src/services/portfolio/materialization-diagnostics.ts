@@ -80,7 +80,9 @@ type MaterializationDiagnosticsDbClient = {
   };
 };
 
-export type MaterializationWarningCode = "negative_token_balance";
+export type MaterializationWarningCode =
+  | "negative_token_balance"
+  | "generic_persisted_warning";
 
 export type MaterializationWarning = {
   code: MaterializationWarningCode;
@@ -113,6 +115,7 @@ export type WalletMaterializationDiagnostics = {
   warningHistoryCount: null;
   warningHistoryAvailable: false;
   warnings: MaterializationWarning[];
+  errorMessage: string | null;
   hasNegativeBalances: boolean;
   negativeBalances: NegativeBalanceDiagnostic[];
 };
@@ -139,6 +142,8 @@ type WalletAccumulator = {
   stakePositionCount: number;
   negativeBalances: NegativeBalanceDiagnostic[];
   persistedWarnings: MaterializationWarning[];
+  errorMessage: string | null;
+  hasPersistedState: boolean;
 };
 
 export async function getMaterializationDiagnosticsReport(args: {
@@ -174,23 +179,24 @@ export async function getMaterializationDiagnosticsReport(args: {
     wallet.status = row.status;
     wallet.completedSuccessfully = row.completedSuccessfully;
     wallet.lastAttemptedAt = row.lastAttemptedAt;
+    wallet.hasPersistedState = true;
     wallet.latestMaterializedAt = row.latestMaterializedAt ?? wallet.latestMaterializedAt;
     wallet.sourceLedgerFromBlock = row.sourceLedgerFromBlock;
     wallet.sourceLedgerToBlock = row.sourceLedgerToBlock;
     wallet.updatedFromBlock = row.updatedFromBlock ?? wallet.updatedFromBlock;
     wallet.updatedToBlock = row.updatedToBlock ?? wallet.updatedToBlock;
     wallet.persistedWarnings = normalizePersistedWarnings(row.warningDetails);
+    wallet.errorMessage = row.errorMessage;
   }
 
   for (const row of tokenBalances) {
     const wallet = getOrCreateWalletAccumulator(wallets, row);
     wallet.tokenBalanceCount += 1;
-    wallet.latestMaterializedAt =
-      wallet.latestMaterializedAt ?? row.updatedAt ?? row.createdAt;
-    wallet.updatedFromBlock =
-      wallet.updatedFromBlock ?? row.updatedFromBlock;
-    wallet.updatedToBlock =
-      wallet.updatedToBlock ?? row.updatedToBlock;
+    if (!wallet.hasPersistedState) {
+      wallet.latestMaterializedAt = maxDate(wallet.latestMaterializedAt, row.updatedAt ?? row.createdAt);
+      wallet.updatedFromBlock = minBigInt(wallet.updatedFromBlock, row.updatedFromBlock);
+      wallet.updatedToBlock = maxBigInt(wallet.updatedToBlock, row.updatedToBlock);
+    }
 
     const balanceQuantity = toStringValue(row.balanceQuantity);
     if (isNegativeDecimal(balanceQuantity)) {
@@ -206,19 +212,19 @@ export async function getMaterializationDiagnosticsReport(args: {
   for (const row of lpPositions) {
     const wallet = getOrCreateWalletAccumulator(wallets, row);
     wallet.lpPositionCount += 1;
-    wallet.latestMaterializedAt =
-      wallet.latestMaterializedAt ?? row.updatedAt ?? row.createdAt;
-    wallet.updatedFromBlock =
-      wallet.updatedFromBlock ?? row.updatedFromBlock;
-    wallet.updatedToBlock =
-      wallet.updatedToBlock ?? row.updatedToBlock;
+    if (!wallet.hasPersistedState) {
+      wallet.latestMaterializedAt = maxDate(wallet.latestMaterializedAt, row.updatedAt ?? row.createdAt);
+      wallet.updatedFromBlock = minBigInt(wallet.updatedFromBlock, row.updatedFromBlock);
+      wallet.updatedToBlock = maxBigInt(wallet.updatedToBlock, row.updatedToBlock);
+    }
   }
 
   for (const row of stakePositions) {
     const wallet = getOrCreateWalletAccumulator(wallets, row);
     wallet.stakePositionCount += 1;
-    wallet.latestMaterializedAt =
-      wallet.latestMaterializedAt ?? row.updatedAt ?? row.createdAt;
+    if (!wallet.hasPersistedState) {
+      wallet.latestMaterializedAt = maxDate(wallet.latestMaterializedAt, row.updatedAt ?? row.createdAt);
+    }
   }
 
   return {
@@ -262,6 +268,7 @@ export async function getMaterializationDiagnosticsReport(args: {
           warningHistoryCount: null,
           warningHistoryAvailable: false as const,
           warnings,
+          errorMessage: wallet.errorMessage,
           hasNegativeBalances: negativeBalances.length > 0,
           negativeBalances,
         };
@@ -296,6 +303,8 @@ function getOrCreateWalletAccumulator(
     stakePositionCount: 0,
     negativeBalances: [],
     persistedWarnings: [],
+    errorMessage: null,
+    hasPersistedState: false,
   };
   wallets.set(key, created);
   return created;
@@ -307,7 +316,7 @@ function normalizePersistedWarnings(value: unknown): MaterializationWarning[] {
   }
 
   return value
-    .flatMap((item) => {
+    .flatMap<MaterializationWarning>((item) => {
       if (typeof item !== "string") {
         return [];
       }
@@ -327,7 +336,12 @@ function normalizePersistedWarnings(value: unknown): MaterializationWarning[] {
           },
         ];
       }
-      return [];
+      return [
+        {
+          code: "generic_persisted_warning" as const,
+          message: item,
+        },
+      ];
     })
     .sort((left, right) => left.message.localeCompare(right.message));
 }
@@ -345,6 +359,36 @@ function mergeWarnings(
 
 function bigintToString(value: bigint | null) {
   return value === null ? null : value.toString();
+}
+
+function maxDate(current: Date | null, candidate: Date | null) {
+  if (!candidate) {
+    return current;
+  }
+  if (!current || candidate.getTime() > current.getTime()) {
+    return candidate;
+  }
+  return current;
+}
+
+function minBigInt(current: bigint | null, candidate: bigint | null) {
+  if (candidate === null) {
+    return current;
+  }
+  if (current === null || candidate < current) {
+    return candidate;
+  }
+  return current;
+}
+
+function maxBigInt(current: bigint | null, candidate: bigint | null) {
+  if (candidate === null) {
+    return current;
+  }
+  if (current === null || candidate > current) {
+    return candidate;
+  }
+  return current;
 }
 
 function toStringValue(value: string | { toString(): string }) {
