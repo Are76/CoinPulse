@@ -139,4 +139,19 @@ describe("GET /api/debug/status", () => {
       },
     });
   });
+
+  it("returns a stable internal error response when status assembly throws", async () => {
+    getDebugStatusReport.mockRejectedValue(new Error("database exploded"));
+
+    const { GET } = await import("../../app/api/debug/status/route");
+    const response = await GET();
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Unable to determine backend status.",
+      },
+    });
+  });
 });
