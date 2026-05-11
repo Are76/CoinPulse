@@ -57,6 +57,13 @@ const MOCK_DASHBOARD = {
       staleAfterSeconds: 900,
     },
   },
+  ledgerCoverage: {
+    status: "unknown" as const,
+    fromBlock: null,
+    toBlock: null,
+    sourceFamilies: [],
+    reason: "No block range recorded in persisted materialization state.",
+  },
   summary: {
     totalValueQuote: null,
     valuationStatus: "unsupported" as const,

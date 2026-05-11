@@ -753,4 +753,186 @@ describe("assemblePortfolioDashboard", () => {
     expect(source).not.toContain("React");
     expect(source).not.toContain("return (");
   });
+
+  it("ledgerCoverage is unknown when no materialization state exists", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb() as never,
+      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    expect(result.ledgerCoverage).toEqual({
+      status: "unknown",
+      fromBlock: null,
+      toBlock: null,
+      sourceFamilies: [],
+      reason: "No materialization record exists.",
+    });
+  });
+
+  it("ledgerCoverage is unknown when materialization exists but sourceLedger blocks are null", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: null,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    expect(result.ledgerCoverage).toEqual({
+      status: "unknown",
+      fromBlock: null,
+      toBlock: null,
+      sourceFamilies: [],
+      reason: "No block range recorded in persisted materialization state.",
+    });
+  });
+
+  it("ledgerCoverage is covered when both sourceLedgerFromBlock and sourceLedgerToBlock are present", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: 50n,
+            sourceLedgerToBlock: 200n,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    expect(result.ledgerCoverage).toEqual({
+      status: "covered",
+      fromBlock: "50",
+      toBlock: "200",
+      sourceFamilies: [],
+      reason: null,
+    });
+  });
+
+  it("ledgerCoverage is partial when only sourceLedgerFromBlock is present", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "RUNNING",
+            completedSuccessfully: false,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: null,
+            sourceLedgerFromBlock: 50n,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    expect(result.ledgerCoverage).toEqual({
+      status: "partial",
+      fromBlock: "50",
+      toBlock: null,
+      sourceFamilies: [],
+      reason: "Only a partial block range is recorded in persisted materialization state.",
+    });
+  });
+
+  it("existing materialization.freshness is unchanged after ledgerCoverage addition", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: 50n,
+            sourceLedgerToBlock: 200n,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    expect(result.materialization.freshness).toEqual({
+      status: "fresh",
+      reason: null,
+      lastMaterializedAt: "2026-05-08T12:03:30.000Z",
+      staleAfterSeconds: 900,
+    });
+    expect(result.ledgerCoverage.status).toBe("covered");
+    expect(result.ledgerCoverage.fromBlock).toBe("50");
+    expect(result.ledgerCoverage.toBlock).toBe("200");
+  });
 });

@@ -733,4 +733,259 @@ describe("GET /api/portfolio/dashboard route contract", () => {
     expect(body.data.tokenPositions[0].assetId).toBe(TOKEN_ASSET);
     expect(body.data.tokenPositions[0].valuation.valueQuote).toBe("10");
   });
+
+  it("ledgerCoverage is unknown when no materialization state exists", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [],
+        priceObservations: [],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        ledgerCoverage: {
+          status: "unknown",
+          fromBlock: null,
+          toBlock: null,
+          sourceFamilies: [],
+          reason: "No materialization record exists.",
+        },
+      },
+    });
+  });
+
+  it("ledgerCoverage is covered when both sourceLedger blocks are persisted", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: 50n,
+            sourceLedgerToBlock: 200n,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        ledgerCoverage: {
+          status: "covered",
+          fromBlock: "50",
+          toBlock: "200",
+          sourceFamilies: [],
+          reason: null,
+        },
+      },
+    });
+  });
+
+  it("ledgerCoverage is unknown when materialization exists but sourceLedger blocks are null", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: null,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        ledgerCoverage: {
+          status: "unknown",
+          fromBlock: null,
+          toBlock: null,
+          sourceFamilies: [],
+          reason: "No block range recorded in persisted materialization state.",
+        },
+      },
+    });
+  });
+
+  it("ledgerCoverage is partial when only sourceLedgerFromBlock is persisted", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "RUNNING",
+            completedSuccessfully: false,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: null,
+            sourceLedgerFromBlock: 50n,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        ledgerCoverage: {
+          status: "partial",
+          fromBlock: "50",
+          toBlock: null,
+          sourceFamilies: [],
+          reason: "Only a partial block range is recorded in persisted materialization state.",
+        },
+      },
+    });
+  });
+
+  it("existing materialization.freshness is unchanged after ledgerCoverage addition", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: 50n,
+            sourceLedgerToBlock: 200n,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        materialization: {
+          freshness: {
+            status: "fresh",
+            reason: null,
+            lastMaterializedAt: "2026-05-08T12:03:30.000Z",
+            staleAfterSeconds: 900,
+          },
+        },
+        ledgerCoverage: {
+          status: "covered",
+          fromBlock: "50",
+          toBlock: "200",
+        },
+      },
+    });
+  });
 });

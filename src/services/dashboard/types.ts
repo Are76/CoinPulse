@@ -62,6 +62,16 @@ export type DashboardMaterializationFreshnessDto = {
   staleAfterSeconds: number | null;
 };
 
+export type DashboardLedgerCoverageStatus = "covered" | "partial" | "unknown";
+
+export type DashboardLedgerCoverageDto = {
+  status: DashboardLedgerCoverageStatus;
+  fromBlock: string | null;
+  toBlock: string | null;
+  sourceFamilies: string[];
+  reason: string | null;
+};
+
 export type DashboardMaterializationDto = {
   status: "RUNNING" | "FAILED" | "COMPLETED" | null;
   completedSuccessfully: boolean | null;
@@ -145,6 +155,7 @@ export type PortfolioDashboardDto = {
   quoteAsset: string;
   asOf: string;
   materialization: DashboardMaterializationDto;
+  ledgerCoverage: DashboardLedgerCoverageDto;
   summary: PortfolioSummaryDto;
   tokenPositions: DashboardTokenPositionDto[];
   lpPositions: DashboardLpPositionDto[];
