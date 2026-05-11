@@ -20,7 +20,7 @@ describe("query keys", () => {
   });
 
   it("builds future chain-scoped and filtered keys", () => {
-    expect(queryKeys.prices.status(369)).toEqual(["prices", "status", { chainId: 369 }]);
+    expect(queryKeys.prices.status()).toEqual(["prices", "status"]);
     expect(queryKeys.wallets.tracked(369)).toEqual(["wallets", "tracked", 369]);
     expect(queryKeys.transactions("v1", { chainId: 369 })).toEqual([
       "transactions",
