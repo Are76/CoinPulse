@@ -23,6 +23,7 @@ import type { TrackedWalletDto } from "@/lib/api/debug-client";
 import { findTrackedWalletMatch } from "@/components/dashboard/dashboard-screen-helpers";
 import type {
   DashboardLpPositionDto,
+  DashboardMaterializationFreshnessDto,
   DashboardPnlDto,
   DashboardPricingDto,
   DashboardStakePositionDto,
@@ -291,6 +292,53 @@ export function PortfolioSummarySection({
         </WarningBanner>
       ) : null}
     </>
+  );
+}
+
+export function MaterializationFreshnessSection({
+  freshness,
+}: {
+  freshness: DashboardMaterializationFreshnessDto;
+}) {
+  const tone: BadgeTone =
+    freshness.status === "fresh"
+      ? "fresh"
+      : freshness.status === "stale"
+        ? "warn"
+        : "neutral";
+
+  const label =
+    freshness.status === "fresh"
+      ? "Fresh"
+      : freshness.status === "stale"
+        ? "Stale"
+        : "Unknown";
+
+  return (
+    <SurfaceCard className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
+          Materialization freshness
+        </span>
+        <LabelBadge label={label} tone={tone} />
+      </div>
+      {freshness.reason != null ? (
+        <p className="text-xs text-[color:var(--color-text-muted)]">{freshness.reason}</p>
+      ) : null}
+      <div className="flex flex-wrap gap-4">
+        {freshness.lastMaterializedAt != null ? (
+          <TimestampLabel
+            label="Last materialized:"
+            value={freshness.lastMaterializedAt}
+          />
+        ) : null}
+        {freshness.staleAfterSeconds != null ? (
+          <span className="text-xs text-[color:var(--color-text-muted)]">
+            Stale after: {freshness.staleAfterSeconds}s
+          </span>
+        ) : null}
+      </div>
+    </SurfaceCard>
   );
 }
 

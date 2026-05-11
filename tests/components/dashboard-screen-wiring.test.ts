@@ -134,4 +134,40 @@ describe("dashboard-screen wiring", () => {
     const source = readPresenters();
     expect(source).toContain("will be used when you click Load dashboard");
   });
+
+  it("presenters exports MaterializationFreshnessSection", () => {
+    const source = readPresenters();
+    expect(source).toContain("export function MaterializationFreshnessSection");
+  });
+
+  it("MaterializationFreshnessSection consumes freshness.status", () => {
+    const source = readPresenters();
+    expect(source).toContain("freshness.status");
+  });
+
+  it("MaterializationFreshnessSection renders reason when present", () => {
+    const source = readPresenters();
+    expect(source).toContain("freshness.reason");
+  });
+
+  it("MaterializationFreshnessSection renders lastMaterializedAt via TimestampLabel", () => {
+    const source = readPresenters();
+    expect(source).toContain("freshness.lastMaterializedAt");
+    expect(source).toContain("TimestampLabel");
+  });
+
+  it("MaterializationFreshnessSection renders staleAfterSeconds when present", () => {
+    const source = readPresenters();
+    expect(source).toContain("freshness.staleAfterSeconds");
+  });
+
+  it("screen imports MaterializationFreshnessSection from dashboard-presenters", () => {
+    const source = readScreen();
+    expect(source).toContain("MaterializationFreshnessSection");
+  });
+
+  it("screen passes dashboard.materialization.freshness to MaterializationFreshnessSection", () => {
+    const source = readScreen();
+    expect(source).toContain("materialization.freshness");
+  });
 });

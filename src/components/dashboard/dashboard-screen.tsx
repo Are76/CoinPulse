@@ -11,6 +11,7 @@ import {
   IdleStateCard,
   LoadingStateCard,
   LpPositionsTable,
+  MaterializationFreshnessSection,
   PortfolioSummarySection,
   StakePositionsTable,
   SubmittedWalletSourceIndicator,
@@ -169,6 +170,9 @@ export function DashboardScreen() {
       {dashboardQuery.data !== undefined ? (
         <>
           <PortfolioSummarySection dashboard={dashboardQuery.data} />
+          <MaterializationFreshnessSection
+            freshness={dashboardQuery.data.materialization.freshness}
+          />
           <TokenPositionsTable positions={dashboardQuery.data.tokenPositions} />
           <LpPositionsTable positions={dashboardQuery.data.lpPositions} />
           <StakePositionsTable positions={dashboardQuery.data.stakePositions} />
