@@ -7,12 +7,21 @@ type PriceObservationRow = {
   confidence: string;
 };
 
+// Mirrors the where-clause shape used by getPricingStatusReport
+type FindManyArgs = {
+  where?: { observedAt?: { gte?: Date } };
+};
+
 function createMemoryDb(observations: PriceObservationRow[] = []) {
   return new Proxy(
     {
       priceObservation: {
-        async findMany() {
-          return observations.slice().sort(
+        async findMany(args: FindManyArgs) {
+          const cutoff = args.where?.observedAt?.gte;
+          const filtered = cutoff
+            ? observations.filter((o) => o.observedAt >= cutoff)
+            : observations;
+          return filtered.slice().sort(
             (a, b) => b.observedAt.getTime() - a.observedAt.getTime(),
           );
         },
@@ -68,7 +77,12 @@ describe("GET /api/prices/status route contract", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.data.status).toBe("unknown");
-    expect(body.data.sources).toEqual([]);
+    // All 5 known source types appear even with zero observations
+    expect(Array.isArray(body.data.sources)).toBe(true);
+    expect(body.data.sources.length).toBe(5);
+    const sourceTypes = body.data.sources.map((s: { sourceType: string }) => s.sourceType);
+    expect(sourceTypes).toContain("ONCHAIN_POOL");
+    expect(sourceTypes).toContain("DEXSCREENER");
   });
 
   it("returns status ok when a fresh accepted observation exists", async () => {
@@ -89,16 +103,18 @@ describe("GET /api/prices/status route contract", () => {
     const report = await getPricingStatusReport({ now });
 
     expect(report.status).toBe("ok");
-    expect(report.sources).toEqual([
-      expect.objectContaining({
-        sourceType: "ONCHAIN_POOL",
-        status: "ok",
-        observationsCount: 1,
-        rejectedCount: 0,
-        reason: null,
-        staleAfterSeconds: 120,
-      }),
-    ]);
+    expect(report.sources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceType: "ONCHAIN_POOL",
+          status: "ok",
+          observationsCount: 1,
+          rejectedCount: 0,
+          reason: null,
+          staleAfterSeconds: 120,
+        }),
+      ]),
+    );
   });
 
   it("returns status degraded when only stale observations exist", async () => {
@@ -150,9 +166,11 @@ describe("GET /api/prices/status route contract", () => {
     const { getPricingStatusReport } = await import("@/services/api/prices");
     const report = await getPricingStatusReport({ now });
 
-    expect(report.status).toBe("unknown"); // disabled-only → no enabled sources
-    expect(report.sources).toHaveLength(1);
-    expect(report.sources[0]).toMatchObject({
+    expect(report.status).toBe("unknown"); // disabled-only → no enabled observations
+    // All 5 known sources appear; DEXSCREENER has 2 observations marked disabled
+    expect(report.sources).toHaveLength(5);
+    const dex = report.sources.find((s) => s.sourceType === "DEXSCREENER");
+    expect(dex).toMatchObject({
       sourceType: "DEXSCREENER",
       status: "disabled",
       observationsCount: 2,
@@ -253,5 +271,31 @@ describe("GET /api/prices/status route contract", () => {
 
     expect(() => new Date(body.data.asOf)).not.toThrow();
     expect(new Date(body.data.asOf).toISOString()).toBe(body.data.asOf);
+  });
+
+  it("uses bounded query semantics: observations outside lookback window are excluded", async () => {
+    const now = new Date("2026-05-11T12:00:00.000Z");
+    // 8 days ago — outside the 7-day lookback window
+    const tooOld = new Date("2026-05-03T12:00:00.000Z");
+
+    getDb.mockReturnValue(
+      createMemoryDb([
+        {
+          sourceType: "ONCHAIN_POOL",
+          observedAt: tooOld,
+          staleAfterSeconds: 120,
+          confidence: "0.90",
+        },
+      ]),
+    );
+
+    const { getPricingStatusReport } = await import("@/services/api/prices");
+    const report = await getPricingStatusReport({ now });
+
+    // Observation was outside lookback; ONCHAIN_POOL should show zero observations
+    const onchain = report.sources.find((s) => s.sourceType === "ONCHAIN_POOL");
+    expect(onchain?.observationsCount).toBe(0);
+    expect(onchain?.status).toBe("unknown");
+    expect(report.status).toBe("unknown");
   });
 });

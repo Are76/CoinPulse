@@ -3,6 +3,19 @@ import "server-only";
 import { getDb } from "@/lib/db";
 import type { PriceSourceType } from "@/services/pricing/types";
 
+// PulseChain is the only supported chain in V1
+const PULSECHAIN_CHAIN_ID = 369;
+// Conservative lookback window for the status aggregation query
+const PRICE_STATUS_LOOKBACK_DAYS = 7;
+// All known source types from the PriceSourceType enum — used to surface
+// zero-observation entries in the status report for operator visibility
+const KNOWN_SOURCE_TYPES: PriceSourceType[] = [
+  "ONCHAIN_POOL",
+  "ONCHAIN_ROUTE",
+  "ORACLE",
+  "MANUAL",
+  "DEXSCREENER",
+];
 // Matches DISALLOWED_PRIMARY_SOURCES in price-resolver.ts
 const DISABLED_SOURCE_TYPES = new Set<PriceSourceType>(["DEXSCREENER"]);
 // Matches DEFAULT_MINIMUM_CONFIDENCE in price-resolver.ts
@@ -35,6 +48,10 @@ type PriceObservationRow = {
 type PricingStatusDbClient = {
   priceObservation: {
     findMany(args: {
+      where: {
+        chainId: number;
+        observedAt: { gte: Date };
+      };
       select: {
         sourceType: true;
         observedAt: true;
@@ -56,8 +73,15 @@ export async function getPricingStatusReport(
 ): Promise<PricingStatusReport> {
   const now = dependencies.now ?? new Date();
   const db = (dependencies.db ?? getDb()) as unknown as PricingStatusDbClient;
+  const lookbackStart = new Date(
+    now.getTime() - PRICE_STATUS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+  );
 
   const observations = await db.priceObservation.findMany({
+    where: {
+      chainId: PULSECHAIN_CHAIN_ID,
+      observedAt: { gte: lookbackStart },
+    },
     select: {
       sourceType: true,
       observedAt: true,
@@ -81,7 +105,11 @@ function buildSourceItems(
   observations: PriceObservationRow[],
   now: Date,
 ): PricingStatusSourceItem[] {
-  const bySourceType = new Map<string, PriceObservationRow[]>();
+  // Pre-populate known source types so that zero-observation entries are
+  // always surfaced in the report for operator visibility.
+  const bySourceType = new Map<string, PriceObservationRow[]>(
+    KNOWN_SOURCE_TYPES.map((st) => [st, []]),
+  );
 
   for (const obs of observations) {
     const bucket = bySourceType.get(obs.sourceType) ?? [];
