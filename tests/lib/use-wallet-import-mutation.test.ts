@@ -38,7 +38,7 @@ describe("useWalletImportMutation", () => {
     vi.restoreAllMocks();
   });
 
-  it("calls the wallet import client with the exact args and invalidates debug metadata on success", async () => {
+  it("calls the wallet import client with the exact args and invalidates debug metadata and tracked wallets on success", async () => {
     vi.spyOn(debugClient, "importWallet").mockResolvedValue(IMPORT_RESPONSE);
     const { queryClient, Wrapper } = makeWrapper();
     const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
@@ -53,6 +53,7 @@ describe("useWalletImportMutation", () => {
     expect(debugClient.importWallet).toHaveBeenCalledTimes(1);
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.status() });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.health() });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.wallets.tracked(369) });
     expect(
       invalidateQueries.mock.calls.some(([filters]) =>
         Array.isArray(filters?.queryKey) && filters.queryKey[0] === "dashboard",
@@ -60,7 +61,7 @@ describe("useWalletImportMutation", () => {
     ).toBe(false);
   });
 
-  it("invalidates debug metadata and preserves backend errors on failure or conflict", async () => {
+  it("invalidates debug metadata and tracked wallets and preserves backend errors on failure or conflict", async () => {
     const backendError = new debugClient.ApiClientError({
       status: 400,
       code: "WALLET_ALREADY_TRACKED",
@@ -82,6 +83,7 @@ describe("useWalletImportMutation", () => {
     expect(debugClient.importWallet).toHaveBeenCalledTimes(1);
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.status() });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.health() });
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.wallets.tracked(369) });
     expect(
       invalidateQueries.mock.calls.some(([filters]) =>
         Array.isArray(filters?.queryKey) && filters.queryKey[0] === "dashboard",
