@@ -9,6 +9,7 @@ import { resolveBestPriceFromStore } from "@/services/pricing/price-resolver";
 import type { ResolveBestPriceResult } from "@/services/pricing/types";
 import type {
   DashboardDbClient,
+  DashboardLedgerCoverageDto,
   DashboardMaterializationDto,
   DashboardMaterializationFreshnessDto,
   DashboardMaterializationWarningDto,
@@ -219,6 +220,7 @@ export async function assemblePortfolioDashboard(args: {
           ? tokenPositionDtos[0]?.valuation.status ?? "unavailable"
           : "partial";
   const materialization = toMaterializationDto(tokenBalances, materializationState, args.asOf);
+  const ledgerCoverage = computeLedgerCoverage(materializationState);
 
   return {
     schemaVersion: "v1",
@@ -226,6 +228,7 @@ export async function assemblePortfolioDashboard(args: {
     quoteAsset: args.quoteAsset,
     asOf: args.asOf.toISOString(),
     materialization,
+    ledgerCoverage,
     summary: {
       totalValueQuote: valuedPositions === 0 ? null : toOutput(totalValue),
       valuationStatus,
@@ -351,6 +354,53 @@ function computeMaterializationFreshness(
     reason: null,
     lastMaterializedAt: lastMaterializedAt.toISOString(),
     staleAfterSeconds: MATERIALIZATION_STALE_AFTER_SECONDS,
+  };
+}
+
+function computeLedgerCoverage(
+  materializationState: Awaited<
+    ReturnType<NonNullable<DashboardDbClient["portfolioMaterializationState"]>["findUnique"]>
+  >,
+): DashboardLedgerCoverageDto {
+  if (!materializationState) {
+    return {
+      status: "unknown",
+      fromBlock: null,
+      toBlock: null,
+      sourceFamilies: [],
+      reason: "No materialization record exists.",
+    };
+  }
+
+  const fromBlock = bigintToString(materializationState.sourceLedgerFromBlock);
+  const toBlock = bigintToString(materializationState.sourceLedgerToBlock);
+
+  if (fromBlock !== null && toBlock !== null) {
+    return {
+      status: "covered",
+      fromBlock,
+      toBlock,
+      sourceFamilies: [],
+      reason: null,
+    };
+  }
+
+  if (fromBlock !== null || toBlock !== null) {
+    return {
+      status: "partial",
+      fromBlock,
+      toBlock,
+      sourceFamilies: [],
+      reason: "Only a partial block range is recorded in persisted materialization state.",
+    };
+  }
+
+  return {
+    status: "unknown",
+    fromBlock: null,
+    toBlock: null,
+    sourceFamilies: [],
+    reason: "No block range recorded in persisted materialization state.",
   };
 }
 
