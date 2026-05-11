@@ -1,5 +1,7 @@
 import type { FormEvent, ReactNode } from "react";
 
+import Link from "next/link";
+
 import { EmptyState } from "@/components/ui/data-state/empty-state";
 import { ErrorState } from "@/components/ui/data-state/error-state";
 import { LoadingState } from "@/components/ui/data-state/loading-state";
@@ -167,7 +169,14 @@ export function TrackedWalletSelector(args: {
 
       {!args.isLoading && !args.isError && args.wallets !== undefined && args.wallets.length === 0 ? (
         <p className="text-sm text-[color:var(--color-text-muted)]">
-          No tracked wallets yet. Import a wallet from Operator tools or use manual entry.
+          No tracked wallets yet.{" "}
+          <Link
+            href="/debug/wallets/import"
+            className="font-medium text-[color:var(--color-accent-2)] hover:underline"
+          >
+            Import a wallet
+          </Link>{" "}
+          or use manual entry below.
         </p>
       ) : null}
 

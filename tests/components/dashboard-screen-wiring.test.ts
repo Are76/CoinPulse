@@ -89,6 +89,21 @@ describe("dashboard-screen wiring", () => {
     expect(source).toContain("No tracked wallets yet");
   });
 
+  it("TrackedWalletSelector empty state imports Link from next/link", () => {
+    const source = readPresenters();
+    expect(source).toContain('import Link from "next/link"');
+  });
+
+  it("TrackedWalletSelector empty state links to /debug/wallets/import", () => {
+    const source = readPresenters();
+    expect(source).toContain("/debug/wallets/import");
+  });
+
+  it("TrackedWalletSelector empty state link label is 'Import a wallet'", () => {
+    const source = readPresenters();
+    expect(source).toContain("Import a wallet");
+  });
+
   it("TrackedWalletSelector includes Unlabeled fallback for wallets without a label", () => {
     const source = readPresenters();
     expect(source).toContain("Unlabeled");
