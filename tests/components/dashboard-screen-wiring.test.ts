@@ -134,4 +134,48 @@ describe("dashboard-screen wiring", () => {
     const source = readPresenters();
     expect(source).toContain("will be used when you click Load dashboard");
   });
+
+  it("presenters exports MaterializationFreshnessSection", () => {
+    const source = readPresenters();
+    expect(source).toContain("export function MaterializationFreshnessSection");
+  });
+
+  it("MaterializationFreshnessSection consumes freshness.status", () => {
+    const source = readPresenters();
+    expect(source).toContain("freshness.status");
+  });
+
+  it("MaterializationFreshnessSection renders reason when present", () => {
+    const source = readPresenters();
+    expect(source).toContain("freshness.reason");
+  });
+
+  it("MaterializationFreshnessSection renders lastMaterializedAt via TimestampLabel", () => {
+    const source = readPresenters();
+    // Extract only the MaterializationFreshnessSection block so that TimestampLabel
+    // references elsewhere in the file cannot cause a false-positive.
+    const sectionStart = source.indexOf("export function MaterializationFreshnessSection");
+    expect(sectionStart).not.toBe(-1);
+    // Find the next exported function after the section start to bound the block.
+    const nextExportIdx = source.indexOf("\nexport function ", sectionStart + 1);
+    const sectionSource =
+      nextExportIdx === -1 ? source.slice(sectionStart) : source.slice(sectionStart, nextExportIdx);
+    expect(sectionSource).toContain("TimestampLabel");
+    expect(sectionSource).toContain('value={freshness.lastMaterializedAt}');
+  });
+
+  it("MaterializationFreshnessSection renders staleAfterSeconds when present", () => {
+    const source = readPresenters();
+    expect(source).toContain("freshness.staleAfterSeconds");
+  });
+
+  it("screen imports MaterializationFreshnessSection from dashboard-presenters", () => {
+    const source = readScreen();
+    expect(source).toContain("MaterializationFreshnessSection");
+  });
+
+  it("screen passes dashboard.materialization.freshness to MaterializationFreshnessSection", () => {
+    const source = readScreen();
+    expect(source).toContain("materialization.freshness");
+  });
 });
