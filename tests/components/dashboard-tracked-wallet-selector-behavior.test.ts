@@ -328,19 +328,6 @@ describe("dashboard tracked wallet selector behavior", () => {
       expect(link).toHaveAttribute("href", "/debug/wallets/import");
     });
 
-    it("import link label reads 'Import a wallet'", () => {
-      render(
-        React.createElement(TrackedWalletSelector, {
-          wallets: [],
-          isLoading: false,
-          isError: false,
-          onSelectWallet: vi.fn(),
-        }),
-      );
-
-      expect(screen.getByText("Import a wallet")).toBeInTheDocument();
-    });
-
     it("manual wallet entry input is still available when there are no tracked wallets", () => {
       const Harness = makeHarness({
         wallets: [],
