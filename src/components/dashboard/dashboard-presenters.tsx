@@ -334,7 +334,7 @@ export function MaterializationFreshnessSection({
         ) : null}
         {freshness.staleAfterSeconds != null ? (
           <span className="text-xs text-[color:var(--color-text-muted)]">
-            Stale after: {freshness.staleAfterSeconds}s
+            Stale after: {freshness.staleAfterSeconds} seconds
           </span>
         ) : null}
       </div>
