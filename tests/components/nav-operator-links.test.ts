@@ -13,64 +13,60 @@ const WALLET_IMPORT_SCREEN_PATH = path.resolve(
   "../../src/components/wallets/wallet-import-screen.tsx",
 );
 
-function readDebugSyncScreenSource() {
-  return fs.readFileSync(DEBUG_SYNC_SCREEN_PATH, "utf8");
-}
-
-function readWalletImportScreenSource() {
-  return fs.readFileSync(WALLET_IMPORT_SCREEN_PATH, "utf8");
+function readScreenSource(filePath: string) {
+  return fs.readFileSync(filePath, "utf8");
 }
 
 describe("debug-sync-screen operator nav links", () => {
   it("imports Link from next/link", () => {
-    const source = readDebugSyncScreenSource();
+    const source = readScreenSource(DEBUG_SYNC_SCREEN_PATH);
     expect(source).toContain('import Link from "next/link"');
   });
 
   it("includes a link to /debug/wallets/import", () => {
-    const source = readDebugSyncScreenSource();
+    const source = readScreenSource(DEBUG_SYNC_SCREEN_PATH);
     expect(source).toContain('href="/debug/wallets/import"');
   });
 
   it("includes the label Wallet import", () => {
-    const source = readDebugSyncScreenSource();
+    const source = readScreenSource(DEBUG_SYNC_SCREEN_PATH);
     expect(source).toContain("Wallet import");
   });
 
   it("includes a link to /debug/sync", () => {
-    const source = readDebugSyncScreenSource();
+    const source = readScreenSource(DEBUG_SYNC_SCREEN_PATH);
     expect(source).toContain('href="/debug/sync"');
   });
 
   it("includes the label Debug sync", () => {
-    const source = readDebugSyncScreenSource();
+    const source = readScreenSource(DEBUG_SYNC_SCREEN_PATH);
     expect(source).toContain("Debug sync");
   });
 });
 
 describe("wallet-import-screen operator nav links", () => {
   it("imports Link from next/link", () => {
-    const source = readWalletImportScreenSource();
+    const source = readScreenSource(WALLET_IMPORT_SCREEN_PATH);
     expect(source).toContain('import Link from "next/link"');
   });
 
   it("includes a link to /debug/wallets/import", () => {
-    const source = readWalletImportScreenSource();
+    const source = readScreenSource(WALLET_IMPORT_SCREEN_PATH);
     expect(source).toContain('href="/debug/wallets/import"');
   });
 
   it("includes the label Wallet import", () => {
-    const source = readWalletImportScreenSource();
+    const source = readScreenSource(WALLET_IMPORT_SCREEN_PATH);
     expect(source).toContain("Wallet import");
   });
 
   it("includes a link to /debug/sync", () => {
-    const source = readWalletImportScreenSource();
+    const source = readScreenSource(WALLET_IMPORT_SCREEN_PATH);
     expect(source).toContain('href="/debug/sync"');
   });
 
   it("includes the label Debug sync", () => {
-    const source = readWalletImportScreenSource();
+    const source = readScreenSource(WALLET_IMPORT_SCREEN_PATH);
     expect(source).toContain("Debug sync");
   });
 });
