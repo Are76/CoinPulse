@@ -32,6 +32,20 @@ export async function resolveTrackedWalletByAddress(args: {
   });
 }
 
+export async function listTrackedWallets() {
+  return getDb().wallet.findMany({
+    select: {
+      id: true,
+      address: true,
+      chainId: true,
+      label: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
 export async function importTrackedWallet(args: {
   walletAddress: string;
   chainId: number;
