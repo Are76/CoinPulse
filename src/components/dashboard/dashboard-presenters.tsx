@@ -162,10 +162,10 @@ export function TrackedWalletSelector(args: {
         <div className="flex flex-col divide-y divide-[color:var(--color-border-soft)]">
           {args.wallets.map((wallet) => {
             const isSelected =
-              args.selectedWalletAddress !== undefined &&
-              args.selectedWalletAddress !== "" &&
+              !!args.selectedWalletAddress &&
+              !!args.selectedChainId &&
               wallet.address.toLowerCase() === args.selectedWalletAddress.toLowerCase() &&
-              String(wallet.chainId) === (args.selectedChainId ?? "");
+              String(wallet.chainId) === args.selectedChainId;
 
             return (
               <button
