@@ -67,6 +67,17 @@ export function DashboardScreen() {
     enabled: submittedParams !== null,
   });
 
+  const trackedWallets = trackedWalletsQuery.data?.wallets;
+  const selectedTrackedWalletLabel = (() => {
+    if (!trackedWallets || !walletAddress || !chainId) return null;
+    const match = trackedWallets.find(
+      (w) =>
+        w.address.toLowerCase() === walletAddress.toLowerCase() &&
+        String(w.chainId) === chainId,
+    );
+    return match !== undefined ? (match.label ?? "Unlabeled") : null;
+  })();
+
   function handleSelectTrackedWallet(address: string, selectedChainId: string) {
     setWalletAddress(address);
     setChainId(selectedChainId);
@@ -141,6 +152,7 @@ export function DashboardScreen() {
         walletAddress={walletAddress}
         chainId={chainId}
         isLoading={submittedParams !== null && dashboardQuery.isFetching}
+        selectedTrackedWalletLabel={selectedTrackedWalletLabel}
         onWalletAddressChange={setWalletAddress}
         onChainIdChange={setChainId}
         onSubmit={handleSubmit}

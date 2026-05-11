@@ -40,6 +40,20 @@ const TRACKED_WALLET: TrackedWalletDto = {
 // by resolveDashboardSubmission). No JSX; only React.createElement.
 // ---------------------------------------------------------------------------
 
+function resolveSelectedTrackedWalletLabel(
+  wallets: TrackedWalletDto[] | undefined,
+  walletAddress: string,
+  chainId: string,
+): string | null {
+  if (!wallets || !walletAddress || !chainId) return null;
+  const match = wallets.find(
+    (w) =>
+      w.address.toLowerCase() === walletAddress.toLowerCase() &&
+      String(w.chainId) === chainId,
+  );
+  return match !== undefined ? (match.label ?? "Unlabeled") : null;
+}
+
 function makeHarness(harnessArgs: {
   wallets: TrackedWalletDto[] | undefined;
   isError: boolean;
@@ -48,6 +62,12 @@ function makeHarness(harnessArgs: {
   function Harness() {
     const [walletAddress, setWalletAddress] = React.useState("");
     const [chainId, setChainId] = React.useState("369");
+
+    const selectedTrackedWalletLabel = resolveSelectedTrackedWalletLabel(
+      harnessArgs.wallets,
+      walletAddress,
+      chainId,
+    );
 
     function handleSelectWallet(address: string, selectedChainId: string) {
       setWalletAddress(address);
@@ -77,6 +97,7 @@ function makeHarness(harnessArgs: {
         walletAddress,
         chainId,
         isLoading: false,
+        selectedTrackedWalletLabel,
         onWalletAddressChange: setWalletAddress,
         onChainIdChange: setChainId,
         onSubmit: handleSubmit,
@@ -660,6 +681,209 @@ describe("dashboard tracked wallet selector behavior", () => {
       // explicit submit
       fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
       expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Suite 7 – selected wallet submit context helper message
+  // -------------------------------------------------------------------------
+
+  describe("selected wallet submit context helper", () => {
+    const LABELED_WALLET: TrackedWalletDto = {
+      ...TRACKED_WALLET,
+      label: "Primary",
+    };
+
+    const UNLABELED_WALLET: TrackedWalletDto = {
+      ...TRACKED_WALLET,
+      id: "wallet-2",
+      address: "0x2222222222222222222222222222222222222222",
+      label: null,
+    };
+
+    it("shows the helper message after selecting a labeled tracked wallet", () => {
+      const Harness = makeHarness({
+        wallets: [LABELED_WALLET],
+        isError: false,
+        onSubmit: vi.fn(),
+      });
+
+      render(React.createElement(Harness));
+
+      // No helper before selection
+      expect(
+        screen.queryByText(/Selected tracked wallet:/i),
+      ).toBeNull();
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${LABELED_WALLET.address}`,
+        }),
+      );
+
+      expect(
+        screen.getByText(/Selected tracked wallet: Primary/i),
+      ).toBeInTheDocument();
+    });
+
+    it("helper message includes the wallet label", () => {
+      const Harness = makeHarness({
+        wallets: [LABELED_WALLET],
+        isError: false,
+        onSubmit: vi.fn(),
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${LABELED_WALLET.address}`,
+        }),
+      );
+
+      const message = screen.getByText(/Selected tracked wallet: Primary/i);
+      expect(message.textContent).toContain("Load dashboard");
+    });
+
+    it("helper message shows Unlabeled fallback when wallet has no label", () => {
+      const Harness = makeHarness({
+        wallets: [UNLABELED_WALLET],
+        isError: false,
+        onSubmit: vi.fn(),
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${UNLABELED_WALLET.address}`,
+        }),
+      );
+
+      expect(
+        screen.getByText(/Selected tracked wallet: Unlabeled/i),
+      ).toBeInTheDocument();
+    });
+
+    it("helper message disappears when wallet address is manually edited to non-matching value", () => {
+      const Harness = makeHarness({
+        wallets: [LABELED_WALLET],
+        isError: false,
+        onSubmit: vi.fn(),
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${LABELED_WALLET.address}`,
+        }),
+      );
+      expect(screen.getByText(/Selected tracked wallet: Primary/i)).toBeInTheDocument();
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: "0xDEAD" },
+      });
+
+      expect(screen.queryByText(/Selected tracked wallet:/i)).toBeNull();
+    });
+
+    it("helper message disappears when chain ID is manually edited to non-matching value", () => {
+      const Harness = makeHarness({
+        wallets: [LABELED_WALLET],
+        isError: false,
+        onSubmit: vi.fn(),
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${LABELED_WALLET.address}`,
+        }),
+      );
+      expect(screen.getByText(/Selected tracked wallet: Primary/i)).toBeInTheDocument();
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Chain ID" }), {
+        target: { value: "1" },
+      });
+
+      expect(screen.queryByText(/Selected tracked wallet:/i)).toBeNull();
+    });
+
+    it("no helper message for manual wallet entry that does not match any tracked wallet", () => {
+      const Harness = makeHarness({
+        wallets: [LABELED_WALLET],
+        isError: false,
+        onSubmit: vi.fn(),
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+      });
+
+      expect(screen.queryByText(/Selected tracked wallet:/i)).toBeNull();
+    });
+
+    it("helper message does not appear when there are no tracked wallets", () => {
+      const Harness = makeHarness({
+        wallets: [],
+        isError: false,
+        onSubmit: vi.fn(),
+      });
+
+      render(React.createElement(Harness));
+
+      expect(screen.queryByText(/Selected tracked wallet:/i)).toBeNull();
+    });
+
+    it("helper message does not trigger a dashboard fetch", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [LABELED_WALLET],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${LABELED_WALLET.address}`,
+        }),
+      );
+
+      // Helper is visible but no fetch has been triggered
+      expect(screen.getByText(/Selected tracked wallet: Primary/i)).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("explicit Load dashboard submit still fires after helper is shown", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [LABELED_WALLET],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${LABELED_WALLET.address}`,
+        }),
+      );
+      expect(screen.getByText(/Selected tracked wallet: Primary/i)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      expect(onSubmit).toHaveBeenCalledWith({
+        walletAddress: LABELED_WALLET.address,
+        chainId: 369,
+      });
     });
   });
 });

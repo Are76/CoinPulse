@@ -83,6 +83,7 @@ export function WalletQueryForm(args: {
   walletAddress: string;
   chainId: string;
   isLoading: boolean;
+  selectedTrackedWalletLabel?: string | null;
   onWalletAddressChange: (value: string) => void;
   onChainIdChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -123,6 +124,11 @@ export function WalletQueryForm(args: {
           </button>
         </div>
       </form>
+      {args.selectedTrackedWalletLabel != null ? (
+        <p className="mt-3 text-sm text-[color:var(--color-text-muted)]">
+          Selected tracked wallet: {args.selectedTrackedWalletLabel} — will be used when you click Load dashboard.
+        </p>
+      ) : null}
     </SectionCard>
   );
 }
