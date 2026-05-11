@@ -70,6 +70,8 @@ function makeHarness(harnessArgs: {
         isLoading: false,
         isError: harnessArgs.isError,
         onSelectWallet: handleSelectWallet,
+        selectedWalletAddress: walletAddress,
+        selectedChainId: chainId,
       }),
       React.createElement(WalletQueryForm, {
         walletAddress,
@@ -306,6 +308,158 @@ describe("dashboard tracked wallet selector behavior", () => {
       render(React.createElement(Harness));
 
       expect(screen.getByRole("button", { name: /Load dashboard/i })).toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Suite 4 – selected state indicator
+  // -------------------------------------------------------------------------
+
+  describe("selected state indicator", () => {
+    it("shows Selected badge on the matching row after wallet is clicked", () => {
+      const Harness = makeHarness({
+        wallets: [TRACKED_WALLET],
+        isError: false,
+        onSubmit: vi.fn(),
+      });
+
+      render(React.createElement(Harness));
+
+      // Before selection, no Selected badge
+      expect(screen.queryByText("Selected")).toBeNull();
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${TRACKED_WALLET.address}`,
+        }),
+      );
+
+      expect(screen.getByText("Selected")).toBeInTheDocument();
+    });
+
+    it("Selected badge is visible for the matching wallet even with case-insensitive address", () => {
+      render(
+        React.createElement(TrackedWalletSelector, {
+          wallets: [TRACKED_WALLET],
+          isLoading: false,
+          isError: false,
+          onSelectWallet: vi.fn(),
+          selectedWalletAddress: TRACKED_WALLET.address.toUpperCase(),
+          selectedChainId: "369",
+        }),
+      );
+
+      expect(screen.getByText("Selected")).toBeInTheDocument();
+    });
+
+    it("no Selected badge when chainId does not match", () => {
+      render(
+        React.createElement(TrackedWalletSelector, {
+          wallets: [TRACKED_WALLET],
+          isLoading: false,
+          isError: false,
+          onSelectWallet: vi.fn(),
+          selectedWalletAddress: TRACKED_WALLET.address,
+          selectedChainId: "1",
+        }),
+      );
+
+      expect(screen.queryByText("Selected")).toBeNull();
+    });
+
+    it("Selected badge disappears after the wallet address field is manually edited", () => {
+      const Harness = makeHarness({
+        wallets: [TRACKED_WALLET],
+        isError: false,
+        onSubmit: vi.fn(),
+      });
+
+      render(React.createElement(Harness));
+
+      // Select the wallet
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${TRACKED_WALLET.address}`,
+        }),
+      );
+      expect(screen.getByText("Selected")).toBeInTheDocument();
+
+      // Manually edit the wallet address field
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: "0xDEAD" },
+      });
+
+      expect(screen.queryByText("Selected")).toBeNull();
+    });
+
+    it("Selected badge disappears after the chain ID field is manually edited", () => {
+      const Harness = makeHarness({
+        wallets: [TRACKED_WALLET],
+        isError: false,
+        onSubmit: vi.fn(),
+      });
+
+      render(React.createElement(Harness));
+
+      // Select the wallet
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${TRACKED_WALLET.address}`,
+        }),
+      );
+      expect(screen.getByText("Selected")).toBeInTheDocument();
+
+      // Manually edit the chain ID field
+      fireEvent.change(screen.getByRole("textbox", { name: "Chain ID" }), {
+        target: { value: "1" },
+      });
+
+      expect(screen.queryByText("Selected")).toBeNull();
+    });
+
+    it("selecting a wallet with selected state shown still does not trigger dashboard fetch", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [TRACKED_WALLET],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${TRACKED_WALLET.address}`,
+        }),
+      );
+
+      // Selected indicator visible but no fetch triggered
+      expect(screen.getByText("Selected")).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("explicit Load dashboard submit still triggers fetch when wallet is selected", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [TRACKED_WALLET],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${TRACKED_WALLET.address}`,
+        }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      expect(onSubmit).toHaveBeenCalledWith({
+        walletAddress: TRACKED_WALLET.address,
+        chainId: 369,
+      });
     });
   });
 });

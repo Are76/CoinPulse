@@ -133,6 +133,8 @@ export function DashboardScreen() {
         isLoading={trackedWalletsQuery.isPending}
         isError={trackedWalletsQuery.isError}
         onSelectWallet={handleSelectTrackedWallet}
+        selectedWalletAddress={walletAddress}
+        selectedChainId={chainId}
       />
 
       <WalletQueryForm
