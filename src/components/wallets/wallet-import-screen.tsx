@@ -121,6 +121,12 @@ export function WalletImportScreen() {
           >
             Wallet import
           </Link>
+          <Link
+            href="/debug/wallets/tracked"
+            className="text-sm font-medium text-[color:var(--color-accent-2)] hover:underline"
+          >
+            Tracked wallets
+          </Link>
         </div>
       </SurfaceCard>
 
