@@ -10,6 +10,7 @@ import type { ResolveBestPriceResult } from "@/services/pricing/types";
 import type {
   DashboardDbClient,
   DashboardMaterializationDto,
+  DashboardMaterializationFreshnessDto,
   DashboardMaterializationWarningDto,
   DashboardPnlCalculator,
   DashboardPnlDto,
@@ -18,6 +19,12 @@ import type {
   DashboardStatus,
   PortfolioDashboardDto,
 } from "@/services/dashboard/types";
+
+/**
+ * Conservative threshold after which a materialization is considered stale.
+ * 15 minutes gives one full sync cycle headroom for most wallets.
+ */
+const MATERIALIZATION_STALE_AFTER_SECONDS = 15 * 60; // 900 seconds
 
 const ZERO = new Decimal(0);
 
@@ -211,7 +218,7 @@ export async function assemblePortfolioDashboard(args: {
         : valuedPositions === 0
           ? tokenPositionDtos[0]?.valuation.status ?? "unavailable"
           : "partial";
-  const materialization = toMaterializationDto(tokenBalances, materializationState);
+  const materialization = toMaterializationDto(tokenBalances, materializationState, args.asOf);
 
   return {
     schemaVersion: "v1",
@@ -240,6 +247,7 @@ function toMaterializationDto(
   materializationState: Awaited<
     ReturnType<NonNullable<DashboardDbClient["portfolioMaterializationState"]>["findUnique"]>
   >,
+  asOf: Date,
 ): DashboardMaterializationDto {
   const negativeBalances = tokenBalances
     .filter((row) => isNegativeDecimal(toStringValue(row.balanceQuantity)))
@@ -273,6 +281,76 @@ function toMaterializationDto(
     errorMessage: materializationState?.errorMessage ?? null,
     hasNegativeBalances: negativeBalances.length > 0,
     negativeBalances,
+    freshness: computeMaterializationFreshness(materializationState, asOf),
+  };
+}
+
+function computeMaterializationFreshness(
+  materializationState: Awaited<
+    ReturnType<NonNullable<DashboardDbClient["portfolioMaterializationState"]>["findUnique"]>
+  >,
+  now: Date,
+): DashboardMaterializationFreshnessDto {
+  if (!materializationState) {
+    return {
+      status: "unknown",
+      reason: "No materialization record exists.",
+      lastMaterializedAt: null,
+      staleAfterSeconds: null,
+    };
+  }
+
+  if (materializationState.status === "FAILED" && !materializationState.latestMaterializedAt) {
+    return {
+      status: "unknown",
+      reason: materializationState.errorMessage
+        ? `Materialization failed: ${materializationState.errorMessage}`
+        : "Materialization failed with no prior successful run.",
+      lastMaterializedAt: null,
+      staleAfterSeconds: MATERIALIZATION_STALE_AFTER_SECONDS,
+    };
+  }
+
+  const lastMaterializedAt = materializationState.latestMaterializedAt;
+  if (!lastMaterializedAt) {
+    return {
+      status: "unknown",
+      reason: "No successful materialization timestamp recorded.",
+      lastMaterializedAt: null,
+      staleAfterSeconds: MATERIALIZATION_STALE_AFTER_SECONDS,
+    };
+  }
+
+  const ageSeconds = (now.getTime() - lastMaterializedAt.getTime()) / 1000;
+
+  if (
+    materializationState.status === "FAILED" &&
+    ageSeconds > MATERIALIZATION_STALE_AFTER_SECONDS
+  ) {
+    return {
+      status: "stale",
+      reason: materializationState.errorMessage
+        ? `Materialization failed: ${materializationState.errorMessage}`
+        : "Materialization failed and last successful run is older than threshold.",
+      lastMaterializedAt: lastMaterializedAt.toISOString(),
+      staleAfterSeconds: MATERIALIZATION_STALE_AFTER_SECONDS,
+    };
+  }
+
+  if (ageSeconds > MATERIALIZATION_STALE_AFTER_SECONDS) {
+    return {
+      status: "stale",
+      reason: `Last materialization is older than ${MATERIALIZATION_STALE_AFTER_SECONDS} seconds.`,
+      lastMaterializedAt: lastMaterializedAt.toISOString(),
+      staleAfterSeconds: MATERIALIZATION_STALE_AFTER_SECONDS,
+    };
+  }
+
+  return {
+    status: "fresh",
+    reason: null,
+    lastMaterializedAt: lastMaterializedAt.toISOString(),
+    staleAfterSeconds: MATERIALIZATION_STALE_AFTER_SECONDS,
   };
 }
 

@@ -296,6 +296,12 @@ describe("assemblePortfolioDashboard", () => {
       errorMessage: null,
       hasNegativeBalances: false,
       negativeBalances: [],
+      freshness: {
+        status: "unknown",
+        reason: "No materialization record exists.",
+        lastMaterializedAt: null,
+        staleAfterSeconds: null,
+      },
     });
   });
 
@@ -354,6 +360,12 @@ describe("assemblePortfolioDashboard", () => {
       errorMessage: null,
       hasNegativeBalances: false,
       negativeBalances: [],
+      freshness: {
+        status: "fresh",
+        reason: null,
+        lastMaterializedAt: "2026-05-08T12:03:30.000Z",
+        staleAfterSeconds: 900,
+      },
     });
   });
 
@@ -458,6 +470,12 @@ describe("assemblePortfolioDashboard", () => {
           decimals: 18,
         },
       ],
+      freshness: {
+        status: "fresh",
+        reason: null,
+        lastMaterializedAt: "2026-05-08T12:03:30.000Z",
+        staleAfterSeconds: 900,
+      },
     });
   });
 
