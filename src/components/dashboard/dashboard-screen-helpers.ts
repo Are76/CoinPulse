@@ -1,9 +1,29 @@
 import { ApiClientError } from "@/lib/api/dashboard-client";
+import type { TrackedWalletDto } from "@/lib/api/debug-client";
 
 export type SubmittedParams = {
   walletAddress: string;
   chainId: number;
 };
+
+/**
+ * Returns the label of the tracked wallet that matches the given address and
+ * chainId, or null if no match is found. Case-insensitive address comparison.
+ * Returns "Unlabeled" when a match is found but the wallet has no label.
+ */
+export function findTrackedWalletLabel(
+  wallets: TrackedWalletDto[] | undefined,
+  walletAddress: string,
+  chainId: string,
+): string | null {
+  if (!wallets || !walletAddress || !chainId) return null;
+  const match = wallets.find(
+    (w) =>
+      w.address.toLowerCase() === walletAddress.toLowerCase() &&
+      String(w.chainId) === chainId,
+  );
+  return match !== undefined ? (match.label ?? "Unlabeled") : null;
+}
 
 export function resolveDashboardSubmission(args: {
   walletAddress: string;

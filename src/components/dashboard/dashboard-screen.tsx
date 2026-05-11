@@ -25,6 +25,7 @@ import {
   getDashboardErrorMessage,
   getDashboardMetaErrorMessage,
   resolveDashboardSubmission,
+  findTrackedWalletLabel,
   type SubmittedParams,
 } from "@/components/dashboard/dashboard-screen-helpers";
 import { queryKeys } from "@/lib/query/query-keys";
@@ -66,6 +67,13 @@ export function DashboardScreen() {
     quoteAsset: DEFAULT_QUOTE_ASSET,
     enabled: submittedParams !== null,
   });
+
+  const trackedWallets = trackedWalletsQuery.data?.wallets;
+  const selectedTrackedWalletLabel = findTrackedWalletLabel(
+    trackedWallets,
+    walletAddress,
+    chainId,
+  );
 
   function handleSelectTrackedWallet(address: string, selectedChainId: string) {
     setWalletAddress(address);
@@ -141,6 +149,7 @@ export function DashboardScreen() {
         walletAddress={walletAddress}
         chainId={chainId}
         isLoading={submittedParams !== null && dashboardQuery.isFetching}
+        selectedTrackedWalletLabel={selectedTrackedWalletLabel}
         onWalletAddressChange={setWalletAddress}
         onChainIdChange={setChainId}
         onSubmit={handleSubmit}

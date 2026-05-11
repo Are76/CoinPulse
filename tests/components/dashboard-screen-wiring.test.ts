@@ -103,4 +103,25 @@ describe("dashboard-screen wiring", () => {
     const source = readPresenters();
     expect(source).toContain("Loading tracked wallets");
   });
+
+  it("screen computes selectedTrackedWalletLabel from tracked wallets state", () => {
+    const source = readScreen();
+    expect(source).toContain("selectedTrackedWalletLabel");
+    expect(source).toContain("findTrackedWalletLabel");
+  });
+
+  it("screen passes selectedTrackedWalletLabel to WalletQueryForm", () => {
+    const source = readScreen();
+    expect(source).toContain("selectedTrackedWalletLabel={selectedTrackedWalletLabel}");
+  });
+
+  it("WalletQueryForm accepts selectedTrackedWalletLabel prop", () => {
+    const source = readPresenters();
+    expect(source).toContain("selectedTrackedWalletLabel");
+  });
+
+  it("WalletQueryForm renders helper message text referencing Load dashboard", () => {
+    const source = readPresenters();
+    expect(source).toContain("will be used when you click Load dashboard");
+  });
 });
