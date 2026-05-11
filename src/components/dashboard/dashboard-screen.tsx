@@ -9,6 +9,7 @@ import {
   DashboardHero,
   ErrorStateCard,
   IdleStateCard,
+  LedgerCoverageSection,
   LoadingStateCard,
   LpPositionsTable,
   MaterializationFreshnessSection,
@@ -172,6 +173,9 @@ export function DashboardScreen() {
           <PortfolioSummarySection dashboard={dashboardQuery.data} />
           <MaterializationFreshnessSection
             freshness={dashboardQuery.data.materialization.freshness}
+          />
+          <LedgerCoverageSection
+            ledgerCoverage={dashboardQuery.data.ledgerCoverage}
           />
           <TokenPositionsTable positions={dashboardQuery.data.tokenPositions} />
           <LpPositionsTable positions={dashboardQuery.data.lpPositions} />
