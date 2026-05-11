@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ApiClientError,
   fetchDebugHealth,
   fetchDebugStatus,
+  fetchTrackedWallets,
   runManualSync,
   runRebuild,
 } from "@/lib/api/debug-client";
@@ -121,5 +123,60 @@ describe("debug client", () => {
         }),
       }),
     );
+  });
+
+  it("fetches tracked wallets and returns parsed DTO", async () => {
+    const mockWallet = {
+      id: "wallet-1",
+      address: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+      label: "Main Wallet",
+      createdAt: "2026-05-10T00:00:00.000Z",
+      updatedAt: "2026-05-10T00:00:00.000Z",
+    };
+
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            schemaVersion: "v1",
+            wallets: [mockWallet],
+          },
+        }),
+        { status: 200 },
+      ),
+    ) as typeof fetch;
+
+    const result = await fetchTrackedWallets();
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/wallets/tracked",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(result.schemaVersion).toBe("v1");
+    expect(result.wallets).toHaveLength(1);
+    expect(result.wallets[0]).toEqual(mockWallet);
+  });
+
+  it("preserves backend ApiClientError from fetchTrackedWallets", async () => {
+    const makeErrorResponse = () =>
+      new Response(
+        JSON.stringify({
+          error: { code: "INTERNAL_ERROR", message: "Internal server error." },
+        }),
+        { status: 500 },
+      );
+
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(makeErrorResponse())
+      .mockResolvedValueOnce(makeErrorResponse()) as typeof fetch;
+
+    await expect(fetchTrackedWallets()).rejects.toBeInstanceOf(ApiClientError);
+    await expect(fetchTrackedWallets()).rejects.toMatchObject({
+      status: 500,
+      code: "INTERNAL_ERROR",
+      message: "Internal server error.",
+    });
   });
 });

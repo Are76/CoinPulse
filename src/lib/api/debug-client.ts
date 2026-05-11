@@ -62,6 +62,23 @@ const debugStatusReportSchema = z.object({
   }),
 });
 
+const trackedWalletSchema = z.object({
+  id: z.string(),
+  address: z.string(),
+  chainId: z.number(),
+  label: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+const trackedWalletsSchema = z.object({
+  schemaVersion: z.literal("v1"),
+  wallets: z.array(trackedWalletSchema),
+});
+
+export type TrackedWalletDto = z.infer<typeof trackedWalletSchema>;
+export type TrackedWalletsDto = z.infer<typeof trackedWalletsSchema>;
+
 export type HealthReportDto = z.infer<typeof healthReportSchema>;
 export type DebugStatusReportDto = z.infer<typeof debugStatusReportSchema>;
 export type SourceFamily = (typeof SOURCE_FAMILY_OPTIONS)[number];
@@ -83,6 +100,11 @@ export class ApiClientError extends Error {
     this.code = args.code;
     this.details = args.details;
   }
+}
+
+export async function fetchTrackedWallets() {
+  const response = await fetchJson<ApiDataResponse<TrackedWalletsDto>>("/api/wallets/tracked");
+  return trackedWalletsSchema.parse(response.data);
 }
 
 export async function fetchDebugHealth() {
