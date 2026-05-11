@@ -165,7 +165,7 @@ Native-asset PnL (e.g., PnL expressed in PLS) requires historical native-asset p
 
 ### 6.7 No realized PnL without disposal events
 
-Realized PnL may only be accumulated when the canonical ledger contains a confirmed disposal entry (`SEND` or `SWAP_OUT` direction `OUT`) for the asset. Constructing realized PnL from balance deltas, estimated transfers, or inferred events is not acceptable.
+Realized PnL may only be accumulated when the canonical ledger contains a confirmed disposal entry (`SEND` or `SWAP_OUT`) for the asset. Constructing realized PnL from balance deltas, estimated transfers, or inferred events is not acceptable.
 
 Reference: `src/services/pnl/average-cost.ts` — disposal handling logic.
 
@@ -217,19 +217,19 @@ Native PnL (PnL denominated in PLS or another native chain asset) has distinct r
 
 The following ordered sequence represents the correct bounded PR approach to PnL readiness. Each item is a separate future PR.
 
-1. **Finish materialization freshness and UI** — The `materialization.freshness` field was added to `DashboardMaterializationDto`; the UI should surface freshness status (`fresh`, `stale`, `unknown`) and reason in the dashboard before PnL analytics are prominently displayed.
+1. **Finish materialization freshness and UI** (future PR) — The `materialization.freshness` field was added to `DashboardMaterializationDto`; the UI should surface freshness status (`fresh`, `stale`, `unknown`) and reason in the dashboard before PnL analytics are prominently displayed.
 
-2. **Add ledger/source coverage range to dashboard DTO** — The DTO should expose the actual canonical ledger block range covered (`ledgerFromBlock`, `ledgerToBlock`) for the wallet/chain/window, so the UI can surface `partial_history` explicitly before PnL figures are shown.
+2. **Add ledger/source coverage range to dashboard DTO** (future PR) — The DTO should expose the actual canonical ledger block range covered (`ledgerFromBlock`, `ledgerToBlock`) for the wallet/chain/window, so the UI can surface `partial_history` explicitly before PnL figures are shown.
 
-3. **Add pricing status endpoint** — `GET /api/prices/status` does not yet exist. Implement it with source hierarchy, confidence distribution, freshness metadata, and coverage by asset/chain before surfacing pricing quality in the UI.
+3. **Add pricing status endpoint** (future PR) — `GET /api/prices/status` does not yet exist. Implement it with source hierarchy, confidence distribution, freshness metadata, and coverage by asset/chain before surfacing pricing quality in the UI.
 
-4. **Add PnL status contract tests** — Add route-level and service-level tests asserting that the `pnl.status` field, `pnl.warnings`, and the `DashboardPnlDto` shape are stable across PnL engine changes. Verify that `INSUFFICIENT_COST_BASIS`, `MARK_PRICE_UNAVAILABLE`, `UNSUPPORTED_LP_ACTION`, and `UNSUPPORTED_STAKE_ACTION` warning codes are propagated correctly into the DTO.
+4. **Add PnL status contract tests** (future PR) — Add route-level and service-level tests asserting that the `pnl.status` field, `pnl.warnings`, and the `DashboardPnlDto` shape are stable across PnL engine changes. Verify that `INSUFFICIENT_COST_BASIS`, `MARK_PRICE_UNAVAILABLE`, `UNSUPPORTED_LP_ACTION`, and `UNSUPPORTED_STAKE_ACTION` warning codes are propagated correctly into the DTO.
 
-5. **Add explicit realized/unrealized DTO fields only if backend already supports them** — The `DashboardPnlDto` in `src/services/dashboard/types.ts` already includes `realizedPnl` and `unrealizedPnl` fields. Do not add new frontend PnL surface area beyond what the current DTO already exposes. If new PnL fields are needed, extend the backend engine and DTO contract first.
+5. **Add explicit realized/unrealized DTO fields only if backend already supports them** (future PR) — The `DashboardPnlDto` in `src/services/dashboard/types.ts` already includes `realizedPnl` and `unrealizedPnl` fields. Do not add new frontend PnL surface area beyond what the current DTO already exposes. If new PnL fields are needed, extend the backend engine and DTO contract first.
 
-6. **Add native PnL only after historical native pricing support exists** — Do not add any native PnL (PLS-denominated) field to the DTO until `src/services/pricing/` can supply historical native-asset price observations aligned to ledger event timestamps.
+6. **Add native PnL only after historical native pricing support exists** (future PR) — Do not add any native PnL (PLS-denominated) field to the DTO until `src/services/pricing/` can supply historical native-asset price observations aligned to ledger event timestamps.
 
-7. **Only later: PnL ratio, risk metrics, and benchmarking** — PnL %, PnL ratio, volatility-adjusted PnL, and comparative benchmarking are deferred until the core realized/unrealized/net PnL pipeline is tested, stable, and backed by full ledger and pricing coverage.
+7. **Only later: PnL ratio, risk metrics, and benchmarking** (future PR) — PnL %, PnL ratio, volatility-adjusted PnL, and comparative benchmarking are deferred until the core realized/unrealized/net PnL pipeline is tested, stable, and backed by full ledger and pricing coverage.
 
 ---
 
