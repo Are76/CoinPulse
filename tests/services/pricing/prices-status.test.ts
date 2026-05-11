@@ -9,7 +9,7 @@ type PriceObservationRow = {
   confidence: string;
 };
 
-// Mirrors the where-clause shape used by getPricingStatusReport
+// Mirrors the where clause shape used by getPricingStatusReport
 type FindManyArgs = {
   where?: { observedAt?: { gte?: Date } };
 };
