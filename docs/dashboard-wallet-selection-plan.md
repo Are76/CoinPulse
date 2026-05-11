@@ -1,0 +1,101 @@
+# Dashboard Wallet Selection Plan
+
+## 1. Purpose
+
+This document plans the future integration of backend-tracked wallets into the CoinPulse dashboard. It does not implement any code changes. Its goal is to define the correct, architecture-safe sequence so that future PRs do not guess or violate CoinPulse V1 guardrails.
+
+---
+
+## 2. Current State
+
+| Area | Status |
+|---|---|
+| Wallet import page | `/debug/wallets/import` — exists |
+| Tracked wallets page | `/debug/wallets/tracked` — exists (PR #40) |
+| Backend read endpoint | `GET /api/wallets/tracked` — exists (PR #38) |
+| Frontend hook | `useTrackedWalletsQuery` — exists (PR #39) |
+| Import invalidation | Wallet import invalidates tracked wallets query (PR #41) |
+| Dashboard wallet selection | **Not yet implemented** |
+
+The dashboard currently must not infer wallet state from local form state, import responses, or any non-backend source. The backend is the only source of truth.
+
+---
+
+## 3. Guardrails
+
+All future work in this area must respect the following non-negotiable rules:
+
+- Frontend consumes backend DTOs only.
+- No frontend RPC reads.
+- No DexScreener as pricing truth.
+- No mock production portfolio data.
+- No frontend computation of balances, prices, PnL, LP values, stake values, or transactions.
+- Dashboard query invalidation after wallet import is prohibited unless the backend can guarantee that materialized dashboard truth is ready.
+- No Ethereum/Base execution in this slice.
+
+---
+
+## 4. Recommended Future Sequence
+
+Each item below should be its own bounded PR:
+
+1. **Dashboard wallet selector shell** — Add a selector component that reads from `useTrackedWalletsQuery`. Do not auto-load the dashboard on mount. No query wiring yet.
+
+2. **Explicit selected-wallet state** — Add controlled form/input state for the selected wallet address. No dashboard fetch triggered yet.
+
+3. **Wire wallet into dashboard query** — Pass the selected tracked wallet address into the existing `useDashboardQuery` only on explicit user action (submit/load button). No implicit or automatic fetching.
+
+4. **Preserve manual wallet entry** — Keep the current manual wallet address input available, or document the replacement behavior before removing it.
+
+5. **Add focused tests** — Cover: empty tracked wallets state, selected wallet flow, and manual wallet address fallback.
+
+6. **Default wallet or auto-load** — Only consider this after backend materialization readiness is confirmed and explicitly signalled. Do not add this speculatively.
+
+---
+
+## 5. Dashboard Selection Behavior
+
+- **No tracked wallets exist:** Show empty-state guidance. Keep manual wallet address input available.
+- **Tracked wallets exist:** Show a selector listing each wallet by address, label, and chainId as returned by the backend DTO.
+- **User action required:** The user must explicitly choose a wallet and submit/confirm before any dashboard fetch is triggered.
+- **Dashboard query key:** Must continue to include `schemaVersion`, `chainId`, `walletAddress`, `quoteAsset`, and `asOf`/`latest`. This key must not be restructured as part of the selection feature.
+- **No silent multi-wallet fetch:** Do not automatically fetch dashboard data for all tracked wallets.
+
+---
+
+## 6. Invalidation Policy
+
+| Event | Effect |
+|---|---|
+| Wallet import | Invalidates `useTrackedWalletsQuery` |
+| Wallet import | Does **not** invalidate dashboard query |
+| Manual sync / rebuild | Invalidates debug metadata queries |
+| Dashboard invalidation | Only when backend confirms materialization is complete |
+
+Dashboard query invalidation after wallet import is deferred until the backend exposes a reliable signal that the derived portfolio state is fully materialized and ready to serve.
+
+---
+
+## 7. Non-Goals
+
+This document and the PRs it describes will not:
+
+- Include any code changes.
+- Include any UI changes.
+- Include any route changes.
+- Include any schema changes.
+- Integrate tracked wallets into the dashboard.
+- Add wallet delete or edit actions.
+- Add multi-chain execution.
+
+---
+
+## 8. Acceptance Criteria for the Future Dashboard Wiring PR
+
+A PR that wires tracked wallets into the dashboard will be considered correct only when all of the following are true:
+
+- Uses `useTrackedWalletsQuery` to source wallet options.
+- Preserves backend DTO contracts (no shape assumptions in the UI).
+- Keeps the manual wallet address path available, or documents its replacement with explicit rationale.
+- Adds focused tests covering empty wallets, selected wallet, and manual wallet fallback.
+- `npm run test`, `npm run lint`, `npm run typecheck`, and `npm run build` all pass.
