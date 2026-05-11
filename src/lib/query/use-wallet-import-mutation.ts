@@ -20,10 +20,10 @@ export function useWalletImportMutation() {
   return useMutation({
     mutationFn: (args: Parameters<typeof importWallet>[0]) => importWallet(args),
     retry: false,
-    onSettled: () => {
+    onSettled: (_data, _error, variables) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.debug.status() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.debug.health() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.wallets.tracked(369) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.wallets.tracked(variables.chainId) });
     },
   });
 }
