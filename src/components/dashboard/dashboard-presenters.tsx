@@ -126,7 +126,7 @@ export function WalletQueryForm(args: {
       </form>
       {args.selectedTrackedWalletLabel != null ? (
         <p className="mt-3 text-sm text-[color:var(--color-text-muted)]">
-          Selected tracked wallet: {args.selectedTrackedWalletLabel} — will be used when you click Load dashboard.
+          Selected tracked wallet: {args.selectedTrackedWalletLabel} - will be used when you click Load dashboard.
         </p>
       ) : null}
     </SectionCard>
