@@ -156,3 +156,64 @@ describe("GET /api/portfolio/dashboard", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tracked-wallet request contract
+//
+// Regression suite proving the route treats walletAddress and chainId as
+// explicit search-param inputs only.  A tracked-looking address and a
+// manually supplied address must be handled identically — the route does not
+// consult frontend tracked-wallet state at any point.
+// ---------------------------------------------------------------------------
+
+describe("GET /api/portfolio/dashboard tracked-wallet request contract", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("a tracked-looking address in query params is passed as explicit walletAddress to resolveTrackedWalletByAddress", async () => {
+    const TRACKED_LOOKING = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01";
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-tracked",
+      address: TRACKED_LOOKING,
+      chainId: 369,
+    });
+    assemblePortfolioDashboard.mockResolvedValue({ stub: true });
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${TRACKED_LOOKING}&chainId=369`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(resolveTrackedWalletByAddress).toHaveBeenCalledWith({
+      walletAddress: TRACKED_LOOKING,
+      chainId: 369,
+    });
+  });
+
+  it("a manually supplied address is passed to resolveTrackedWalletByAddress the same way as a tracked-looking address", async () => {
+    const MANUAL_ADDRESS = "0x2222222222222222222222222222222222222222";
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-manual",
+      address: MANUAL_ADDRESS,
+      chainId: 369,
+    });
+    assemblePortfolioDashboard.mockResolvedValue({ stub: true });
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${MANUAL_ADDRESS}&chainId=369`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(resolveTrackedWalletByAddress).toHaveBeenCalledWith({
+      walletAddress: MANUAL_ADDRESS,
+      chainId: 369,
+    });
+  });
+});
