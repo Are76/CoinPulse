@@ -163,6 +163,31 @@ Do not run `npm run typecheck` and `npm run build` concurrently. Both can touch 
 
 If transient `.next` or typegen issues occur, rerun sequentially after a clean build and report the behavior honestly.
 
+## Validation failure reporting
+
+Every PR must run all four commands sequentially:
+
+```bash
+npm run test
+npm run lint
+npm run typecheck
+npm run build
+```
+
+If any command fails, the PR summary **must** include:
+
+- The exact command that failed.
+- The exact failing test names or check names.
+- An exact error message summary (copy-paste, not paraphrase).
+- Whether the same failure reproduces on the latest `main`.
+- Whether `npx prisma generate` was run, if Prisma client generation is involved.
+
+Additional rules:
+
+- Do not describe a failure as "pre-existing" unless you have verified it reproduces on the latest `main`.
+- Do not mark a PR ready for merge if any failure is unexplained.
+- If only a subset of tests was run, state that explicitly. Do not claim full test success unless all tests passed.
+
 ## Required operational summary before merge
 
 Before marking a PR merge-ready, report:
