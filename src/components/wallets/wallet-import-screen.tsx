@@ -2,6 +2,8 @@
 
 import { useState, type FormEvent } from "react";
 
+import Link from "next/link";
+
 import { EmptyState } from "@/components/ui/data-state/empty-state";
 import { ErrorState } from "@/components/ui/data-state/error-state";
 import { LoadingState } from "@/components/ui/data-state/loading-state";
@@ -99,6 +101,26 @@ export function WalletImportScreen() {
           <div className="flex flex-wrap gap-2">
             <LabelBadge label="wallet import" tone="neutral" />
           </div>
+        </div>
+      </SurfaceCard>
+
+      <SurfaceCard className="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <span className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--color-text-muted)]">
+          Operator tools
+        </span>
+        <div className="flex flex-wrap gap-4">
+          <Link
+            href="/debug/sync"
+            className="text-sm font-medium text-[color:var(--color-accent-2)] hover:underline"
+          >
+            Debug sync
+          </Link>
+          <Link
+            href="/debug/wallets/import"
+            className="text-sm font-medium text-[color:var(--color-accent-2)] hover:underline"
+          >
+            Wallet import
+          </Link>
         </div>
       </SurfaceCard>
 
