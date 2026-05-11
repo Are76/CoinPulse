@@ -9,11 +9,20 @@ type PriceObservationRow = {
   confidence: string;
 };
 
+// Mirrors the where clause shape used by getPricingStatusReport
+type FindManyArgs = {
+  where?: { observedAt?: { gte?: Date } };
+};
+
 function createDb(observations: PriceObservationRow[]) {
   return {
     priceObservation: {
-      async findMany() {
-        return observations.slice().sort(
+      async findMany(args: FindManyArgs) {
+        const cutoff = args.where?.observedAt?.gte;
+        const filtered = cutoff
+          ? observations.filter((o) => o.observedAt >= cutoff)
+          : observations;
+        return filtered.slice().sort(
           (a, b) => b.observedAt.getTime() - a.observedAt.getTime(),
         );
       },
@@ -31,7 +40,14 @@ describe("getPricingStatusReport — status classification", () => {
     });
 
     expect(report.status).toBe("unknown");
-    expect(report.sources).toEqual([]);
+    // All known source types are surfaced even with zero observations
+    expect(report.sources).toHaveLength(5);
+    const sourceTypes = report.sources.map((s) => s.sourceType);
+    expect(sourceTypes).toContain("ONCHAIN_POOL");
+    expect(sourceTypes).toContain("ONCHAIN_ROUTE");
+    expect(sourceTypes).toContain("ORACLE");
+    expect(sourceTypes).toContain("MANUAL");
+    expect(sourceTypes).toContain("DEXSCREENER");
   });
 
   it("returns ok for a fresh enabled observation", async () => {
@@ -243,7 +259,10 @@ describe("getPricingStatusReport — latestObservedAt selection", () => {
       db: createDb([]) as never,
     });
 
-    expect(report.sources).toEqual([]);
+    // All known sources appear; each enabled zero-obs source has null latestObservedAt
+    const onchain = report.sources.find((s) => s.sourceType === "ONCHAIN_POOL");
+    expect(onchain).toBeDefined();
+    expect(onchain?.latestObservedAt).toBeNull();
   });
 
   it("uses staleAfterSeconds from the most recent observation per source type", async () => {
@@ -331,7 +350,7 @@ describe("getPricingStatusReport — DTO shape", () => {
       ]) as never,
     });
 
-    expect(report.sources).toHaveLength(2);
+    // All 5 known source types always appear; at least ONCHAIN_POOL and MANUAL are present
     const sourceTypes = report.sources.map((s) => s.sourceType);
     expect(sourceTypes).toContain("ONCHAIN_POOL");
     expect(sourceTypes).toContain("MANUAL");
@@ -347,5 +366,135 @@ describe("getPricingStatusReport — asOf matches injected now", () => {
     })) as PricingStatusReport;
 
     expect(report.asOf).toBe("2026-05-11T10:30:00.000Z");
+  });
+});
+
+describe("getPricingStatusReport — known zero-observation sources", () => {
+  it("enabled source with no observations appears as unknown with reason no_observations", async () => {
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([]) as never,
+    });
+
+    const onchain = report.sources.find((s) => s.sourceType === "ONCHAIN_POOL");
+    expect(onchain).toBeDefined();
+    expect(onchain?.status).toBe("unknown");
+    expect(onchain?.observationsCount).toBe(0);
+    expect(onchain?.rejectedCount).toBe(0);
+    expect(onchain?.latestObservedAt).toBeNull();
+    expect(onchain?.staleAfterSeconds).toBeNull();
+    expect(onchain?.reason).toBe("no_observations");
+  });
+
+  it("disabled source with no observations appears as disabled with reason source_disabled", async () => {
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([]) as never,
+    });
+
+    const dex = report.sources.find((s) => s.sourceType === "DEXSCREENER");
+    expect(dex).toBeDefined();
+    expect(dex?.status).toBe("disabled");
+    expect(dex?.observationsCount).toBe(0);
+    expect(dex?.rejectedCount).toBe(0);
+    expect(dex?.latestObservedAt).toBeNull();
+    expect(dex?.staleAfterSeconds).toBeNull();
+    expect(dex?.reason).toBe("source_disabled");
+  });
+
+  it("overall status is unknown when all enabled sources have zero observations", async () => {
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([]) as never,
+    });
+
+    expect(report.status).toBe("unknown");
+  });
+
+  it("disabled-only source does not make overall status ok", async () => {
+    // Only DEXSCREENER has observations; all enabled sources have zero
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([
+        {
+          sourceType: "DEXSCREENER",
+          observedAt: new Date("2026-05-11T11:59:30.000Z"),
+          staleAfterSeconds: 300,
+          confidence: "0.99",
+        },
+      ]) as never,
+    });
+
+    expect(report.status).toBe("unknown");
+    const dex = report.sources.find((s) => s.sourceType === "DEXSCREENER");
+    expect(dex?.status).toBe("disabled");
+  });
+});
+
+describe("getPricingStatusReport — bounded lookback window", () => {
+  it("excludes observations older than the lookback window", async () => {
+    // 8 days before NOW is outside the 7-day lookback
+    const tooOld = new Date("2026-05-03T12:00:00.000Z");
+    // 6 days before NOW is inside the 7-day lookback
+    const withinWindow = new Date("2026-05-05T12:00:00.000Z");
+
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([
+        {
+          sourceType: "ONCHAIN_POOL",
+          observedAt: tooOld,
+          staleAfterSeconds: 120,
+          confidence: "0.90",
+        },
+        {
+          sourceType: "ORACLE",
+          observedAt: withinWindow,
+          staleAfterSeconds: 3600,
+          confidence: "0.90",
+        },
+      ]) as never,
+    });
+
+    // The too-old observation is filtered out; ONCHAIN_POOL shows zero observations
+    const onchain = report.sources.find((s) => s.sourceType === "ONCHAIN_POOL");
+    expect(onchain?.observationsCount).toBe(0);
+    expect(onchain?.status).toBe("unknown");
+
+    // The within-window observation is retained
+    const oracle = report.sources.find((s) => s.sourceType === "ORACLE");
+    expect(oracle?.observationsCount).toBe(1);
+  });
+
+  it("fresh observation inside lookback produces overall ok", async () => {
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([
+        {
+          sourceType: "ONCHAIN_POOL",
+          observedAt: new Date("2026-05-11T11:59:00.000Z"), // 60s ago, inside 7d window
+          staleAfterSeconds: 120,
+          confidence: "0.90",
+        },
+      ]) as never,
+    });
+
+    expect(report.status).toBe("ok");
+  });
+
+  it("stale observation inside lookback produces overall degraded", async () => {
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([
+        {
+          sourceType: "ONCHAIN_POOL",
+          observedAt: new Date("2026-05-10T12:00:00.000Z"), // 24h ago, inside 7d window but stale
+          staleAfterSeconds: 120,
+          confidence: "0.90",
+        },
+      ]) as never,
+    });
+
+    expect(report.status).toBe("degraded");
   });
 });
