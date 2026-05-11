@@ -462,4 +462,204 @@ describe("dashboard tracked wallet selector behavior", () => {
       });
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Suite 5 – manual entry submit
+  // -------------------------------------------------------------------------
+
+  describe("manual entry submit", () => {
+    const MANUAL_ADDRESS = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    it("submit is not triggered before the explicit Load dashboard button click", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: MANUAL_ADDRESS },
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("typing a wallet address manually and submitting passes the typed address to the query flow", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: MANUAL_ADDRESS },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      expect(onSubmit).toHaveBeenCalledWith({
+        walletAddress: MANUAL_ADDRESS,
+        chainId: 369,
+      });
+    });
+
+    it("typing a custom chain ID and submitting passes the typed chain ID to the query flow", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: MANUAL_ADDRESS },
+      });
+      fireEvent.change(screen.getByRole("textbox", { name: "Chain ID" }), {
+        target: { value: "1" },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      expect(onSubmit).toHaveBeenCalledWith({
+        walletAddress: MANUAL_ADDRESS,
+        chainId: 1,
+      });
+    });
+
+    it("blank wallet address does not trigger the query flow on submit", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      // Wallet address field is blank (default); submit should be rejected
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Suite 6 – regression: select then edit then submit
+  // -------------------------------------------------------------------------
+
+  describe("regression: manually edited address after tracked wallet selection", () => {
+    const EDITED_ADDRESS = "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+
+    it("submitting after editing the address uses the edited address, not the selected wallet address", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [TRACKED_WALLET],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      // Step 1: select the tracked wallet
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${TRACKED_WALLET.address}`,
+        }),
+      );
+      expect(screen.getByRole("textbox", { name: "Wallet address" })).toHaveValue(
+        TRACKED_WALLET.address,
+      );
+
+      // Step 2: manually edit the wallet address
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: EDITED_ADDRESS },
+      });
+      expect(screen.getByRole("textbox", { name: "Wallet address" })).toHaveValue(EDITED_ADDRESS);
+
+      // Step 3: submit
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      // Assert the edited address was submitted, not the original tracked wallet address
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      expect(onSubmit).toHaveBeenCalledWith({
+        walletAddress: EDITED_ADDRESS,
+        chainId: 369,
+      });
+      expect(onSubmit).not.toHaveBeenCalledWith({
+        walletAddress: TRACKED_WALLET.address,
+        chainId: 369,
+      });
+    });
+
+    it("submitting after editing the chain ID uses the edited chain ID, not the selected wallet chain", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [TRACKED_WALLET],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      // Step 1: select the tracked wallet (chainId 369)
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${TRACKED_WALLET.address}`,
+        }),
+      );
+
+      // Step 2: manually change chain ID
+      fireEvent.change(screen.getByRole("textbox", { name: "Chain ID" }), {
+        target: { value: "1" },
+      });
+
+      // Step 3: submit
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      expect(onSubmit).toHaveBeenCalledWith({
+        walletAddress: TRACKED_WALLET.address,
+        chainId: 1,
+      });
+    });
+
+    it("submit is not triggered by selection or editing – only by the explicit button click", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [TRACKED_WALLET],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      // select
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: `Select wallet ${TRACKED_WALLET.address}`,
+        }),
+      );
+      expect(onSubmit).not.toHaveBeenCalled();
+
+      // edit
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: EDITED_ADDRESS },
+      });
+      expect(onSubmit).not.toHaveBeenCalled();
+
+      // explicit submit
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+  });
 });
