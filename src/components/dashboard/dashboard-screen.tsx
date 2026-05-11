@@ -14,6 +14,7 @@ import {
   PortfolioSummarySection,
   StakePositionsTable,
   TokenPositionsTable,
+  TrackedWalletSelector,
   WalletQueryForm,
 } from "@/components/dashboard/dashboard-presenters";
 import {
@@ -28,6 +29,7 @@ import {
 } from "@/components/dashboard/dashboard-screen-helpers";
 import { queryKeys } from "@/lib/query/query-keys";
 import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
+import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
 
 const DEFAULT_CHAIN_ID = "369";
 const DEFAULT_QUOTE_ASSET = "fiat:usd";
@@ -39,6 +41,8 @@ export function DashboardScreen() {
   const [chainId, setChainId] = useState(DEFAULT_CHAIN_ID);
   const [submittedParams, setSubmittedParams] = useState<SubmittedParams | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+
+  const trackedWalletsQuery = useTrackedWalletsQuery();
 
   const healthQuery = useQuery({
     queryKey: queryKeys.debug.health(),
@@ -62,6 +66,11 @@ export function DashboardScreen() {
     quoteAsset: DEFAULT_QUOTE_ASSET,
     enabled: submittedParams !== null,
   });
+
+  function handleSelectTrackedWallet(address: string, selectedChainId: string) {
+    setWalletAddress(address);
+    setChainId(selectedChainId);
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -117,6 +126,13 @@ export function DashboardScreen() {
         redisStatus={health?.dependencies.redis.status ?? "loading"}
         sourceFamilies={debugStatus?.sourceFamilies.join(", ") ?? "loading"}
         metaError={metaError}
+      />
+
+      <TrackedWalletSelector
+        wallets={trackedWalletsQuery.data?.wallets}
+        isLoading={trackedWalletsQuery.isPending}
+        isError={trackedWalletsQuery.isError}
+        onSelectWallet={handleSelectTrackedWallet}
       />
 
       <WalletQueryForm

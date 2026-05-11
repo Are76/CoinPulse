@@ -17,6 +17,7 @@ import {
 import { SurfaceCard } from "@/components/ui/surface-card";
 import { TimestampLabel } from "@/components/ui/value/timestamp-label";
 import { ValueDisplay } from "@/components/ui/value/value-display";
+import type { TrackedWalletDto } from "@/lib/api/debug-client";
 import type {
   DashboardLpPositionDto,
   DashboardPnlDto,
@@ -122,6 +123,62 @@ export function WalletQueryForm(args: {
           </button>
         </div>
       </form>
+    </SectionCard>
+  );
+}
+
+export function TrackedWalletSelector(args: {
+  wallets: TrackedWalletDto[] | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  onSelectWallet: (address: string, chainId: string) => void;
+}) {
+  return (
+    <SectionCard
+      title="Tracked wallets"
+      subtitle="Select a tracked wallet to populate the address and chain fields. Selecting does not load the dashboard — use the Load dashboard button to fetch."
+    >
+      {args.isLoading ? (
+        <p className="text-sm text-[color:var(--color-text-muted)]">
+          Loading tracked wallets…
+        </p>
+      ) : null}
+
+      {args.isError ? (
+        <p className="text-sm text-[color:var(--color-text-muted)]">
+          Could not load tracked wallets. Use manual entry below.
+        </p>
+      ) : null}
+
+      {!args.isLoading && !args.isError && args.wallets !== undefined && args.wallets.length === 0 ? (
+        <p className="text-sm text-[color:var(--color-text-muted)]">
+          No tracked wallets yet. Import a wallet from Operator tools or use manual entry.
+        </p>
+      ) : null}
+
+      {!args.isLoading && !args.isError && args.wallets !== undefined && args.wallets.length > 0 ? (
+        <div className="flex flex-col divide-y divide-[color:var(--color-border-soft)]">
+          {args.wallets.map((wallet) => (
+            <button
+              key={wallet.id}
+              type="button"
+              aria-label={`Select wallet ${wallet.address}`}
+              className="flex items-start justify-between gap-4 py-3 text-left transition hover:opacity-80"
+              onClick={() => args.onSelectWallet(wallet.address, String(wallet.chainId))}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-mono text-sm">{wallet.address}</p>
+                <p className="mt-0.5 text-xs text-[color:var(--color-text-muted)]">
+                  Chain ID: {wallet.chainId}
+                </p>
+                <p className="mt-0.5 text-xs text-[color:var(--color-text-muted)]">
+                  {wallet.label ?? "Unlabeled"}
+                </p>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </SectionCard>
   );
 }
