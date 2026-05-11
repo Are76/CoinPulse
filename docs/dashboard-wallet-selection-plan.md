@@ -76,7 +76,52 @@ Dashboard query invalidation after wallet import is deferred until the backend e
 
 ---
 
-## 7. Non-Goals
+## 7. Milestone Status
+
+> **As of PR #53, the dashboard wallet-selection milestone is complete.**
+
+### Completed
+
+| Item | Delivered in |
+|---|---|
+| Backend tracked wallets read endpoint (`GET /api/wallets/tracked`) | PR #38 |
+| Frontend tracked wallets query hook (`useTrackedWalletsQuery`) | PR #39 |
+| Operator tracked wallets debug page (`/debug/wallets/tracked`) | PR #40 |
+| Wallet import invalidates tracked wallets query | PR #41 |
+| Dashboard tracked-wallet selector shell | PR #43 |
+| Selecting a tracked wallet only populates form fields (no auto-fetch) | PR #45 |
+| Dashboard submit remains explicit (user-initiated only) | PR #48 |
+| Selected-state and submitted-source visual indicators | PR #48 / PR #51 |
+| Selected wallet submit context helper | PR #49 |
+| Dashboard request contract verified by tests | PR #50 |
+| Submitted wallet source indicator | PR #51 |
+| Tracked-wallet matching helper refactored and reused | PR #52 |
+| Empty tracked-wallet state links to wallet import page | PR #53 |
+| Route, client, and behavior tests cover key contracts | PRs #38–#53 |
+
+### Still Not Implemented
+
+The following items were intentionally deferred and are not part of this milestone:
+
+- No dashboard auto-load on wallet selection.
+- No default wallet selection (no wallet pre-selected on mount).
+- No wallet delete or edit actions.
+- No dashboard query invalidation triggered by wallet import.
+- No multi-chain execution beyond existing chain ID handling.
+- No frontend computation of balances, prices, or PnL (remains a permanent guardrail).
+
+### Recommended Next Implementation Step
+
+Do **not** add wallet delete/edit actions yet. The V1 dashboard read path is not yet stable, and premature mutation actions could complicate materialization correctness guarantees.
+
+Recommended options in order of priority:
+
+1. **Continue portfolio/dashboard data quality work** — Improve pricing confidence, materialization correctness, and dashboard DTO completeness so that the read path is stable before any write actions are introduced.
+2. **Add a wallet delete/archive planning document** — If delete is needed sooner, write a bounded planning doc first (analogous to this one) and get architecture review before touching mutation routes or schema.
+
+---
+
+## 8. Non-Goals
 
 This document and the PRs it describes will not:
 
