@@ -50,6 +50,12 @@ const MOCK_DASHBOARD = {
     errorMessage: null,
     hasNegativeBalances: false,
     negativeBalances: [],
+    freshness: {
+      status: "fresh" as const,
+      reason: null,
+      lastMaterializedAt: "2026-01-01T00:00:00.000Z",
+      staleAfterSeconds: 900,
+    },
   },
   summary: {
     totalValueQuote: null,

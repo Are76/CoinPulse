@@ -444,8 +444,293 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           errorMessage: null,
           hasNegativeBalances: false,
           negativeBalances: [],
+          freshness: {
+            status: "unknown",
+            reason: "No materialization record exists.",
+            lastMaterializedAt: null,
+            staleAfterSeconds: null,
+          },
         },
       },
     });
+  });
+
+  it("freshness status is fresh when latestMaterializedAt is within threshold", async () => {
+    // asOf is 2026-05-08T12:04:00.000Z, latestMaterializedAt is 30 seconds earlier — well within 900s
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: null,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        materialization: {
+          freshness: {
+            status: "fresh",
+            reason: null,
+            lastMaterializedAt: "2026-05-08T12:03:30.000Z",
+            staleAfterSeconds: 900,
+          },
+        },
+      },
+    });
+  });
+
+  it("freshness status is stale when latestMaterializedAt is older than threshold", async () => {
+    // asOf is 2026-05-08T12:04:00.000Z, latestMaterializedAt is 30 minutes earlier — exceeds 900s
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T11:33:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T11:33:30.000Z"),
+            sourceLedgerFromBlock: null,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        materialization: {
+          freshness: {
+            status: "stale",
+            lastMaterializedAt: "2026-05-08T11:33:30.000Z",
+            staleAfterSeconds: 900,
+          },
+        },
+      },
+    });
+  });
+
+  it("freshness status is unknown when materialization failed with no prior successful run", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "FAILED",
+            completedSuccessfully: false,
+            lastAttemptedAt: new Date("2026-05-08T12:04:00.000Z"),
+            latestMaterializedAt: null,
+            sourceLedgerFromBlock: null,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: "sync exploded on first run",
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        materialization: {
+          freshness: {
+            status: "unknown",
+            reason: "Materialization failed: sync exploded on first run",
+            lastMaterializedAt: null,
+            staleAfterSeconds: 900,
+          },
+        },
+      },
+    });
+  });
+
+  it("freshness status is stale when materialization failed but prior successful run is older than threshold", async () => {
+    // latestMaterializedAt is 2 hours old, status FAILED — stale
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "FAILED",
+            completedSuccessfully: false,
+            lastAttemptedAt: new Date("2026-05-08T12:04:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T10:00:00.000Z"),
+            sourceLedgerFromBlock: null,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: "materialization failed with stale prior data",
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        materialization: {
+          freshness: {
+            status: "stale",
+            reason: "Materialization failed: materialization failed with stale prior data",
+            lastMaterializedAt: "2026-05-08T10:00:00.000Z",
+            staleAfterSeconds: 900,
+          },
+        },
+      },
+    });
+  });
+
+  it("existing dashboard valuation and position fields are unchanged after freshness addition", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: null,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+        priceObservations: [createPriceObservation()],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.summary.totalValueQuote).toBe("10");
+    expect(body.data.summary.valuationStatus).toBe("available");
+    expect(body.data.tokenPositions).toHaveLength(1);
+    expect(body.data.tokenPositions[0].assetId).toBe(TOKEN_ASSET);
+    expect(body.data.tokenPositions[0].valuation.valueQuote).toBe("10");
   });
 });

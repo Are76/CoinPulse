@@ -53,6 +53,15 @@ export type DashboardNegativeBalanceDto = {
   decimals: number | null;
 };
 
+export type DashboardMaterializationFreshnessStatus = "fresh" | "stale" | "unknown";
+
+export type DashboardMaterializationFreshnessDto = {
+  status: DashboardMaterializationFreshnessStatus;
+  reason: string | null;
+  lastMaterializedAt: string | null;
+  staleAfterSeconds: number | null;
+};
+
 export type DashboardMaterializationDto = {
   status: "RUNNING" | "FAILED" | "COMPLETED" | null;
   completedSuccessfully: boolean | null;
@@ -67,6 +76,7 @@ export type DashboardMaterializationDto = {
   errorMessage: string | null;
   hasNegativeBalances: boolean;
   negativeBalances: DashboardNegativeBalanceDto[];
+  freshness: DashboardMaterializationFreshnessDto;
 };
 
 export type PortfolioSummaryDto = {
