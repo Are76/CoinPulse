@@ -16,7 +16,7 @@ import {
   WalletQueryForm,
 } from "@/components/dashboard/dashboard-presenters";
 import type { TrackedWalletDto } from "@/lib/api/debug-client";
-import { resolveDashboardSubmission } from "@/components/dashboard/dashboard-screen-helpers";
+import { resolveDashboardSubmission, findTrackedWalletLabel } from "@/components/dashboard/dashboard-screen-helpers";
 import type { SubmittedParams } from "@/components/dashboard/dashboard-screen-helpers";
 
 // ---------------------------------------------------------------------------
@@ -40,20 +40,6 @@ const TRACKED_WALLET: TrackedWalletDto = {
 // by resolveDashboardSubmission). No JSX; only React.createElement.
 // ---------------------------------------------------------------------------
 
-function resolveSelectedTrackedWalletLabel(
-  wallets: TrackedWalletDto[] | undefined,
-  walletAddress: string,
-  chainId: string,
-): string | null {
-  if (!wallets || !walletAddress || !chainId) return null;
-  const match = wallets.find(
-    (w) =>
-      w.address.toLowerCase() === walletAddress.toLowerCase() &&
-      String(w.chainId) === chainId,
-  );
-  return match !== undefined ? (match.label ?? "Unlabeled") : null;
-}
-
 function makeHarness(harnessArgs: {
   wallets: TrackedWalletDto[] | undefined;
   isError: boolean;
@@ -63,7 +49,7 @@ function makeHarness(harnessArgs: {
     const [walletAddress, setWalletAddress] = React.useState("");
     const [chainId, setChainId] = React.useState("369");
 
-    const selectedTrackedWalletLabel = resolveSelectedTrackedWalletLabel(
+    const selectedTrackedWalletLabel = findTrackedWalletLabel(
       harnessArgs.wallets,
       walletAddress,
       chainId,

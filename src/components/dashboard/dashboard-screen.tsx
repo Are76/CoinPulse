@@ -25,6 +25,7 @@ import {
   getDashboardErrorMessage,
   getDashboardMetaErrorMessage,
   resolveDashboardSubmission,
+  findTrackedWalletLabel,
   type SubmittedParams,
 } from "@/components/dashboard/dashboard-screen-helpers";
 import { queryKeys } from "@/lib/query/query-keys";
@@ -68,15 +69,11 @@ export function DashboardScreen() {
   });
 
   const trackedWallets = trackedWalletsQuery.data?.wallets;
-  const selectedTrackedWalletLabel = (() => {
-    if (!trackedWallets || !walletAddress || !chainId) return null;
-    const match = trackedWallets.find(
-      (w) =>
-        w.address.toLowerCase() === walletAddress.toLowerCase() &&
-        String(w.chainId) === chainId,
-    );
-    return match !== undefined ? (match.label ?? "Unlabeled") : null;
-  })();
+  const selectedTrackedWalletLabel = findTrackedWalletLabel(
+    trackedWallets,
+    walletAddress,
+    chainId,
+  );
 
   function handleSelectTrackedWallet(address: string, selectedChainId: string) {
     setWalletAddress(address);

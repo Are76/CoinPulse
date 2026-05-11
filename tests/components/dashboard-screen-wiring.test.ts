@@ -107,6 +107,7 @@ describe("dashboard-screen wiring", () => {
   it("screen computes selectedTrackedWalletLabel from tracked wallets state", () => {
     const source = readScreen();
     expect(source).toContain("selectedTrackedWalletLabel");
+    expect(source).toContain("findTrackedWalletLabel");
   });
 
   it("screen passes selectedTrackedWalletLabel to WalletQueryForm", () => {
