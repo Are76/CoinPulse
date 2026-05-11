@@ -152,8 +152,16 @@ describe("dashboard-screen wiring", () => {
 
   it("MaterializationFreshnessSection renders lastMaterializedAt via TimestampLabel", () => {
     const source = readPresenters();
-    expect(source).toContain("freshness.lastMaterializedAt");
-    expect(source).toContain("TimestampLabel");
+    // Extract only the MaterializationFreshnessSection block so that TimestampLabel
+    // references elsewhere in the file cannot cause a false-positive.
+    const sectionStart = source.indexOf("export function MaterializationFreshnessSection");
+    expect(sectionStart).not.toBe(-1);
+    // Find the next exported function after the section start to bound the block.
+    const nextExportIdx = source.indexOf("\nexport function ", sectionStart + 1);
+    const sectionSource =
+      nextExportIdx === -1 ? source.slice(sectionStart) : source.slice(sectionStart, nextExportIdx);
+    expect(sectionSource).toContain("TimestampLabel");
+    expect(sectionSource).toContain('value={freshness.lastMaterializedAt}');
   });
 
   it("MaterializationFreshnessSection renders staleAfterSeconds when present", () => {
