@@ -204,6 +204,15 @@ export function TrackedWalletSelector(args: {
   );
 }
 
+export function SubmittedWalletSourceIndicator({ source }: { source: string | null }) {
+  if (source === null) return null;
+  return (
+    <p className="text-sm text-[color:var(--color-text-muted)]">
+      {source}
+    </p>
+  );
+}
+
 export function IdleStateCard() {
   return (
     <EmptyState

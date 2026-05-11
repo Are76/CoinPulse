@@ -7,6 +7,28 @@ export type SubmittedParams = {
 };
 
 /**
+ * Returns a UI-ready string describing the source of the submitted wallet.
+ * Returns null when no params have been submitted yet (before first submit).
+ * - Tracked wallet match: "Submitted from tracked wallet: {label}"
+ * - No match: "Submitted from manual entry"
+ */
+export function resolveSubmittedWalletSource(
+  submittedParams: SubmittedParams | null,
+  wallets: TrackedWalletDto[] | undefined,
+): string | null {
+  if (submittedParams === null) return null;
+  const label = findTrackedWalletLabel(
+    wallets,
+    submittedParams.walletAddress,
+    String(submittedParams.chainId),
+  );
+  if (label !== null) {
+    return `Submitted from tracked wallet: ${label}`;
+  }
+  return "Submitted from manual entry";
+}
+
+/**
  * Returns the label of the tracked wallet that matches the given address and
  * chainId, or null if no match is found. Case-insensitive address comparison.
  * Returns "Unlabeled" when a match is found but the wallet has no label.
