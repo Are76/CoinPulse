@@ -13,6 +13,7 @@ import {
   LpPositionsTable,
   PortfolioSummarySection,
   StakePositionsTable,
+  SubmittedWalletSourceIndicator,
   TokenPositionsTable,
   TrackedWalletSelector,
   WalletQueryForm,
@@ -25,6 +26,7 @@ import {
   getDashboardErrorMessage,
   getDashboardMetaErrorMessage,
   resolveDashboardSubmission,
+  resolveSubmittedWalletSource,
   findTrackedWalletLabel,
   type SubmittedParams,
 } from "@/components/dashboard/dashboard-screen-helpers";
@@ -73,6 +75,10 @@ export function DashboardScreen() {
     trackedWallets,
     walletAddress,
     chainId,
+  );
+  const submittedWalletSource = resolveSubmittedWalletSource(
+    submittedParams,
+    trackedWallets,
   );
 
   function handleSelectTrackedWallet(address: string, selectedChainId: string) {
@@ -156,6 +162,7 @@ export function DashboardScreen() {
       />
 
       {isIdle ? <IdleStateCard /> : null}
+      <SubmittedWalletSourceIndicator source={submittedWalletSource} />
       {errorMessage !== null ? <ErrorStateCard message={errorMessage} /> : null}
       {submittedParams !== null && dashboardQuery.isLoading ? <LoadingStateCard /> : null}
 

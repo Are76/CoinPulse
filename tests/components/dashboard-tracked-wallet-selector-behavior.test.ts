@@ -14,9 +14,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TrackedWalletSelector,
   WalletQueryForm,
+  SubmittedWalletSourceIndicator,
 } from "@/components/dashboard/dashboard-presenters";
 import type { TrackedWalletDto } from "@/lib/api/debug-client";
-import { resolveDashboardSubmission, findTrackedWalletLabel } from "@/components/dashboard/dashboard-screen-helpers";
+import { resolveDashboardSubmission, findTrackedWalletLabel, resolveSubmittedWalletSource } from "@/components/dashboard/dashboard-screen-helpers";
 import type { SubmittedParams } from "@/components/dashboard/dashboard-screen-helpers";
 
 // ---------------------------------------------------------------------------
@@ -95,8 +96,70 @@ function makeHarness(harnessArgs: {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Source harness – extends makeHarness to also track submittedParams and
+// render SubmittedWalletSourceIndicator. Mirrors the DashboardScreen logic.
 // ---------------------------------------------------------------------------
+
+function makeSourceHarness(harnessArgs: {
+  wallets: TrackedWalletDto[] | undefined;
+  isError: boolean;
+}) {
+  function Harness() {
+    const [walletAddress, setWalletAddress] = React.useState("");
+    const [chainId, setChainId] = React.useState("369");
+    const [submittedParams, setSubmittedParams] = React.useState<SubmittedParams | null>(null);
+
+    const selectedTrackedWalletLabel = findTrackedWalletLabel(
+      harnessArgs.wallets,
+      walletAddress,
+      chainId,
+    );
+
+    const submittedWalletSource = resolveSubmittedWalletSource(
+      submittedParams,
+      harnessArgs.wallets,
+    );
+
+    function handleSelectWallet(address: string, selectedChainId: string) {
+      setWalletAddress(address);
+      setChainId(selectedChainId);
+    }
+
+    function handleSubmit(event: FormEvent<HTMLFormElement>) {
+      event.preventDefault();
+      const result = resolveDashboardSubmission({ walletAddress, chainId });
+      if (result.validationError === null) {
+        setSubmittedParams(result.submittedParams);
+      }
+    }
+
+    return React.createElement(
+      "div",
+      null,
+      React.createElement(TrackedWalletSelector, {
+        wallets: harnessArgs.wallets,
+        isLoading: false,
+        isError: harnessArgs.isError,
+        onSelectWallet: handleSelectWallet,
+        selectedWalletAddress: walletAddress,
+        selectedChainId: chainId,
+      }),
+      React.createElement(WalletQueryForm, {
+        walletAddress,
+        chainId,
+        isLoading: false,
+        selectedTrackedWalletLabel,
+        onWalletAddressChange: setWalletAddress,
+        onChainIdChange: setChainId,
+        onSubmit: handleSubmit,
+      }),
+      React.createElement(SubmittedWalletSourceIndicator, { source: submittedWalletSource }),
+    );
+  }
+
+  return Harness;
+}
+
 
 describe("dashboard tracked wallet selector behavior", () => {
   afterEach(() => {
@@ -870,6 +933,149 @@ describe("dashboard tracked wallet selector behavior", () => {
         walletAddress: LABELED_WALLET.address,
         chainId: 369,
       });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Suite 8 – submitted wallet source indicator
+  // -------------------------------------------------------------------------
+
+  describe("submitted wallet source indicator", () => {
+    const LABELED_WALLET: TrackedWalletDto = {
+      ...TRACKED_WALLET,
+      label: "Primary",
+    };
+
+    const UNLABELED_WALLET: TrackedWalletDto = {
+      ...TRACKED_WALLET,
+      id: "wallet-unlabeled",
+      address: "0x3333333333333333333333333333333333333333",
+      label: null,
+    };
+
+    const MANUAL_ADDRESS = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    it("no submitted source indicator before explicit submit", () => {
+      const Harness = makeSourceHarness({ wallets: [LABELED_WALLET], isError: false });
+
+      render(React.createElement(Harness));
+
+      expect(screen.queryByText(/Submitted from/i)).toBeNull();
+    });
+
+    it("submitting a tracked wallet shows 'Submitted from tracked wallet: {label}'", () => {
+      const Harness = makeSourceHarness({ wallets: [LABELED_WALLET], isError: false });
+
+      render(React.createElement(Harness));
+
+      fireEvent.click(
+        screen.getByRole("button", { name: `Select wallet ${LABELED_WALLET.address}` }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      expect(
+        screen.getByText("Submitted from tracked wallet: Primary"),
+      ).toBeInTheDocument();
+    });
+
+    it("submitting an unlabeled tracked wallet shows 'Submitted from tracked wallet: Unlabeled'", () => {
+      const Harness = makeSourceHarness({ wallets: [UNLABELED_WALLET], isError: false });
+
+      render(React.createElement(Harness));
+
+      fireEvent.click(
+        screen.getByRole("button", { name: `Select wallet ${UNLABELED_WALLET.address}` }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      expect(
+        screen.getByText("Submitted from tracked wallet: Unlabeled"),
+      ).toBeInTheDocument();
+    });
+
+    it("submitting a manually entered address shows 'Submitted from manual entry'", () => {
+      const Harness = makeSourceHarness({ wallets: [LABELED_WALLET], isError: false });
+
+      render(React.createElement(Harness));
+
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: MANUAL_ADDRESS },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      expect(screen.getByText("Submitted from manual entry")).toBeInTheDocument();
+    });
+
+    it("indicator reflects last submitted tracked wallet even after editing the form address field", () => {
+      const Harness = makeSourceHarness({ wallets: [LABELED_WALLET], isError: false });
+
+      render(React.createElement(Harness));
+
+      // Submit tracked wallet
+      fireEvent.click(
+        screen.getByRole("button", { name: `Select wallet ${LABELED_WALLET.address}` }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      expect(
+        screen.getByText("Submitted from tracked wallet: Primary"),
+      ).toBeInTheDocument();
+
+      // Edit the form field without submitting again
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: MANUAL_ADDRESS },
+      });
+
+      // Indicator must still reflect the last submitted tracked wallet
+      expect(
+        screen.getByText("Submitted from tracked wallet: Primary"),
+      ).toBeInTheDocument();
+    });
+
+    it("indicator reflects last submitted manual wallet even after selecting a tracked wallet", () => {
+      const Harness = makeSourceHarness({ wallets: [LABELED_WALLET], isError: false });
+
+      render(React.createElement(Harness));
+
+      // Submit manual wallet
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: MANUAL_ADDRESS },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      expect(screen.getByText("Submitted from manual entry")).toBeInTheDocument();
+
+      // Select a tracked wallet without submitting again
+      fireEvent.click(
+        screen.getByRole("button", { name: `Select wallet ${LABELED_WALLET.address}` }),
+      );
+
+      // Indicator must still reflect the last submitted manual wallet
+      expect(screen.getByText("Submitted from manual entry")).toBeInTheDocument();
+    });
+
+    it("explicit submit after selecting tracked wallet updates the indicator", () => {
+      const Harness = makeSourceHarness({ wallets: [LABELED_WALLET], isError: false });
+
+      render(React.createElement(Harness));
+
+      // First: submit manual wallet
+      fireEvent.change(screen.getByRole("textbox", { name: "Wallet address" }), {
+        target: { value: MANUAL_ADDRESS },
+      });
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+      expect(screen.getByText("Submitted from manual entry")).toBeInTheDocument();
+
+      // Then: select tracked wallet and submit explicitly
+      fireEvent.click(
+        screen.getByRole("button", { name: `Select wallet ${LABELED_WALLET.address}` }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
+
+      // Indicator must now reflect the newly submitted tracked wallet
+      expect(
+        screen.getByText("Submitted from tracked wallet: Primary"),
+      ).toBeInTheDocument();
     });
   });
 });
