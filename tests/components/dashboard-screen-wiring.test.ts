@@ -178,4 +178,86 @@ describe("dashboard-screen wiring", () => {
     const source = readScreen();
     expect(source).toContain("materialization.freshness");
   });
+
+  it("presenters exports LedgerCoverageSection", () => {
+    const source = readPresenters();
+    expect(source).toContain("export function LedgerCoverageSection");
+  });
+
+  it("LedgerCoverageSection consumes ledgerCoverage.status", () => {
+    const source = readPresenters();
+    const sectionStart = source.indexOf("export function LedgerCoverageSection");
+    expect(sectionStart).not.toBe(-1);
+    const nextExportIdx = source.indexOf("\nexport function ", sectionStart + 1);
+    const sectionSource =
+      nextExportIdx === -1 ? source.slice(sectionStart) : source.slice(sectionStart, nextExportIdx);
+    expect(sectionSource).toContain("ledgerCoverage.status");
+    expect(sectionSource).toContain('"covered"');
+    expect(sectionSource).toContain('"partial"');
+    expect(sectionSource).toContain('"Covered"');
+    expect(sectionSource).toContain('"Partial"');
+    expect(sectionSource).toContain('"Unknown"');
+  });
+
+  it("LedgerCoverageSection renders reason when present", () => {
+    const source = readPresenters();
+    const sectionStart = source.indexOf("export function LedgerCoverageSection");
+    const nextExportIdx = source.indexOf("\nexport function ", sectionStart + 1);
+    const sectionSource =
+      nextExportIdx === -1 ? source.slice(sectionStart) : source.slice(sectionStart, nextExportIdx);
+    expect(sectionSource).toContain("ledgerCoverage.reason");
+  });
+
+  it("LedgerCoverageSection renders fromBlock when present", () => {
+    const source = readPresenters();
+    const sectionStart = source.indexOf("export function LedgerCoverageSection");
+    const nextExportIdx = source.indexOf("\nexport function ", sectionStart + 1);
+    const sectionSource =
+      nextExportIdx === -1 ? source.slice(sectionStart) : source.slice(sectionStart, nextExportIdx);
+    expect(sectionSource).toContain("ledgerCoverage.fromBlock");
+    expect(sectionSource).toContain("From block:");
+  });
+
+  it("LedgerCoverageSection renders toBlock when present", () => {
+    const source = readPresenters();
+    const sectionStart = source.indexOf("export function LedgerCoverageSection");
+    const nextExportIdx = source.indexOf("\nexport function ", sectionStart + 1);
+    const sectionSource =
+      nextExportIdx === -1 ? source.slice(sectionStart) : source.slice(sectionStart, nextExportIdx);
+    expect(sectionSource).toContain("ledgerCoverage.toBlock");
+    expect(sectionSource).toContain("To block:");
+  });
+
+  it("LedgerCoverageSection renders sourceFamilies when present", () => {
+    const source = readPresenters();
+    const sectionStart = source.indexOf("export function LedgerCoverageSection");
+    const nextExportIdx = source.indexOf("\nexport function ", sectionStart + 1);
+    const sectionSource =
+      nextExportIdx === -1 ? source.slice(sectionStart) : source.slice(sectionStart, nextExportIdx);
+    expect(sectionSource).toContain("ledgerCoverage.sourceFamilies");
+    expect(sectionSource).toContain("Sources:");
+  });
+
+  it("LedgerCoverageSection does not reference RPC, latest block, or frontend computation", () => {
+    const source = readPresenters();
+    const sectionStart = source.indexOf("export function LedgerCoverageSection");
+    const nextExportIdx = source.indexOf("\nexport function ", sectionStart + 1);
+    const sectionSource =
+      nextExportIdx === -1 ? source.slice(sectionStart) : source.slice(sectionStart, nextExportIdx);
+    expect(sectionSource).not.toContain("rpc");
+    expect(sectionSource).not.toContain("RPC");
+    expect(sectionSource).not.toContain("latestBlock");
+    expect(sectionSource).not.toContain("useQuery");
+    expect(sectionSource).not.toContain("fetch(");
+  });
+
+  it("screen imports LedgerCoverageSection from dashboard-presenters", () => {
+    const source = readScreen();
+    expect(source).toContain("LedgerCoverageSection");
+  });
+
+  it("screen passes dashboard.ledgerCoverage to LedgerCoverageSection", () => {
+    const source = readScreen();
+    expect(source).toContain("ledgerCoverage={dashboardQuery.data.ledgerCoverage}");
+  });
 });

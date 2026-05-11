@@ -22,6 +22,7 @@ import { ValueDisplay } from "@/components/ui/value/value-display";
 import type { TrackedWalletDto } from "@/lib/api/debug-client";
 import { findTrackedWalletMatch } from "@/components/dashboard/dashboard-screen-helpers";
 import type {
+  DashboardLedgerCoverageDto,
   DashboardLpPositionDto,
   DashboardMaterializationFreshnessDto,
   DashboardPnlDto,
@@ -335,6 +336,57 @@ export function MaterializationFreshnessSection({
         {freshness.staleAfterSeconds != null ? (
           <span className="text-xs text-[color:var(--color-text-muted)]">
             Stale after: {freshness.staleAfterSeconds} seconds
+          </span>
+        ) : null}
+      </div>
+    </SurfaceCard>
+  );
+}
+
+export function LedgerCoverageSection({
+  ledgerCoverage,
+}: {
+  ledgerCoverage: DashboardLedgerCoverageDto;
+}) {
+  const tone: BadgeTone =
+    ledgerCoverage.status === "covered"
+      ? "fresh"
+      : ledgerCoverage.status === "partial"
+        ? "warn"
+        : "neutral";
+
+  const label =
+    ledgerCoverage.status === "covered"
+      ? "Covered"
+      : ledgerCoverage.status === "partial"
+        ? "Partial"
+        : "Unknown";
+
+  return (
+    <SurfaceCard className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
+          Ledger coverage
+        </span>
+        <LabelBadge label={label} tone={tone} />
+      </div>
+      {ledgerCoverage.reason != null ? (
+        <p className="text-xs text-[color:var(--color-text-muted)]">{ledgerCoverage.reason}</p>
+      ) : null}
+      <div className="flex flex-wrap gap-4">
+        {ledgerCoverage.fromBlock != null ? (
+          <span className="text-xs text-[color:var(--color-text-muted)]">
+            From block: {ledgerCoverage.fromBlock}
+          </span>
+        ) : null}
+        {ledgerCoverage.toBlock != null ? (
+          <span className="text-xs text-[color:var(--color-text-muted)]">
+            To block: {ledgerCoverage.toBlock}
+          </span>
+        ) : null}
+        {ledgerCoverage.sourceFamilies.length > 0 ? (
+          <span className="text-xs text-[color:var(--color-text-muted)]">
+            Sources: {ledgerCoverage.sourceFamilies.join(", ")}
           </span>
         ) : null}
       </div>
