@@ -313,6 +313,21 @@ describe("dashboard tracked wallet selector behavior", () => {
       expect(screen.getByText(/No tracked wallets yet/i)).toBeInTheDocument();
     });
 
+    it("empty state includes a link to /debug/wallets/import", () => {
+      render(
+        React.createElement(TrackedWalletSelector, {
+          wallets: [],
+          isLoading: false,
+          isError: false,
+          onSelectWallet: vi.fn(),
+        }),
+      );
+
+      const link = screen.getByRole("link", { name: /Import a wallet/i });
+      expect(link).toBeInTheDocument();
+      expect(link).toHaveAttribute("href", "/debug/wallets/import");
+    });
+
     it("manual wallet entry input is still available when there are no tracked wallets", () => {
       const Harness = makeHarness({
         wallets: [],
@@ -335,6 +350,21 @@ describe("dashboard tracked wallet selector behavior", () => {
       render(React.createElement(Harness));
 
       expect(screen.getByRole("button", { name: /Load dashboard/i })).toBeInTheDocument();
+    });
+
+    it("rendering the empty state with import link does not trigger a dashboard submit", () => {
+      const onSubmit = vi.fn();
+      const Harness = makeHarness({
+        wallets: [],
+        isError: false,
+        onSubmit,
+      });
+
+      render(React.createElement(Harness));
+
+      // The import link is visible but no submit has fired
+      expect(screen.getByRole("link", { name: /Import a wallet/i })).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
     });
   });
 
