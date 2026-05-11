@@ -246,3 +246,64 @@ describe("useDashboardQuery", () => {
     expect(dashboardClient.fetchPortfolioDashboard).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tracked-wallet request contract
+//
+// Regression suite proving the hook forwards whatever walletAddress and
+// chainId it receives as explicit request params, independent of any
+// tracked-wallet frontend state.  A tracked-looking address and a manually
+// typed address must be indistinguishable at this layer.
+// ---------------------------------------------------------------------------
+
+describe("tracked-wallet request contract", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("a tracked-looking wallet address is forwarded as explicit walletAddress param without consulting tracked-wallet state", async () => {
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
+
+    const TRACKED_LOOKING = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01";
+
+    const { result } = renderHook(
+      () =>
+        useDashboardQuery({
+          walletAddress: TRACKED_LOOKING,
+          chainId: 369,
+        }),
+      { wrapper: makeWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(dashboardClient.fetchPortfolioDashboard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walletAddress: TRACKED_LOOKING,
+        chainId: 369,
+      }),
+    );
+  });
+
+  it("a manually supplied wallet address is forwarded identically to a tracked-looking address", async () => {
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
+
+    const MANUAL_ADDRESS = "0x2222222222222222222222222222222222222222";
+
+    const { result } = renderHook(
+      () =>
+        useDashboardQuery({
+          walletAddress: MANUAL_ADDRESS,
+          chainId: 369,
+        }),
+      { wrapper: makeWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(dashboardClient.fetchPortfolioDashboard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walletAddress: MANUAL_ADDRESS,
+        chainId: 369,
+      }),
+    );
+  });
+});
