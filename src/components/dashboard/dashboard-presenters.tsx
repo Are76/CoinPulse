@@ -18,6 +18,7 @@ import { SurfaceCard } from "@/components/ui/surface-card";
 import { TimestampLabel } from "@/components/ui/value/timestamp-label";
 import { ValueDisplay } from "@/components/ui/value/value-display";
 import type { TrackedWalletDto } from "@/lib/api/debug-client";
+import { findTrackedWalletMatch } from "@/components/dashboard/dashboard-screen-helpers";
 import type {
   DashboardLpPositionDto,
   DashboardPnlDto,
@@ -141,6 +142,12 @@ export function TrackedWalletSelector(args: {
   selectedWalletAddress?: string;
   selectedChainId?: string;
 }) {
+  const matchedWallet = findTrackedWalletMatch(
+    args.wallets,
+    args.selectedWalletAddress ?? "",
+    args.selectedChainId ?? "",
+  );
+
   return (
     <SectionCard
       title="Tracked wallets"
@@ -167,11 +174,7 @@ export function TrackedWalletSelector(args: {
       {!args.isLoading && !args.isError && args.wallets !== undefined && args.wallets.length > 0 ? (
         <div className="flex flex-col divide-y divide-[color:var(--color-border-soft)]">
           {args.wallets.map((wallet) => {
-            const isSelected =
-              !!args.selectedWalletAddress &&
-              !!args.selectedChainId &&
-              wallet.address.toLowerCase() === args.selectedWalletAddress.toLowerCase() &&
-              String(wallet.chainId) === args.selectedChainId;
+            const isSelected = matchedWallet !== null && wallet.id === matchedWallet.id;
 
             return (
               <button

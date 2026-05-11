@@ -29,6 +29,26 @@ export function resolveSubmittedWalletSource(
 }
 
 /**
+ * Returns the TrackedWalletDto whose address and chainId match the given
+ * values, or null if no match is found. Address comparison is case-insensitive.
+ * chainId is compared as strings so numeric and string equivalents both match.
+ */
+export function findTrackedWalletMatch(
+  wallets: TrackedWalletDto[] | undefined,
+  walletAddress: string,
+  chainId: string,
+): TrackedWalletDto | null {
+  if (!wallets || !walletAddress || !chainId) return null;
+  return (
+    wallets.find(
+      (w) =>
+        w.address.toLowerCase() === walletAddress.toLowerCase() &&
+        String(w.chainId) === chainId,
+    ) ?? null
+  );
+}
+
+/**
  * Returns the label of the tracked wallet that matches the given address and
  * chainId, or null if no match is found. Case-insensitive address comparison.
  * Returns "Unlabeled" when a match is found but the wallet has no label.
@@ -38,13 +58,8 @@ export function findTrackedWalletLabel(
   walletAddress: string,
   chainId: string,
 ): string | null {
-  if (!wallets || !walletAddress || !chainId) return null;
-  const match = wallets.find(
-    (w) =>
-      w.address.toLowerCase() === walletAddress.toLowerCase() &&
-      String(w.chainId) === chainId,
-  );
-  return match !== undefined ? (match.label ?? "Unlabeled") : null;
+  const match = findTrackedWalletMatch(wallets, walletAddress, chainId);
+  return match !== null ? (match.label ?? "Unlabeled") : null;
 }
 
 export function resolveDashboardSubmission(args: {
