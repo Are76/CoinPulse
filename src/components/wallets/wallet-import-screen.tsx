@@ -127,6 +127,12 @@ export function WalletImportScreen() {
           >
             Tracked wallets
           </Link>
+          <Link
+            href="/debug/prices/status"
+            className="text-sm font-medium text-[color:var(--color-accent-2)] hover:underline"
+          >
+            Pricing status
+          </Link>
         </div>
       </SurfaceCard>
 

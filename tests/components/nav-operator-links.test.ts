@@ -18,6 +18,11 @@ const TRACKED_WALLETS_SCREEN_PATH = path.resolve(
   "../../src/components/wallets/tracked-wallets-screen.tsx",
 );
 
+const PRICING_STATUS_SCREEN_PATH = path.resolve(
+  __dirname,
+  "../../src/components/prices/pricing-status-screen.tsx",
+);
+
 function readScreenSource(filePath: string) {
   return fs.readFileSync(filePath, "utf8");
 }
@@ -57,6 +62,16 @@ describe("debug-sync-screen operator nav links", () => {
     const source = readScreenSource(DEBUG_SYNC_SCREEN_PATH);
     expect(source).toContain("Tracked wallets");
   });
+
+  it("includes a link to /debug/prices/status", () => {
+    const source = readScreenSource(DEBUG_SYNC_SCREEN_PATH);
+    expect(source).toContain('href="/debug/prices/status"');
+  });
+
+  it("includes the label Pricing status", () => {
+    const source = readScreenSource(DEBUG_SYNC_SCREEN_PATH);
+    expect(source).toContain("Pricing status");
+  });
 });
 
 describe("wallet-import-screen operator nav links", () => {
@@ -94,6 +109,16 @@ describe("wallet-import-screen operator nav links", () => {
     const source = readScreenSource(WALLET_IMPORT_SCREEN_PATH);
     expect(source).toContain("Tracked wallets");
   });
+
+  it("includes a link to /debug/prices/status", () => {
+    const source = readScreenSource(WALLET_IMPORT_SCREEN_PATH);
+    expect(source).toContain('href="/debug/prices/status"');
+  });
+
+  it("includes the label Pricing status", () => {
+    const source = readScreenSource(WALLET_IMPORT_SCREEN_PATH);
+    expect(source).toContain("Pricing status");
+  });
 });
 
 describe("tracked-wallets-screen operator nav links", () => {
@@ -130,5 +155,62 @@ describe("tracked-wallets-screen operator nav links", () => {
   it("includes the label Tracked wallets", () => {
     const source = readScreenSource(TRACKED_WALLETS_SCREEN_PATH);
     expect(source).toContain("Tracked wallets");
+  });
+
+  it("includes a link to /debug/prices/status", () => {
+    const source = readScreenSource(TRACKED_WALLETS_SCREEN_PATH);
+    expect(source).toContain('href="/debug/prices/status"');
+  });
+
+  it("includes the label Pricing status", () => {
+    const source = readScreenSource(TRACKED_WALLETS_SCREEN_PATH);
+    expect(source).toContain("Pricing status");
+  });
+});
+
+describe("pricing-status-screen operator nav links", () => {
+  it("imports Link from next/link", () => {
+    const source = readScreenSource(PRICING_STATUS_SCREEN_PATH);
+    expect(source).toContain('import Link from "next/link"');
+  });
+
+  it("includes a link to /debug/wallets/import", () => {
+    const source = readScreenSource(PRICING_STATUS_SCREEN_PATH);
+    expect(source).toContain('href="/debug/wallets/import"');
+  });
+
+  it("includes the label Wallet import", () => {
+    const source = readScreenSource(PRICING_STATUS_SCREEN_PATH);
+    expect(source).toContain("Wallet import");
+  });
+
+  it("includes a link to /debug/sync", () => {
+    const source = readScreenSource(PRICING_STATUS_SCREEN_PATH);
+    expect(source).toContain('href="/debug/sync"');
+  });
+
+  it("includes the label Debug sync", () => {
+    const source = readScreenSource(PRICING_STATUS_SCREEN_PATH);
+    expect(source).toContain("Debug sync");
+  });
+
+  it("includes a link to /debug/wallets/tracked", () => {
+    const source = readScreenSource(PRICING_STATUS_SCREEN_PATH);
+    expect(source).toContain('href="/debug/wallets/tracked"');
+  });
+
+  it("includes the label Tracked wallets", () => {
+    const source = readScreenSource(PRICING_STATUS_SCREEN_PATH);
+    expect(source).toContain("Tracked wallets");
+  });
+
+  it("includes a link to /debug/prices/status", () => {
+    const source = readScreenSource(PRICING_STATUS_SCREEN_PATH);
+    expect(source).toContain('href="/debug/prices/status"');
+  });
+
+  it("includes the label Pricing status", () => {
+    const source = readScreenSource(PRICING_STATUS_SCREEN_PATH);
+    expect(source).toContain("Pricing status");
   });
 });
