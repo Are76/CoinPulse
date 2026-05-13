@@ -61,6 +61,13 @@ export type PricingStatusEnvelope = {
   data: PricingStatusDto;
 };
 
+/**
+ * Fetches the current pricing status report from the backend.
+ *
+ * Calls GET /api/prices/status and validates the response against the
+ * PricingStatusDto zod schema. Throws ApiClientError on non-2xx responses.
+ * Does not compute, infer, or modify pricing truth in the client.
+ */
 export async function fetchPricingStatus(): Promise<PricingStatusDto> {
   const response = await fetchJson<ApiDataResponse<PricingStatusDto>>("/api/prices/status");
   return pricingStatusSchema.parse(response.data);
@@ -70,6 +77,7 @@ async function fetchJson<T>(input: string): Promise<T> {
   const response = await fetch(input, {
     headers: {
       Accept: "application/json",
+      "Content-Type": "application/json",
     },
     cache: "no-store",
   });
