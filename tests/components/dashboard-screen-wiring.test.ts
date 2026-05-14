@@ -169,6 +169,33 @@ describe("dashboard-screen wiring", () => {
     expect(source).toContain("freshness.staleAfterSeconds");
   });
 
+  it("dashboard metadata links to the pricing status debug page", () => {
+    const source = readPresenters();
+    expect(source).toContain('href="/debug/prices/status"');
+    expect(source).toContain("View pricing source status");
+  });
+
+  it("dashboard does not import or fetch pricing status directly", () => {
+    const screenSource = readScreen();
+    const presentersSource = readPresenters();
+    expect(screenSource).not.toContain("usePricingStatusQuery");
+    expect(presentersSource).not.toContain("usePricingStatusQuery");
+    expect(screenSource).not.toContain("fetchPricingStatus");
+    expect(presentersSource).not.toContain("fetchPricingStatus");
+  });
+
+  it("dashboard metadata link does not add external provider or RPC calls", () => {
+    const source = `${readScreen()}\n${readPresenters()}`;
+    expect(source).not.toContain("DexScreener");
+    expect(source).not.toContain("CoinGecko");
+    expect(source).not.toContain("GeckoTerminal");
+    expect(source).not.toContain("Piteas");
+    expect(source).not.toContain("Moralis");
+    expect(source).not.toContain("rpc");
+    expect(source).not.toContain("RPC");
+    expect(source).not.toContain("PULSECHAIN_RPC_URL");
+  });
+
   it("screen imports MaterializationFreshnessSection from dashboard-presenters", () => {
     const source = readScreen();
     expect(source).toContain("MaterializationFreshnessSection");
