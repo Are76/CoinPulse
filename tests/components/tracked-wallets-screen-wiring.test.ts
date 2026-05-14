@@ -42,19 +42,12 @@ describe("tracked-wallets-screen wiring", () => {
     expect(source).not.toContain("fetchTrackedWallets");
   });
 
-  it("screen references /debug/wallets/tracked", () => {
+  it("screen renders the shared operator tools nav", () => {
     const source = readSource();
-    expect(source).toContain('href="/debug/wallets/tracked"');
-  });
-
-  it("screen references /debug/wallets/import", () => {
-    const source = readSource();
-    expect(source).toContain('href="/debug/wallets/import"');
-  });
-
-  it("screen references /debug/sync", () => {
-    const source = readSource();
-    expect(source).toContain('href="/debug/sync"');
+    expect(source).toContain(
+      'import { OperatorToolsNav } from "@/components/debug/operator-tools-nav";',
+    );
+    expect(source).toContain("<OperatorToolsNav />");
   });
 
   it("screen renders wallet backend fields: address, chainId, label, createdAt, updatedAt", () => {
