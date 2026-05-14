@@ -6,7 +6,48 @@ This document is a documentation-only audit of the current CoinPulse V1 PnL stat
 
 This audit does not change PnL behavior. It does not modify source code, tests, package files, schema, routes, pricing logic, dashboard UI, or PnL calculations.
 
-## 2. Current PnL architecture
+
+## 2. Milestone status
+
+The completed PnL coverage slice records a documentation, contract, DTO, and UI-observability milestone without changing native PnL support, valuation behavior, pricing selection, or PnL formulas:
+
+- PnL accounting guardrails are documented in `docs/pnl-accounting-guardrails.md`.
+- Current PnL status and dashboard DTO coverage are audited in this document.
+- Dashboard PnL behavior is protected by route-level contract tests for the supported status and warning cases.
+- Route fixtures now use Prisma-shaped `actionGroup.actionType` data so fixture shape matches the backend route expectations.
+- A `pnlCoverage` DTO plan exists in `docs/pnl-coverage-dto-plan.md`.
+- `PortfolioDashboardDto` now includes additive, backend-computed `pnlCoverage` metadata.
+- `pnlCoverage` summarizes existing dashboard PnL statuses, PnL warning codes, and unsupported LP/stake sentinel coverage already present in the dashboard response.
+- Existing PnL values, pricing selection, warning generation, materialization freshness, and `ledgerCoverage` remain unchanged.
+- The dashboard UI renders backend-computed `pnlCoverage` without adding frontend accounting, pricing, PnL, LP, or stake valuation inference.
+
+`pnlCoverage` is metadata and observability only. It does not implement native PnL, change PnL formulas, alter valuation, select prices differently, mutate warning generation, replace `ledgerCoverage`, or make unsupported LP/stake PnL appear supported.
+
+### Still intentionally deferred
+
+The milestone intentionally leaves the following work out of scope:
+
+- no native PnL implementation;
+- no PnL formula changes;
+- no pricing selection changes;
+- no tax logic;
+- no AI/risk benchmarking;
+- no frontend PnL computation;
+- no external provider integrations;
+- no richer analytics UI beyond the current `pnlCoverage` indicator;
+- no Ethereum/Base expansion.
+
+### Recommended next V1 sequence
+
+Recommended V1 follow-up work should remain data-quality-first and avoid jumping directly to richer PnL presentation:
+
+1. Add a token identity/origin metadata plan.
+2. Define a token metadata trust/source policy.
+3. Plan bridge/source coverage if the current canonical ledger model can support it without weakening deterministic rebuildability or accounting identity.
+4. Only later, plan native PnL once historical native price coverage, event-level provenance, and status contracts are explicit.
+5. Only later, add richer analytics UI after backend DTOs can represent the required statuses, warnings, provenance, and coverage without frontend inference.
+
+## 3. Current PnL architecture
 
 Current PnL is backend-owned and assembled during portfolio dashboard DTO construction:
 
@@ -34,9 +75,9 @@ Current dashboard DTO fields expose PnL status and values only at the position l
 - the summary exposes `warnings` containing `pnl-warning:<code>` entries when token PnL warnings are present;
 - the summary does not expose aggregate realized PnL, aggregate unrealized PnL, net PnL, PnL percent, or ROI.
 
-## 3. Current DTO coverage
+## 4. Current DTO coverage
 
-### 3.1 Dashboard-level PnL-adjacent fields
+### 4.1 Dashboard-level PnL-adjacent fields
 
 | Field or section | Source module/service | Backend-computed? | Explicit status/warning/provenance? | Can be null/unknown? | Known limitations |
 |---|---|---:|---|---:|---|
@@ -47,7 +88,7 @@ Current dashboard DTO fields expose PnL status and values only at the position l
 | `ledgerCoverage` | `computeLedgerCoverage()` in dashboard assembly | Yes | Yes: `covered`, `partial`, or `unknown`, plus `reason` | Yes | Exposes materialization block-range coverage, but is not currently folded into `pnl.status`. |
 | `materialization.freshness` | `computeMaterializationFreshness()` in dashboard assembly | Yes | Yes: `fresh`, `stale`, or `unknown`, plus reason and threshold | Yes | Materialization freshness is not currently mapped directly into PnL status. |
 
-### 3.2 Token position pricing and valuation fields
+### 4.2 Token position pricing and valuation fields
 
 | Field or section | Source module/service | Backend-computed? | Explicit status/warning/provenance? | Can be null/unknown? | Known limitations |
 |---|---|---:|---|---:|---|
@@ -61,7 +102,7 @@ Current dashboard DTO fields expose PnL status and values only at the position l
 | `tokenPositions[].valuation.status` | `toPricingDto()` status reused as valuation status | Yes | Yes | No | Valuation status is tied to mark-price availability; it is not cost-basis completeness. |
 | `tokenPositions[].valuation.valueQuote` | balance quantity multiplied by selected price | Yes | Status is separate in `valuation.status`; price provenance is in `pricing` | Yes | Null if no selected available price; not a PnL field. |
 
-### 3.3 Token position PnL fields
+### 4.3 Token position PnL fields
 
 | Field or section | Source module/service | Backend-computed? | Explicit status/warning/provenance? | Can be null/unknown? | Known limitations |
 |---|---|---:|---|---:|---|
@@ -75,7 +116,7 @@ Current dashboard DTO fields expose PnL status and values only at the position l
 | `tokenPositions[].pnl.totalDisposedQuantity` | average-cost engine | Yes | Warning array may explain skipped groups | No for token PnL result | Counts only supported disposition groups processed by the engine. |
 | `tokenPositions[].pnl.warnings` | average-cost engine | Yes | Yes: structured `PnLWarning[]` | No | Does not include ledger coverage, materialization freshness, or price `SOURCE_DISABLED` as first-class PnL status. |
 
-### 3.4 LP and stake position PnL fields
+### 4.4 LP and stake position PnL fields
 
 | Field or section | Source module/service | Backend-computed? | Explicit status/warning/provenance? | Can be null/unknown? | Known limitations |
 |---|---|---:|---|---:|---|
@@ -101,7 +142,7 @@ The PnL guardrails define the status vocabulary `valued`, `unpriced`, `insuffici
 | `partial_history` | Partially outside PnL | `ledgerCoverage.status: "partial"` when only one side of the persisted block range is present | `partial_history` is not folded into `pnl.status` or `pnl.warnings`. Add explicit PnL coverage/status DTO or warning if ledger coverage is partial. |
 | `source_disabled` | Partially outside PnL | Price resolver rejects disallowed primary sources with `SOURCE_DISABLED`; `pricing.rejectedReasons` can include `SOURCE_DISABLED` | `toPricingDto()` does not map `SOURCE_DISABLED` to a distinct status, and `toPnlDto()` does not emit a source-disabled PnL warning. Add propagation tests before relying on this status in UI. |
 
-## 5. Realized vs unrealized support
+## 6. Realized vs unrealized support
 
 Based on current code:
 
@@ -112,7 +153,7 @@ Based on current code:
 - **What preconditions are required?** Current token PnL requires ledger entries for the wallet/chain, supported action groups, sufficient tracked holdings for dispositions, resolvable historical counter-asset and fee prices for acquisitions/dispositions, and a resolvable mark price for unrealized PnL.
 - **What remains unsafe to claim?** It is unsafe to claim complete portfolio PnL, LP PnL, stake PnL, native-denominated PnL, tax-ready gains, aggregate net PnL, PnL percent/ROI, or guaranteed correctness under incomplete ledger history. Current DTOs expose warnings and nulls for several gaps, but they do not yet provide a complete PnL coverage contract for all guardrail statuses.
 
-## 6. Native PnL support
+## 7. Native PnL support
 
 Native PnL is not implemented in the current dashboard PnL DTO or average-cost result. The current PnL fields are quote-asset fields using `quoteAsset` inputs such as `fiat:usd`.
 
@@ -124,7 +165,7 @@ Native PnL is intentionally deferred. Future implementation must first provide:
 
 Until those preconditions exist, native PnL should remain absent/null rather than inferred from a current spot price or computed in the frontend.
 
-## 7. Known gaps and risks
+## 8. Known gaps and risks
 
 The following gaps are supported by current code and documentation:
 
@@ -138,7 +179,7 @@ The following gaps are supported by current code and documentation:
 - **Source-disabled pricing not fully mapped to PnL status:** `SOURCE_DISABLED` can appear in price rejected reasons, but current status mapping does not expose a dedicated source-disabled PnL status.
 - **Historical price provenance gap:** The sibling `pricing` DTO exposes the selected mark-price provenance for the position. It does not expose per-event historical counter-asset or fee price provenance used inside average-cost calculations.
 
-## 8. Recommended next implementation sequence
+## 9. Recommended next implementation sequence
 
 Keep future work small and ordered around data quality before richer analytics UI:
 
@@ -148,7 +189,7 @@ Keep future work small and ordered around data quality before richer analytics U
 4. Add a native PnL planning document before implementation, covering historical native price observations, event-level cost-basis coverage, provenance, freshness, and status contracts.
 5. Only after the above, add richer analytics UI for aggregate PnL, net PnL, PnL percent/ROI, native-denominated views, or additional charting.
 
-## 9. Non-goals
+## 10. Non-goals
 
 This audit explicitly does not include:
 
@@ -163,7 +204,7 @@ This audit explicitly does not include:
 - tax logic;
 - AI/risk benchmarking.
 
-## 10. Decision
+## 11. Decision
 
 Data quality and explicit status coverage come before richer PnL UI.
 
