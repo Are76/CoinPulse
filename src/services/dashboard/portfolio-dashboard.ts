@@ -14,6 +14,9 @@ import type {
   DashboardMaterializationFreshnessDto,
   DashboardMaterializationWarningDto,
   DashboardPnlCalculator,
+  DashboardPnlCoverageDto,
+  DashboardPnlCoverageReason,
+  DashboardPnlCoverageSection,
   DashboardPnlDto,
   DashboardPriceResolver,
   DashboardPricingDto,
@@ -29,6 +32,24 @@ const MATERIALIZATION_STALE_AFTER_SECONDS = 15 * 60; // 900 seconds
 
 const ZERO = new Decimal(0);
 
+const PNL_COVERAGE_REASON_ORDER: DashboardPnlCoverageReason[] = [
+  "unpriced",
+  "insufficient_cost_basis",
+  "partial_history",
+  "stale_price",
+  "source_disabled",
+  "unsupported_position_type",
+  "missing_disposal_events",
+  "missing_native_price_history",
+];
+
+const PNL_COVERAGE_SECTION_ORDER: DashboardPnlCoverageSection[] = [
+  "summary",
+  "tokens",
+  "lpPositions",
+  "stakePositions",
+];
+
 export async function assemblePortfolioDashboard(args: {
   wallet: { id: string; address: string; chainId: number };
   quoteAsset: string;
@@ -43,7 +64,10 @@ export async function assemblePortfolioDashboard(args: {
     args.resolvePrice ??
     (async (priceArgs) => {
       if (!db.priceObservation) {
-        return { selected: null, rejected: [] } satisfies ResolveBestPriceResult;
+        return {
+          selected: null,
+          rejected: [],
+        } satisfies ResolveBestPriceResult;
       }
 
       return resolveBestPriceFromStore(
@@ -61,7 +85,13 @@ export async function assemblePortfolioDashboard(args: {
     });
   const calculatePnl = args.calculatePnl ?? calculateAverageCostPnl;
 
-  const [tokenBalances, lpPositions, stakePositions, materializationState, ledgerEntries] = await Promise.all([
+  const [
+    tokenBalances,
+    lpPositions,
+    stakePositions,
+    materializationState,
+    ledgerEntries,
+  ] = await Promise.all([
     db.portfolioTokenBalance.findMany({
       where: { walletId: args.wallet.id, chainId: args.wallet.chainId },
       orderBy: [{ assetId: "asc" }],
@@ -95,7 +125,9 @@ export async function assemblePortfolioDashboard(args: {
     walletId: entry.walletId,
     assetId: entry.assetId,
     entryType: entry.entryType as PnLEntry["entryType"],
-    actionType: (entry.actionType ?? entry.actionGroup?.actionType ?? "TRANSFER") as PnLEntry["actionType"],
+    actionType: (entry.actionType ??
+      entry.actionGroup?.actionType ??
+      "TRANSFER") as PnLEntry["actionType"],
     direction: entry.direction as PnLEntry["direction"],
     quantity: toStringValue(entry.quantity),
     occurredAt: entry.occurredAt,
@@ -120,7 +152,11 @@ export async function assemblePortfolioDashboard(args: {
       const pricing = toPricingDto(resolvedPrice);
       const valueQuote =
         resolvedPrice.selected && pricing.status === "available"
-          ? toOutput(new Decimal(toStringValue(row.balanceQuantity)).mul(resolvedPrice.selected.price))
+          ? toOutput(
+              new Decimal(toStringValue(row.balanceQuantity)).mul(
+                resolvedPrice.selected.price,
+              ),
+            )
           : null;
       const valuationStatus = pricing.status;
 
@@ -128,7 +164,9 @@ export async function assemblePortfolioDashboard(args: {
         totalValue = totalValue.plus(valueQuote);
         valuedPositions += 1;
       } else {
-        summaryWarnings.add(`pricing-unavailable:${row.assetId}:${valuationStatus}`);
+        summaryWarnings.add(
+          `pricing-unavailable:${row.assetId}:${valuationStatus}`,
+        );
       }
 
       const pnlResult = await calculatePnl({
@@ -209,7 +247,8 @@ export async function assemblePortfolioDashboard(args: {
     warnings: ["stake-valuation-unsupported-v1"],
   }));
 
-  const totalPositions = tokenPositionDtos.length + lpDtos.length + stakeDtos.length;
+  const totalPositions =
+    tokenPositionDtos.length + lpDtos.length + stakeDtos.length;
   const unvaluedPositions = totalPositions - valuedPositions;
   const valuationStatus: DashboardStatus =
     totalPositions === 0
@@ -217,9 +256,13 @@ export async function assemblePortfolioDashboard(args: {
       : valuedPositions === totalPositions
         ? "available"
         : valuedPositions === 0
-          ? tokenPositionDtos[0]?.valuation.status ?? "unavailable"
+          ? (tokenPositionDtos[0]?.valuation.status ?? "unavailable")
           : "partial";
-  const materialization = toMaterializationDto(tokenBalances, materializationState, args.asOf);
+  const materialization = toMaterializationDto(
+    tokenBalances,
+    materializationState,
+    args.asOf,
+  );
   const ledgerCoverage = computeLedgerCoverage(materializationState);
 
   return {
@@ -229,6 +272,12 @@ export async function assemblePortfolioDashboard(args: {
     asOf: args.asOf.toISOString(),
     materialization,
     ledgerCoverage,
+    pnlCoverage: buildInitialPnlCoverage({
+      tokenPositions: tokenPositionDtos,
+      lpPositions: lpDtos,
+      stakePositions: stakeDtos,
+      asOf: args.asOf,
+    }),
     summary: {
       totalValueQuote: valuedPositions === 0 ? null : toOutput(totalValue),
       valuationStatus,
@@ -245,10 +294,141 @@ export async function assemblePortfolioDashboard(args: {
   };
 }
 
+function buildInitialPnlCoverage(args: {
+  tokenPositions: Array<{ pricing: DashboardPricingDto; pnl: DashboardPnlDto }>;
+  lpPositions: Array<{ pnl: DashboardPnlDto }>;
+  stakePositions: Array<{ pnl: DashboardPnlDto }>;
+  asOf: Date;
+}): DashboardPnlCoverageDto {
+  const reasons = new Set<DashboardPnlCoverageReason>();
+  const affectedSections = new Set<DashboardPnlCoverageSection>();
+
+  let pricedPositionsCount = 0;
+  let unpricedPositionsCount = 0;
+  let unsupportedPositionsCount = 0;
+  let incompleteBasisPositionsCount = 0;
+  let stalePricePositionsCount = 0;
+  let sourceDisabledPositionsCount = 0;
+
+  for (const position of args.tokenPositions) {
+    if (position.pnl.status === "available") {
+      pricedPositionsCount += 1;
+    }
+
+    const warningCodes = position.pnl.warnings.map((warning) => warning.code);
+    const hasUnpricedPnl =
+      position.pnl.status === "unavailable" ||
+      warningCodes.includes("MARK_PRICE_UNAVAILABLE") ||
+      position.pricing.status === "unavailable" ||
+      position.pricing.status === "low_confidence_price";
+    if (hasUnpricedPnl) {
+      unpricedPositionsCount += 1;
+      reasons.add("unpriced");
+      affectedSections.add("tokens");
+    }
+
+    const hasIncompleteBasis =
+      position.pnl.status === "incomplete_basis" ||
+      warningCodes.includes("INSUFFICIENT_COST_BASIS") ||
+      warningCodes.includes("COUNTER_ASSET_PRICE_UNAVAILABLE") ||
+      warningCodes.includes("UNSUPPORTED_ACTION_GROUP");
+    if (hasIncompleteBasis) {
+      incompleteBasisPositionsCount += 1;
+      reasons.add("insufficient_cost_basis");
+      affectedSections.add("tokens");
+    }
+
+    if (position.pnl.status === "unsupported") {
+      unsupportedPositionsCount += 1;
+      reasons.add("unsupported_position_type");
+      affectedSections.add("tokens");
+    }
+
+    const hasStalePrice =
+      position.pnl.status === "stale_price" ||
+      position.pricing.status === "stale_price" ||
+      position.pricing.rejectedReasons.includes("STALE");
+    if (hasStalePrice) {
+      stalePricePositionsCount += 1;
+      reasons.add("stale_price");
+      affectedSections.add("tokens");
+    }
+
+    if (position.pricing.rejectedReasons.includes("SOURCE_DISABLED")) {
+      sourceDisabledPositionsCount += 1;
+      reasons.add("source_disabled");
+      affectedSections.add("tokens");
+    }
+  }
+
+  for (const position of args.lpPositions) {
+    if (position.pnl.status === "unsupported") {
+      unsupportedPositionsCount += 1;
+      reasons.add("unsupported_position_type");
+      affectedSections.add("lpPositions");
+    }
+  }
+
+  for (const position of args.stakePositions) {
+    if (position.pnl.status === "unsupported") {
+      unsupportedPositionsCount += 1;
+      reasons.add("unsupported_position_type");
+      affectedSections.add("stakePositions");
+    }
+  }
+
+  if (reasons.size > 0) {
+    affectedSections.add("summary");
+  }
+
+  const totalPositions =
+    args.tokenPositions.length +
+    args.lpPositions.length +
+    args.stakePositions.length;
+  const affectedPositionsCount =
+    unpricedPositionsCount +
+    unsupportedPositionsCount +
+    incompleteBasisPositionsCount +
+    stalePricePositionsCount +
+    sourceDisabledPositionsCount;
+
+  const status: DashboardPnlCoverageDto["status"] =
+    totalPositions === 0
+      ? "unknown"
+      : affectedPositionsCount === 0
+        ? "valued"
+        : unsupportedPositionsCount === totalPositions
+          ? "unsupported"
+          : pricedPositionsCount > 0
+            ? "partial"
+            : "unavailable";
+
+  return {
+    status,
+    reasons: PNL_COVERAGE_REASON_ORDER.filter((reason) => reasons.has(reason)),
+    affectedSections: PNL_COVERAGE_SECTION_ORDER.filter((section) =>
+      affectedSections.has(section),
+    ),
+    pricedPositionsCount,
+    unpricedPositionsCount,
+    unsupportedPositionsCount,
+    incompleteBasisPositionsCount,
+    stalePricePositionsCount,
+    sourceDisabledPositionsCount,
+    asOf: args.asOf.toISOString(),
+  };
+}
+
 function toMaterializationDto(
-  tokenBalances: Awaited<ReturnType<DashboardDbClient["portfolioTokenBalance"]["findMany"]>>,
+  tokenBalances: Awaited<
+    ReturnType<DashboardDbClient["portfolioTokenBalance"]["findMany"]>
+  >,
   materializationState: Awaited<
-    ReturnType<NonNullable<DashboardDbClient["portfolioMaterializationState"]>["findUnique"]>
+    ReturnType<
+      NonNullable<
+        DashboardDbClient["portfolioMaterializationState"]
+      >["findUnique"]
+    >
   >,
   asOf: Date,
 ): DashboardMaterializationDto {
@@ -273,12 +453,22 @@ function toMaterializationDto(
   return {
     status: materializationState?.status ?? null,
     completedSuccessfully: materializationState?.completedSuccessfully ?? null,
-    lastAttemptedAt: materializationState?.lastAttemptedAt?.toISOString() ?? null,
-    latestMaterializedAt: materializationState?.latestMaterializedAt?.toISOString() ?? null,
-    updatedFromBlock: bigintToString(materializationState?.updatedFromBlock ?? null),
-    updatedToBlock: bigintToString(materializationState?.updatedToBlock ?? null),
-    sourceLedgerFromBlock: bigintToString(materializationState?.sourceLedgerFromBlock ?? null),
-    sourceLedgerToBlock: bigintToString(materializationState?.sourceLedgerToBlock ?? null),
+    lastAttemptedAt:
+      materializationState?.lastAttemptedAt?.toISOString() ?? null,
+    latestMaterializedAt:
+      materializationState?.latestMaterializedAt?.toISOString() ?? null,
+    updatedFromBlock: bigintToString(
+      materializationState?.updatedFromBlock ?? null,
+    ),
+    updatedToBlock: bigintToString(
+      materializationState?.updatedToBlock ?? null,
+    ),
+    sourceLedgerFromBlock: bigintToString(
+      materializationState?.sourceLedgerFromBlock ?? null,
+    ),
+    sourceLedgerToBlock: bigintToString(
+      materializationState?.sourceLedgerToBlock ?? null,
+    ),
     warningCount: warnings.length,
     warnings,
     errorMessage: materializationState?.errorMessage ?? null,
@@ -290,7 +480,11 @@ function toMaterializationDto(
 
 function computeMaterializationFreshness(
   materializationState: Awaited<
-    ReturnType<NonNullable<DashboardDbClient["portfolioMaterializationState"]>["findUnique"]>
+    ReturnType<
+      NonNullable<
+        DashboardDbClient["portfolioMaterializationState"]
+      >["findUnique"]
+    >
   >,
   now: Date,
 ): DashboardMaterializationFreshnessDto {
@@ -303,7 +497,10 @@ function computeMaterializationFreshness(
     };
   }
 
-  if (materializationState.status === "FAILED" && !materializationState.latestMaterializedAt) {
+  if (
+    materializationState.status === "FAILED" &&
+    !materializationState.latestMaterializedAt
+  ) {
     return {
       status: "unknown",
       reason: materializationState.errorMessage
@@ -359,7 +556,11 @@ function computeMaterializationFreshness(
 
 function computeLedgerCoverage(
   materializationState: Awaited<
-    ReturnType<NonNullable<DashboardDbClient["portfolioMaterializationState"]>["findUnique"]>
+    ReturnType<
+      NonNullable<
+        DashboardDbClient["portfolioMaterializationState"]
+      >["findUnique"]
+    >
   >,
 ): DashboardLedgerCoverageDto {
   if (!materializationState) {
@@ -391,7 +592,8 @@ function computeLedgerCoverage(
       fromBlock,
       toBlock,
       sourceFamilies: [],
-      reason: "Only a partial block range is recorded in persisted materialization state.",
+      reason:
+        "Only a partial block range is recorded in persisted materialization state.",
     };
   }
 
@@ -441,21 +643,30 @@ function toPnlDto(
   if (result.warnings.length > 0) {
     if (
       result.warnings.some((warning) =>
-        ["COUNTER_ASSET_PRICE_UNAVAILABLE", "INSUFFICIENT_COST_BASIS", "UNSUPPORTED_ACTION_GROUP"].includes(
-          warning.code,
-        ),
+        [
+          "COUNTER_ASSET_PRICE_UNAVAILABLE",
+          "INSUFFICIENT_COST_BASIS",
+          "UNSUPPORTED_ACTION_GROUP",
+        ].includes(warning.code),
       )
     ) {
       status = "incomplete_basis";
     } else if (
       result.warnings.some((warning) =>
-        ["UNSUPPORTED_LP_ACTION", "UNSUPPORTED_STAKE_ACTION"].includes(warning.code),
+        ["UNSUPPORTED_LP_ACTION", "UNSUPPORTED_STAKE_ACTION"].includes(
+          warning.code,
+        ),
       )
     ) {
       status = "unsupported";
-    } else if (result.warnings.some((warning) => warning.code === "MARK_PRICE_UNAVAILABLE")) {
+    } else if (
+      result.warnings.some(
+        (warning) => warning.code === "MARK_PRICE_UNAVAILABLE",
+      )
+    ) {
       status =
-        valuationStatus === "stale_price" || valuationStatus === "low_confidence_price"
+        valuationStatus === "stale_price" ||
+        valuationStatus === "low_confidence_price"
           ? valuationStatus
           : "unavailable";
     }
@@ -505,7 +716,9 @@ function bigintToString(value: bigint | null) {
   return value === null ? null : value.toString();
 }
 
-function normalizePersistedWarnings(value: unknown): DashboardMaterializationWarningDto[] {
+function normalizePersistedWarnings(
+  value: unknown,
+): DashboardMaterializationWarningDto[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -553,14 +766,20 @@ function mergeMaterializationWarnings(
     merged.set(`${warning.code}:${warning.message}`, warning);
   }
 
-  return Array.from(merged.values()).sort((left, right) => left.message.localeCompare(right.message));
+  return Array.from(merged.values()).sort((left, right) =>
+    left.message.localeCompare(right.message),
+  );
 }
 
 function isNegativeDecimal(value: string) {
-  return value.trim().startsWith("-") && value.trim() !== "-0" && value.trim() !== "-0.0";
+  const trimmed = value.trim();
+  return trimmed.startsWith("-") && trimmed !== "-0" && trimmed !== "-0.0";
 }
 
 function toOutput(value: Decimal | string) {
   const decimal = typeof value === "string" ? new Decimal(value) : value;
-  return decimal.toFixed().replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+  return decimal
+    .toFixed()
+    .replace(/\.0+$/, "")
+    .replace(/(\.\d*?)0+$/, "$1");
 }

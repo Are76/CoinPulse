@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { assemblePortfolioDashboard } from "@/services/dashboard/portfolio-dashboard";
-import type { PersistedPriceObservation, ResolveBestPriceResult } from "@/services/pricing/types";
+import type {
+  PersistedPriceObservation,
+  ResolveBestPriceResult,
+} from "@/services/pricing/types";
 import type { AverageCostPnlResult, PnLWarning } from "@/services/pnl/types";
 
 const WALLET_ID = "wallet-1";
@@ -177,7 +180,8 @@ function createMemoryDb(overrides?: {
         async findMany(args: { where: { walletId: string; chainId: number } }) {
           return tokenBalances.filter(
             (row) =>
-              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
           );
         },
       },
@@ -185,7 +189,8 @@ function createMemoryDb(overrides?: {
         async findMany(args: { where: { walletId: string; chainId: number } }) {
           return lpPositions.filter(
             (row) =>
-              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
           );
         },
       },
@@ -193,7 +198,8 @@ function createMemoryDb(overrides?: {
         async findMany(args: { where: { walletId: string; chainId: number } }) {
           return stakePositions.filter(
             (row) =>
-              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
           );
         },
       },
@@ -201,7 +207,8 @@ function createMemoryDb(overrides?: {
         async findMany(args: { where: { walletId: string; chainId: number } }) {
           return ledgerEntries.filter(
             (row) =>
-              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
           );
         },
       },
@@ -282,6 +289,31 @@ describe("assemblePortfolioDashboard", () => {
         }),
       }),
     ]);
+    expect(result.pnlCoverage).toEqual({
+      status: "valued",
+      reasons: [],
+      affectedSections: [],
+      pricedPositionsCount: 1,
+      unpricedPositionsCount: 0,
+      unsupportedPositionsCount: 0,
+      incompleteBasisPositionsCount: 0,
+      stalePricePositionsCount: 0,
+      sourceDisabledPositionsCount: 0,
+      asOf: "2026-05-08T12:04:00.000Z",
+    });
+    expect(typeof result.pnlCoverage.asOf).toBe("string");
+    expect(Array.isArray(result.pnlCoverage.reasons)).toBe(true);
+    expect(Array.isArray(result.pnlCoverage.affectedSections)).toBe(true);
+    expect(typeof result.pnlCoverage.pricedPositionsCount).toBe("number");
+    expect(typeof result.pnlCoverage.unpricedPositionsCount).toBe("number");
+    expect(typeof result.pnlCoverage.unsupportedPositionsCount).toBe("number");
+    expect(typeof result.pnlCoverage.incompleteBasisPositionsCount).toBe(
+      "number",
+    );
+    expect(typeof result.pnlCoverage.stalePricePositionsCount).toBe("number");
+    expect(typeof result.pnlCoverage.sourceDisabledPositionsCount).toBe(
+      "number",
+    );
     expect(result.materialization).toEqual({
       status: null,
       completedSuccessfully: null,
@@ -453,7 +485,8 @@ describe("assemblePortfolioDashboard", () => {
       warnings: [
         {
           code: "negative_token_balance",
-          message: "Negative materialized token balance for chain:369:native:PLS: -0.25",
+          message:
+            "Negative materialized token balance for chain:369:native:PLS: -0.25",
         },
         {
           code: "generic_persisted_warning",
@@ -514,6 +547,18 @@ describe("assemblePortfolioDashboard", () => {
       pricing: { status: "unavailable" },
       valuation: { status: "unavailable", valueQuote: null },
       pnl: { status: "unavailable" },
+    });
+    expect(result.pnlCoverage).toMatchObject({
+      status: "unavailable",
+      reasons: ["unpriced"],
+      affectedSections: ["summary", "tokens"],
+      pricedPositionsCount: 0,
+      unpricedPositionsCount: 1,
+      unsupportedPositionsCount: 0,
+      incompleteBasisPositionsCount: 0,
+      stalePricePositionsCount: 0,
+      sourceDisabledPositionsCount: 0,
+      asOf: "2026-05-08T12:04:00.000Z",
     });
   });
 
@@ -584,7 +629,9 @@ describe("assemblePortfolioDashboard", () => {
         }),
     });
 
-    expect(result.tokenPositions[0]?.pricing.status).toBe("low_confidence_price");
+    expect(result.tokenPositions[0]?.pricing.status).toBe(
+      "low_confidence_price",
+    );
   });
 
   it("preserves current PnL contract fields without exposing unsafe percentage metrics", async () => {
@@ -721,9 +768,16 @@ describe("assemblePortfolioDashboard", () => {
     });
     expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("pnlPercent");
     expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("roi");
-    expect(result.summary.warnings).toContain("pnl-warning:INSUFFICIENT_COST_BASIS");
+    expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("nativePnl");
+    expect(result.summary.warnings).toContain(
+      "pnl-warning:INSUFFICIENT_COST_BASIS",
+    );
+    expect(result.pnlCoverage).toMatchObject({
+      status: "unavailable",
+      reasons: ["insufficient_cost_basis"],
+      incompleteBasisPositionsCount: 1,
+    });
   });
-
 
   it("surfaces pnl warnings in the token dto", async () => {
     const result = await assemblePortfolioDashboard({
@@ -767,7 +821,9 @@ describe("assemblePortfolioDashboard", () => {
         }),
       ],
     });
-    expect(result.summary.warnings).toContain("pnl-warning:MARK_PRICE_UNAVAILABLE");
+    expect(result.summary.warnings).toContain(
+      "pnl-warning:MARK_PRICE_UNAVAILABLE",
+    );
   });
 
   it("includes lp and stake positions without fabricating valuation", async () => {
@@ -825,16 +881,33 @@ describe("assemblePortfolioDashboard", () => {
           },
         ],
       }) as never,
-      resolvePrice: async () => createResolvedPrice({ selected: createPriceObservation({ price: "3" }) }),
-      calculatePnl: async () => createPnlResult({ holdingsQuantity: "1", markPrice: "3", unrealizedPnl: "1.5" }),
+      resolvePrice: async () =>
+        createResolvedPrice({
+          selected: createPriceObservation({ price: "3" }),
+        }),
+      calculatePnl: async () =>
+        createPnlResult({
+          holdingsQuantity: "1",
+          markPrice: "3",
+          unrealizedPnl: "1.5",
+        }),
     });
 
     expect(result.summary.valuationStatus).toBe("partial");
     expect(result.lpPositions[0]).toMatchObject({
       valuation: { status: "unsupported", valueQuote: null },
+      pnl: { status: "unsupported", realizedPnl: null, unrealizedPnl: null },
     });
     expect(result.stakePositions[0]).toMatchObject({
       valuation: { status: "unsupported", valueQuote: null },
+      pnl: { status: "unsupported", realizedPnl: null, unrealizedPnl: null },
+    });
+    expect(result.pnlCoverage).toMatchObject({
+      status: "partial",
+      reasons: ["unsupported_position_type"],
+      affectedSections: ["summary", "lpPositions", "stakePositions"],
+      pricedPositionsCount: 1,
+      unsupportedPositionsCount: 2,
     });
   });
 
@@ -887,7 +960,7 @@ describe("assemblePortfolioDashboard", () => {
       "utf8",
     );
 
-    expect(source).not.toContain("\"use client\"");
+    expect(source).not.toContain('"use client"');
     expect(source).not.toContain("React");
     expect(source).not.toContain("return (");
   });
@@ -898,7 +971,8 @@ describe("assemblePortfolioDashboard", () => {
       quoteAsset: QUOTE_ASSET,
       asOf: new Date("2026-05-08T12:04:00.000Z"),
       db: createMemoryDb() as never,
-      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      resolvePrice: async () =>
+        createResolvedPrice({ selected: null, rejected: [] }),
       calculatePnl: async () => createPnlResult(),
     });
 
@@ -935,7 +1009,8 @@ describe("assemblePortfolioDashboard", () => {
           },
         ],
       }) as never,
-      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      resolvePrice: async () =>
+        createResolvedPrice({ selected: null, rejected: [] }),
       calculatePnl: async () => createPnlResult(),
     });
 
@@ -972,7 +1047,8 @@ describe("assemblePortfolioDashboard", () => {
           },
         ],
       }) as never,
-      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      resolvePrice: async () =>
+        createResolvedPrice({ selected: null, rejected: [] }),
       calculatePnl: async () => createPnlResult(),
     });
 
@@ -1009,7 +1085,8 @@ describe("assemblePortfolioDashboard", () => {
           },
         ],
       }) as never,
-      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      resolvePrice: async () =>
+        createResolvedPrice({ selected: null, rejected: [] }),
       calculatePnl: async () => createPnlResult(),
     });
 
@@ -1018,7 +1095,8 @@ describe("assemblePortfolioDashboard", () => {
       fromBlock: "50",
       toBlock: null,
       sourceFamilies: [],
-      reason: "Only a partial block range is recorded in persisted materialization state.",
+      reason:
+        "Only a partial block range is recorded in persisted materialization state.",
     });
   });
 

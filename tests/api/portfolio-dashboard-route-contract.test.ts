@@ -101,13 +101,16 @@ function createMemoryDb(overrides?: {
     {
       wallet: {
         async findUnique(args: {
-          where: { chainId_addressLower: { chainId: number; addressLower: string } };
+          where: {
+            chainId_addressLower: { chainId: number; addressLower: string };
+          };
         }) {
           return (
             wallets.find(
               (row) =>
                 row.chainId === args.where.chainId_addressLower.chainId &&
-                row.addressLower === args.where.chainId_addressLower.addressLower,
+                row.addressLower ===
+                  args.where.chainId_addressLower.addressLower,
             ) ?? null
           );
         },
@@ -115,7 +118,9 @@ function createMemoryDb(overrides?: {
       portfolioTokenBalance: {
         async findMany(args: { where: { walletId: string; chainId: number } }) {
           return tokenBalances.filter(
-            (row) => row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+            (row) =>
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
           );
         },
       },
@@ -148,7 +153,9 @@ function createMemoryDb(overrides?: {
           include?: { actionGroup: { select: { actionType: true } } };
         }) {
           const rows = ledgerEntries.filter(
-            (row) => row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+            (row) =>
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
           );
 
           if (args.include?.actionGroup.select.actionType) {
@@ -174,7 +181,8 @@ function createMemoryDb(overrides?: {
             return (
               (where.chainId === undefined || row.chainId === where.chainId) &&
               (where.assetId === undefined || row.assetId === where.assetId) &&
-              (where.quoteAsset === undefined || row.quoteAsset === where.quoteAsset)
+              (where.quoteAsset === undefined ||
+                row.quoteAsset === where.quoteAsset)
             );
           });
         },
@@ -473,10 +481,41 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           sourceFamilies: [],
           reason: null,
         },
+        pnlCoverage: {
+          status: "valued",
+          reasons: [],
+          affectedSections: [],
+          pricedPositionsCount: 1,
+          unpricedPositionsCount: 0,
+          unsupportedPositionsCount: 0,
+          incompleteBasisPositionsCount: 0,
+          stalePricePositionsCount: 0,
+          sourceDisabledPositionsCount: 0,
+          asOf: "2026-05-08T14:00:00.000Z",
+        },
       },
     });
+    expect(typeof body.data.pnlCoverage.asOf).toBe("string");
+    expect(Array.isArray(body.data.pnlCoverage.reasons)).toBe(true);
+    expect(Array.isArray(body.data.pnlCoverage.affectedSections)).toBe(true);
+    expect(typeof body.data.pnlCoverage.pricedPositionsCount).toBe("number");
+    expect(typeof body.data.pnlCoverage.unpricedPositionsCount).toBe("number");
+    expect(typeof body.data.pnlCoverage.unsupportedPositionsCount).toBe(
+      "number",
+    );
+    expect(typeof body.data.pnlCoverage.incompleteBasisPositionsCount).toBe(
+      "number",
+    );
+    expect(typeof body.data.pnlCoverage.stalePricePositionsCount).toBe(
+      "number",
+    );
+    expect(typeof body.data.pnlCoverage.sourceDisabledPositionsCount).toBe(
+      "number",
+    );
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("pnlPercent");
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("roi");
+    expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("nativePnl");
+    expect(body.data.summary).not.toHaveProperty("nativePnl");
   });
 
   it("keeps unpriced PnL unavailable instead of returning misleading zero values", async () => {
@@ -583,7 +622,9 @@ describe("GET /api/portfolio/dashboard route contract", () => {
               markPrice: null,
               totalAcquiredQuantity: "10",
               totalDisposedQuantity: "0",
-              warnings: [expect.objectContaining({ code: "MARK_PRICE_UNAVAILABLE" })],
+              warnings: [
+                expect.objectContaining({ code: "MARK_PRICE_UNAVAILABLE" }),
+              ],
             },
           },
         ],
@@ -600,14 +641,27 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           fromBlock: "50",
           toBlock: null,
           sourceFamilies: [],
-          reason: "Only a partial block range is recorded in persisted materialization state.",
+          reason:
+            "Only a partial block range is recorded in persisted materialization state.",
+        },
+        pnlCoverage: {
+          status: "unavailable",
+          reasons: ["unpriced"],
+          affectedSections: ["summary", "tokens"],
+          pricedPositionsCount: 0,
+          unpricedPositionsCount: 1,
+          unsupportedPositionsCount: 0,
+          incompleteBasisPositionsCount: 0,
+          stalePricePositionsCount: 0,
+          sourceDisabledPositionsCount: 0,
+          asOf: "2026-05-08T12:04:00.000Z",
         },
       },
     });
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("pnlPercent");
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("roi");
+    expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("nativePnl");
   });
-
 
   it("returns failed materialization metadata, warnings, and negative balances from persisted state", async () => {
     getDb.mockReturnValue(
@@ -700,7 +754,8 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           warnings: [
             {
               code: "negative_token_balance",
-              message: "Negative materialized token balance for chain:369:native:PLS: -0.25",
+              message:
+                "Negative materialized token balance for chain:369:native:PLS: -0.25",
             },
             {
               code: "generic_persisted_warning",
@@ -997,7 +1052,8 @@ describe("GET /api/portfolio/dashboard route contract", () => {
         materialization: {
           freshness: {
             status: "stale",
-            reason: "Materialization failed: materialization failed with stale prior data",
+            reason:
+              "Materialization failed: materialization failed with stale prior data",
             lastMaterializedAt: "2026-05-08T10:00:00.000Z",
             staleAfterSeconds: 900,
           },
@@ -1257,7 +1313,8 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           fromBlock: "50",
           toBlock: null,
           sourceFamilies: [],
-          reason: "Only a partial block range is recorded in persisted materialization state.",
+          reason:
+            "Only a partial block range is recorded in persisted materialization state.",
         },
       },
     });

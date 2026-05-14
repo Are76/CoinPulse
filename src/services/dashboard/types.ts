@@ -1,5 +1,12 @@
-import type { AverageCostPnlResult, CalculateAverageCostPnlArgs, PnLWarning } from "@/services/pnl/types";
-import type { PersistedPriceObservation, ResolveBestPriceResult } from "@/services/pricing/types";
+import type {
+  AverageCostPnlResult,
+  CalculateAverageCostPnlArgs,
+  PnLWarning,
+} from "@/services/pnl/types";
+import type {
+  PersistedPriceObservation,
+  ResolveBestPriceResult,
+} from "@/services/pricing/types";
 
 export type DashboardStatus =
   | "available"
@@ -11,7 +18,10 @@ export type DashboardStatus =
   | "partial";
 
 export type DashboardPricingDto = {
-  status: Exclude<DashboardStatus, "partial" | "unsupported" | "incomplete_basis">;
+  status: Exclude<
+    DashboardStatus,
+    "partial" | "unsupported" | "incomplete_basis"
+  >;
   sourceType: PersistedPriceObservation["sourceType"] | null;
   sourceId: string | null;
   confidence: string | null;
@@ -53,7 +63,10 @@ export type DashboardNegativeBalanceDto = {
   decimals: number | null;
 };
 
-export type DashboardMaterializationFreshnessStatus = "fresh" | "stale" | "unknown";
+export type DashboardMaterializationFreshnessStatus =
+  | "fresh"
+  | "stale"
+  | "unknown";
 
 export type DashboardMaterializationFreshnessDto = {
   status: DashboardMaterializationFreshnessStatus;
@@ -70,6 +83,42 @@ export type DashboardLedgerCoverageDto = {
   toBlock: string | null;
   sourceFamilies: string[];
   reason: string | null;
+};
+
+export type DashboardPnlCoverageStatus =
+  | "valued"
+  | "partial"
+  | "unavailable"
+  | "unsupported"
+  | "unknown";
+
+export type DashboardPnlCoverageReason =
+  | "unpriced"
+  | "insufficient_cost_basis"
+  | "partial_history"
+  | "stale_price"
+  | "source_disabled"
+  | "unsupported_position_type"
+  | "missing_disposal_events"
+  | "missing_native_price_history";
+
+export type DashboardPnlCoverageSection =
+  | "summary"
+  | "tokens"
+  | "lpPositions"
+  | "stakePositions";
+
+export type DashboardPnlCoverageDto = {
+  status: DashboardPnlCoverageStatus;
+  reasons: DashboardPnlCoverageReason[];
+  affectedSections: DashboardPnlCoverageSection[];
+  pricedPositionsCount: number;
+  unpricedPositionsCount: number;
+  unsupportedPositionsCount: number;
+  incompleteBasisPositionsCount: number;
+  stalePricePositionsCount: number;
+  sourceDisabledPositionsCount: number;
+  asOf: string;
 };
 
 export type DashboardMaterializationDto = {
@@ -156,6 +205,7 @@ export type PortfolioDashboardDto = {
   asOf: string;
   materialization: DashboardMaterializationDto;
   ledgerCoverage: DashboardLedgerCoverageDto;
+  pnlCoverage: DashboardPnlCoverageDto;
   summary: PortfolioSummaryDto;
   tokenPositions: DashboardTokenPositionDto[];
   lpPositions: DashboardLpPositionDto[];
@@ -269,7 +319,11 @@ export type DashboardDbClient = {
     >;
   };
   priceObservation?: {
-    findMany: NonNullable<Parameters<typeof import("@/services/pricing/price-resolver").resolveBestPriceFromStore>[1]["db"]>["priceObservation"]["findMany"];
+    findMany: NonNullable<
+      Parameters<
+        typeof import("@/services/pricing/price-resolver").resolveBestPriceFromStore
+      >[1]["db"]
+    >["priceObservation"]["findMany"];
   };
 };
 
