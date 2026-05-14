@@ -473,10 +473,33 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           sourceFamilies: [],
           reason: null,
         },
+        pnlCoverage: {
+          status: "valued",
+          reasons: [],
+          affectedSections: [],
+          pricedPositionsCount: 1,
+          unpricedPositionsCount: 0,
+          unsupportedPositionsCount: 0,
+          incompleteBasisPositionsCount: 0,
+          stalePricePositionsCount: 0,
+          sourceDisabledPositionsCount: 0,
+          asOf: "2026-05-08T14:00:00.000Z",
+        },
       },
     });
+    expect(typeof body.data.pnlCoverage.asOf).toBe("string");
+    expect(Array.isArray(body.data.pnlCoverage.reasons)).toBe(true);
+    expect(Array.isArray(body.data.pnlCoverage.affectedSections)).toBe(true);
+    expect(typeof body.data.pnlCoverage.pricedPositionsCount).toBe("number");
+    expect(typeof body.data.pnlCoverage.unpricedPositionsCount).toBe("number");
+    expect(typeof body.data.pnlCoverage.unsupportedPositionsCount).toBe("number");
+    expect(typeof body.data.pnlCoverage.incompleteBasisPositionsCount).toBe("number");
+    expect(typeof body.data.pnlCoverage.stalePricePositionsCount).toBe("number");
+    expect(typeof body.data.pnlCoverage.sourceDisabledPositionsCount).toBe("number");
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("pnlPercent");
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("roi");
+    expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("nativePnl");
+    expect(body.data.summary).not.toHaveProperty("nativePnl");
   });
 
   it("keeps unpriced PnL unavailable instead of returning misleading zero values", async () => {
@@ -602,10 +625,23 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           sourceFamilies: [],
           reason: "Only a partial block range is recorded in persisted materialization state.",
         },
+        pnlCoverage: {
+          status: "unavailable",
+          reasons: ["unpriced"],
+          affectedSections: ["summary", "tokens"],
+          pricedPositionsCount: 0,
+          unpricedPositionsCount: 1,
+          unsupportedPositionsCount: 0,
+          incompleteBasisPositionsCount: 0,
+          stalePricePositionsCount: 0,
+          sourceDisabledPositionsCount: 0,
+          asOf: "2026-05-08T12:04:00.000Z",
+        },
       },
     });
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("pnlPercent");
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("roi");
+    expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("nativePnl");
   });
 
 

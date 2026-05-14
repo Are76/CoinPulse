@@ -72,6 +72,38 @@ export type DashboardLedgerCoverageDto = {
   reason: string | null;
 };
 
+export type DashboardPnlCoverageStatus =
+  | "valued"
+  | "partial"
+  | "unavailable"
+  | "unsupported"
+  | "unknown";
+
+export type DashboardPnlCoverageReason =
+  | "unpriced"
+  | "insufficient_cost_basis"
+  | "partial_history"
+  | "stale_price"
+  | "source_disabled"
+  | "unsupported_position_type"
+  | "missing_disposal_events"
+  | "missing_native_price_history";
+
+export type DashboardPnlCoverageSection = "summary" | "tokens" | "lpPositions" | "stakePositions";
+
+export type DashboardPnlCoverageDto = {
+  status: DashboardPnlCoverageStatus;
+  reasons: DashboardPnlCoverageReason[];
+  affectedSections: DashboardPnlCoverageSection[];
+  pricedPositionsCount: number;
+  unpricedPositionsCount: number;
+  unsupportedPositionsCount: number;
+  incompleteBasisPositionsCount: number;
+  stalePricePositionsCount: number;
+  sourceDisabledPositionsCount: number;
+  asOf: string;
+};
+
 export type DashboardMaterializationDto = {
   status: "RUNNING" | "FAILED" | "COMPLETED" | null;
   completedSuccessfully: boolean | null;
@@ -156,6 +188,7 @@ export type PortfolioDashboardDto = {
   asOf: string;
   materialization: DashboardMaterializationDto;
   ledgerCoverage: DashboardLedgerCoverageDto;
+  pnlCoverage: DashboardPnlCoverageDto;
   summary: PortfolioSummaryDto;
   tokenPositions: DashboardTokenPositionDto[];
   lpPositions: DashboardLpPositionDto[];

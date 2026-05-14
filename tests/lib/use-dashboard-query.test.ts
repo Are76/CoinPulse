@@ -64,6 +64,18 @@ const MOCK_DASHBOARD = {
     sourceFamilies: [],
     reason: "No block range recorded in persisted materialization state.",
   },
+  pnlCoverage: {
+    status: "unknown" as const,
+    reasons: [],
+    affectedSections: [],
+    pricedPositionsCount: 0,
+    unpricedPositionsCount: 0,
+    unsupportedPositionsCount: 0,
+    incompleteBasisPositionsCount: 0,
+    stalePricePositionsCount: 0,
+    sourceDisabledPositionsCount: 0,
+    asOf: "2026-01-01T00:00:00.000Z",
+  },
   summary: {
     totalValueQuote: null,
     valuationStatus: "unsupported" as const,

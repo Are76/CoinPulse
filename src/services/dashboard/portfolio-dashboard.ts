@@ -14,6 +14,9 @@ import type {
   DashboardMaterializationFreshnessDto,
   DashboardMaterializationWarningDto,
   DashboardPnlCalculator,
+  DashboardPnlCoverageDto,
+  DashboardPnlCoverageReason,
+  DashboardPnlCoverageSection,
   DashboardPnlDto,
   DashboardPriceResolver,
   DashboardPricingDto,
@@ -28,6 +31,24 @@ import type {
 const MATERIALIZATION_STALE_AFTER_SECONDS = 15 * 60; // 900 seconds
 
 const ZERO = new Decimal(0);
+
+const PNL_COVERAGE_REASON_ORDER: DashboardPnlCoverageReason[] = [
+  "unpriced",
+  "insufficient_cost_basis",
+  "partial_history",
+  "stale_price",
+  "source_disabled",
+  "unsupported_position_type",
+  "missing_disposal_events",
+  "missing_native_price_history",
+];
+
+const PNL_COVERAGE_SECTION_ORDER: DashboardPnlCoverageSection[] = [
+  "summary",
+  "tokens",
+  "lpPositions",
+  "stakePositions",
+];
 
 export async function assemblePortfolioDashboard(args: {
   wallet: { id: string; address: string; chainId: number };
@@ -229,6 +250,12 @@ export async function assemblePortfolioDashboard(args: {
     asOf: args.asOf.toISOString(),
     materialization,
     ledgerCoverage,
+    pnlCoverage: buildInitialPnlCoverage({
+      tokenPositions: tokenPositionDtos,
+      lpPositions: lpDtos,
+      stakePositions: stakeDtos,
+      asOf: args.asOf,
+    }),
     summary: {
       totalValueQuote: valuedPositions === 0 ? null : toOutput(totalValue),
       valuationStatus,
@@ -242,6 +269,126 @@ export async function assemblePortfolioDashboard(args: {
     tokenPositions: tokenPositionDtos,
     lpPositions: lpDtos,
     stakePositions: stakeDtos,
+  };
+}
+
+function buildInitialPnlCoverage(args: {
+  tokenPositions: Array<{ pricing: DashboardPricingDto; pnl: DashboardPnlDto }>;
+  lpPositions: Array<{ pnl: DashboardPnlDto }>;
+  stakePositions: Array<{ pnl: DashboardPnlDto }>;
+  asOf: Date;
+}): DashboardPnlCoverageDto {
+  const reasons = new Set<DashboardPnlCoverageReason>();
+  const affectedSections = new Set<DashboardPnlCoverageSection>();
+
+  let pricedPositionsCount = 0;
+  let unpricedPositionsCount = 0;
+  let unsupportedPositionsCount = 0;
+  let incompleteBasisPositionsCount = 0;
+  let stalePricePositionsCount = 0;
+  let sourceDisabledPositionsCount = 0;
+
+  for (const position of args.tokenPositions) {
+    if (position.pnl.status === "available") {
+      pricedPositionsCount += 1;
+    }
+
+    const warningCodes = position.pnl.warnings.map((warning) => warning.code);
+    const hasUnpricedPnl =
+      position.pnl.status === "unavailable" ||
+      warningCodes.includes("MARK_PRICE_UNAVAILABLE") ||
+      position.pricing.status === "unavailable" ||
+      position.pricing.status === "low_confidence_price";
+    if (hasUnpricedPnl) {
+      unpricedPositionsCount += 1;
+      reasons.add("unpriced");
+      affectedSections.add("tokens");
+    }
+
+    const hasIncompleteBasis =
+      position.pnl.status === "incomplete_basis" ||
+      warningCodes.includes("INSUFFICIENT_COST_BASIS") ||
+      warningCodes.includes("COUNTER_ASSET_PRICE_UNAVAILABLE") ||
+      warningCodes.includes("UNSUPPORTED_ACTION_GROUP");
+    if (hasIncompleteBasis) {
+      incompleteBasisPositionsCount += 1;
+      reasons.add("insufficient_cost_basis");
+      affectedSections.add("tokens");
+    }
+
+    if (position.pnl.status === "unsupported") {
+      unsupportedPositionsCount += 1;
+      reasons.add("unsupported_position_type");
+      affectedSections.add("tokens");
+    }
+
+    const hasStalePrice =
+      position.pnl.status === "stale_price" ||
+      position.pricing.status === "stale_price" ||
+      position.pricing.rejectedReasons.includes("STALE");
+    if (hasStalePrice) {
+      stalePricePositionsCount += 1;
+      reasons.add("stale_price");
+      affectedSections.add("tokens");
+    }
+
+    if (position.pricing.rejectedReasons.includes("SOURCE_DISABLED")) {
+      sourceDisabledPositionsCount += 1;
+      reasons.add("source_disabled");
+      affectedSections.add("tokens");
+    }
+  }
+
+  for (const position of args.lpPositions) {
+    if (position.pnl.status === "unsupported") {
+      unsupportedPositionsCount += 1;
+      reasons.add("unsupported_position_type");
+      affectedSections.add("lpPositions");
+    }
+  }
+
+  for (const position of args.stakePositions) {
+    if (position.pnl.status === "unsupported") {
+      unsupportedPositionsCount += 1;
+      reasons.add("unsupported_position_type");
+      affectedSections.add("stakePositions");
+    }
+  }
+
+  if (reasons.size > 0) {
+    affectedSections.add("summary");
+  }
+
+  const totalPositions = args.tokenPositions.length + args.lpPositions.length + args.stakePositions.length;
+  const affectedPositionsCount =
+    unpricedPositionsCount +
+    unsupportedPositionsCount +
+    incompleteBasisPositionsCount +
+    stalePricePositionsCount +
+    sourceDisabledPositionsCount;
+
+  const status: DashboardPnlCoverageDto["status"] =
+    totalPositions === 0
+      ? "unknown"
+      : affectedPositionsCount === 0
+        ? "valued"
+        : unsupportedPositionsCount === totalPositions
+          ? "unsupported"
+          : pricedPositionsCount > 0
+            ? "partial"
+            : "unavailable";
+
+  return {
+    status,
+    reasons: PNL_COVERAGE_REASON_ORDER.filter((reason) => reasons.has(reason)),
+    affectedSections: PNL_COVERAGE_SECTION_ORDER.filter((section) => affectedSections.has(section)),
+    pricedPositionsCount,
+    unpricedPositionsCount,
+    unsupportedPositionsCount,
+    incompleteBasisPositionsCount,
+    stalePricePositionsCount,
+    sourceDisabledPositionsCount,
+    asOf: args.asOf.toISOString(),
   };
 }
 

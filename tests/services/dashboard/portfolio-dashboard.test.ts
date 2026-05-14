@@ -282,6 +282,27 @@ describe("assemblePortfolioDashboard", () => {
         }),
       }),
     ]);
+    expect(result.pnlCoverage).toEqual({
+      status: "valued",
+      reasons: [],
+      affectedSections: [],
+      pricedPositionsCount: 1,
+      unpricedPositionsCount: 0,
+      unsupportedPositionsCount: 0,
+      incompleteBasisPositionsCount: 0,
+      stalePricePositionsCount: 0,
+      sourceDisabledPositionsCount: 0,
+      asOf: "2026-05-08T12:04:00.000Z",
+    });
+    expect(typeof result.pnlCoverage.asOf).toBe("string");
+    expect(Array.isArray(result.pnlCoverage.reasons)).toBe(true);
+    expect(Array.isArray(result.pnlCoverage.affectedSections)).toBe(true);
+    expect(typeof result.pnlCoverage.pricedPositionsCount).toBe("number");
+    expect(typeof result.pnlCoverage.unpricedPositionsCount).toBe("number");
+    expect(typeof result.pnlCoverage.unsupportedPositionsCount).toBe("number");
+    expect(typeof result.pnlCoverage.incompleteBasisPositionsCount).toBe("number");
+    expect(typeof result.pnlCoverage.stalePricePositionsCount).toBe("number");
+    expect(typeof result.pnlCoverage.sourceDisabledPositionsCount).toBe("number");
     expect(result.materialization).toEqual({
       status: null,
       completedSuccessfully: null,
@@ -515,6 +536,18 @@ describe("assemblePortfolioDashboard", () => {
       valuation: { status: "unavailable", valueQuote: null },
       pnl: { status: "unavailable" },
     });
+    expect(result.pnlCoverage).toMatchObject({
+      status: "unavailable",
+      reasons: ["unpriced"],
+      affectedSections: ["summary", "tokens"],
+      pricedPositionsCount: 0,
+      unpricedPositionsCount: 1,
+      unsupportedPositionsCount: 0,
+      incompleteBasisPositionsCount: 0,
+      stalePricePositionsCount: 0,
+      sourceDisabledPositionsCount: 0,
+      asOf: "2026-05-08T12:04:00.000Z",
+    });
   });
 
   it("surfaces stale price status explicitly", async () => {
@@ -721,7 +754,13 @@ describe("assemblePortfolioDashboard", () => {
     });
     expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("pnlPercent");
     expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("roi");
+    expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("nativePnl");
     expect(result.summary.warnings).toContain("pnl-warning:INSUFFICIENT_COST_BASIS");
+    expect(result.pnlCoverage).toMatchObject({
+      status: "unavailable",
+      reasons: ["insufficient_cost_basis"],
+      incompleteBasisPositionsCount: 1,
+    });
   });
 
 
@@ -832,9 +871,18 @@ describe("assemblePortfolioDashboard", () => {
     expect(result.summary.valuationStatus).toBe("partial");
     expect(result.lpPositions[0]).toMatchObject({
       valuation: { status: "unsupported", valueQuote: null },
+      pnl: { status: "unsupported", realizedPnl: null, unrealizedPnl: null },
     });
     expect(result.stakePositions[0]).toMatchObject({
       valuation: { status: "unsupported", valueQuote: null },
+      pnl: { status: "unsupported", realizedPnl: null, unrealizedPnl: null },
+    });
+    expect(result.pnlCoverage).toMatchObject({
+      status: "partial",
+      reasons: ["unsupported_position_type"],
+      affectedSections: ["summary", "lpPositions", "stakePositions"],
+      pricedPositionsCount: 1,
+      unsupportedPositionsCount: 2,
     });
   });
 

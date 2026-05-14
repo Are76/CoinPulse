@@ -8,6 +8,19 @@ import {
 
 const originalFetch = global.fetch;
 
+const EMPTY_PNL_COVERAGE = {
+  status: "unknown",
+  reasons: [],
+  affectedSections: [],
+  pricedPositionsCount: 0,
+  unpricedPositionsCount: 0,
+  unsupportedPositionsCount: 0,
+  incompleteBasisPositionsCount: 0,
+  stalePricePositionsCount: 0,
+  sourceDisabledPositionsCount: 0,
+  asOf: "2026-01-01T00:00:00.000Z",
+};
+
 describe("dashboard client", () => {
   afterEach(() => {
     global.fetch = originalFetch;
@@ -18,16 +31,26 @@ describe("dashboard client", () => {
     global.fetch = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          data: { schemaVersion: "v1", tokenPositions: [], lpPositions: [], stakePositions: [] },
+          data: {
+            schemaVersion: "v1",
+            pnlCoverage: EMPTY_PNL_COVERAGE,
+            tokenPositions: [],
+            lpPositions: [],
+            stakePositions: [],
+          },
         }),
         { status: 200 },
       ),
     ) as typeof fetch;
 
-    await fetchPortfolioDashboard({
-      walletAddress: "0x1111111111111111111111111111111111111111",
-      chainId: 369,
-      quoteAsset: "fiat:usd",
+    await expect(
+      fetchPortfolioDashboard({
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        chainId: 369,
+        quoteAsset: "fiat:usd",
+      }),
+    ).resolves.toMatchObject({
+      pnlCoverage: EMPTY_PNL_COVERAGE,
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
@@ -44,7 +67,13 @@ describe("dashboard client", () => {
     global.fetch = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          data: { schemaVersion: "v1", tokenPositions: [], lpPositions: [], stakePositions: [] },
+          data: {
+            schemaVersion: "v1",
+            pnlCoverage: EMPTY_PNL_COVERAGE,
+            tokenPositions: [],
+            lpPositions: [],
+            stakePositions: [],
+          },
         }),
         { status: 200 },
       ),
