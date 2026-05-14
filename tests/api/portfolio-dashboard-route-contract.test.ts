@@ -276,6 +276,328 @@ describe("GET /api/portfolio/dashboard route contract", () => {
     });
   });
 
+  it("preserves backend-computed PnL fields and pricing provenance in the response envelope", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "6",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        ledgerEntries: [
+          {
+            id: "buy-target",
+            chainId: CHAIN_ID,
+            walletId: WALLET_ID,
+            assetId: TOKEN_ASSET,
+            entryType: "SWAP_IN",
+            direction: "IN",
+            quantity: "10",
+            occurredAt: new Date("2026-05-08T12:00:00.000Z"),
+            actionGroupId: "group-1",
+            txHash: "0xtx-1",
+            sourceLogKey: "log:0xtx-1:0",
+            actionType: "SWAP",
+          },
+          {
+            id: "buy-pls",
+            chainId: CHAIN_ID,
+            walletId: WALLET_ID,
+            assetId: NATIVE_ASSET,
+            entryType: "SWAP_OUT",
+            direction: "OUT",
+            quantity: "100",
+            occurredAt: new Date("2026-05-08T12:00:00.000Z"),
+            actionGroupId: "group-1",
+            txHash: "0xtx-1",
+            sourceLogKey: "log:0xtx-1:1",
+            actionType: "SWAP",
+          },
+          {
+            id: "sell-target",
+            chainId: CHAIN_ID,
+            walletId: WALLET_ID,
+            assetId: TOKEN_ASSET,
+            entryType: "SWAP_OUT",
+            direction: "OUT",
+            quantity: "4",
+            occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+            actionGroupId: "group-2",
+            txHash: "0xtx-2",
+            sourceLogKey: "log:0xtx-2:0",
+            actionType: "SWAP",
+          },
+          {
+            id: "sell-pls",
+            chainId: CHAIN_ID,
+            walletId: WALLET_ID,
+            assetId: NATIVE_ASSET,
+            entryType: "SWAP_IN",
+            direction: "IN",
+            quantity: "60",
+            occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+            actionGroupId: "group-2",
+            txHash: "0xtx-2",
+            sourceLogKey: "log:0xtx-2:1",
+            actionType: "SWAP",
+          },
+        ],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T13:59:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T13:59:30.000Z"),
+            sourceLedgerFromBlock: 50n,
+            sourceLedgerToBlock: 200n,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+        priceObservations: [
+          createPriceObservation({
+            id: "pls-buy",
+            assetId: NATIVE_ASSET,
+            assetAddress: null,
+            price: "1",
+            observedAt: new Date("2026-05-08T12:00:00.000Z"),
+          }),
+          createPriceObservation({
+            id: "pls-sell",
+            assetId: NATIVE_ASSET,
+            assetAddress: null,
+            price: "1",
+            observedAt: new Date("2026-05-08T13:00:00.000Z"),
+          }),
+          createPriceObservation({
+            id: "target-mark",
+            price: "15",
+            confidence: "0.95",
+            observedAt: new Date("2026-05-08T14:00:00.000Z"),
+            staleAfterSeconds: 300,
+          }),
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T14:00:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      data: {
+        summary: {
+          totalValueQuote: "90",
+          valuationStatus: "available",
+          warnings: [],
+        },
+        tokenPositions: [
+          {
+            assetId: TOKEN_ASSET,
+            balanceQuantity: "6",
+            pricing: {
+              status: "available",
+              sourceType: "ONCHAIN_POOL",
+              sourceId: "pulsex:pair:0xpair",
+              confidence: "0.95",
+              observedAt: "2026-05-08T14:00:00.000Z",
+              staleAfterSeconds: 300,
+              rejectedReasons: [],
+            },
+            valuation: {
+              status: "available",
+              valueQuote: "90",
+            },
+            pnl: {
+              status: "available",
+              holdingsQuantity: "6",
+              averageCost: "10",
+              realizedPnl: "20",
+              unrealizedPnl: "30",
+              markPrice: "15",
+              totalAcquiredQuantity: "10",
+              totalDisposedQuantity: "4",
+              warnings: [],
+            },
+          },
+        ],
+        materialization: {
+          freshness: {
+            status: "fresh",
+            reason: null,
+            lastMaterializedAt: "2026-05-08T13:59:30.000Z",
+            staleAfterSeconds: 900,
+          },
+        },
+        ledgerCoverage: {
+          status: "covered",
+          fromBlock: "50",
+          toBlock: "200",
+          sourceFamilies: [],
+          reason: null,
+        },
+      },
+    });
+    expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("pnlPercent");
+    expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("roi");
+  });
+
+  it("keeps unpriced PnL unavailable instead of returning misleading zero values", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "10",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        ledgerEntries: [
+          {
+            id: "airdrop-target",
+            chainId: CHAIN_ID,
+            walletId: WALLET_ID,
+            assetId: TOKEN_ASSET,
+            entryType: "RECEIVE",
+            direction: "IN",
+            quantity: "10",
+            occurredAt: new Date("2026-05-08T12:00:00.000Z"),
+            actionGroupId: "group-airdrop",
+            txHash: "0xtx-airdrop",
+            sourceLogKey: "log:0xtx-airdrop:0",
+            actionType: "TRANSFER",
+          },
+        ],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: 50n,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+        priceObservations: [],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      data: {
+        summary: {
+          totalValueQuote: null,
+          valuationStatus: "unavailable",
+          warnings: [
+            "pnl-warning:MARK_PRICE_UNAVAILABLE",
+            `pricing-unavailable:${TOKEN_ASSET}:unavailable`,
+          ],
+        },
+        tokenPositions: [
+          {
+            pricing: {
+              status: "unavailable",
+              sourceType: null,
+              sourceId: null,
+              confidence: null,
+              observedAt: null,
+              staleAfterSeconds: null,
+              rejectedReasons: [],
+            },
+            valuation: {
+              status: "unavailable",
+              valueQuote: null,
+            },
+            pnl: {
+              status: "unavailable",
+              holdingsQuantity: "10",
+              averageCost: "0",
+              realizedPnl: "0",
+              unrealizedPnl: null,
+              markPrice: null,
+              totalAcquiredQuantity: "10",
+              totalDisposedQuantity: "0",
+              warnings: [expect.objectContaining({ code: "MARK_PRICE_UNAVAILABLE" })],
+            },
+          },
+        ],
+        materialization: {
+          freshness: {
+            status: "fresh",
+            reason: null,
+            lastMaterializedAt: "2026-05-08T12:03:30.000Z",
+            staleAfterSeconds: 900,
+          },
+        },
+        ledgerCoverage: {
+          status: "partial",
+          fromBlock: "50",
+          toBlock: null,
+          sourceFamilies: [],
+          reason: "Only a partial block range is recorded in persisted materialization state.",
+        },
+      },
+    });
+    expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("pnlPercent");
+    expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("roi");
+  });
+
+
   it("returns failed materialization metadata, warnings, and negative balances from persisted state", async () => {
     getDb.mockReturnValue(
       createMemoryDb({

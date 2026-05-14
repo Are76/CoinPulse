@@ -587,6 +587,144 @@ describe("assemblePortfolioDashboard", () => {
     expect(result.tokenPositions[0]?.pricing.status).toBe("low_confidence_price");
   });
 
+  it("preserves current PnL contract fields without exposing unsafe percentage metrics", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: 50n,
+            sourceLedgerToBlock: 200n,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () =>
+        createPnlResult({
+          averageCost: "0",
+          realizedPnl: "0",
+          unrealizedPnl: "10",
+          markPrice: "2",
+          totalAcquiredQuantity: "5",
+          totalDisposedQuantity: "0",
+        }),
+    });
+
+    const token = result.tokenPositions[0];
+    expect(token).toMatchObject({
+      pricing: {
+        status: "available",
+        sourceType: "ONCHAIN_POOL",
+        sourceId: "pulsex:pair:0xpair",
+        confidence: "0.91",
+        observedAt: "2026-05-08T12:00:00.000Z",
+        staleAfterSeconds: 300,
+        rejectedReasons: [],
+      },
+      valuation: { status: "available", valueQuote: "10" },
+      pnl: {
+        status: "available",
+        holdingsQuantity: "5",
+        averageCost: "0",
+        realizedPnl: "0",
+        unrealizedPnl: "10",
+        markPrice: "2",
+        totalAcquiredQuantity: "5",
+        totalDisposedQuantity: "0",
+        warnings: [],
+      },
+    });
+    expect(token?.pnl).not.toHaveProperty("pnlPercent");
+    expect(token?.pnl).not.toHaveProperty("roi");
+    expect(result.materialization.freshness).toEqual({
+      status: "fresh",
+      reason: null,
+      lastMaterializedAt: "2026-05-08T12:03:30.000Z",
+      staleAfterSeconds: 900,
+    });
+    expect(result.ledgerCoverage).toEqual({
+      status: "covered",
+      fromBlock: "50",
+      toBlock: "200",
+      sourceFamilies: [],
+      reason: null,
+    });
+  });
+
+  it("maps insufficient cost basis warnings to incomplete basis without fake PnL values", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () =>
+        createPnlResult({
+          averageCost: "0",
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [
+            createPnlWarning({
+              code: "INSUFFICIENT_COST_BASIS",
+              detail: "Disposition exceeds tracked holdings and was skipped.",
+            }),
+          ],
+        }),
+    });
+
+    expect(result.tokenPositions[0]?.pnl).toMatchObject({
+      status: "incomplete_basis",
+      averageCost: "0",
+      unrealizedPnl: null,
+      markPrice: null,
+      warnings: [expect.objectContaining({ code: "INSUFFICIENT_COST_BASIS" })],
+    });
+    expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("pnlPercent");
+    expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("roi");
+    expect(result.summary.warnings).toContain("pnl-warning:INSUFFICIENT_COST_BASIS");
+  });
+
+
   it("surfaces pnl warnings in the token dto", async () => {
     const result = await assemblePortfolioDashboard({
       wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
