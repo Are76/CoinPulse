@@ -13,6 +13,7 @@ import {
   LoadingStateCard,
   LpPositionsTable,
   MaterializationFreshnessSection,
+  PnlCoverageSection,
   PortfolioSummarySection,
   StakePositionsTable,
   SubmittedWalletSourceIndicator,
@@ -176,6 +177,9 @@ export function DashboardScreen() {
           />
           <LedgerCoverageSection
             ledgerCoverage={dashboardQuery.data.ledgerCoverage}
+          />
+          <PnlCoverageSection
+            pnlCoverage={dashboardQuery.data.pnlCoverage}
           />
           <TokenPositionsTable positions={dashboardQuery.data.tokenPositions} />
           <LpPositionsTable positions={dashboardQuery.data.lpPositions} />

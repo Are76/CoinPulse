@@ -25,6 +25,10 @@ import type {
   DashboardLedgerCoverageDto,
   DashboardLpPositionDto,
   DashboardMaterializationFreshnessDto,
+  DashboardPnlCoverageDto,
+  DashboardPnlCoverageReason,
+  DashboardPnlCoverageSection,
+  DashboardPnlCoverageStatus,
   DashboardPnlDto,
   DashboardPricingDto,
   DashboardStakePositionDto,
@@ -400,6 +404,61 @@ export function LedgerCoverageSection({
   );
 }
 
+export function PnlCoverageSection({
+  pnlCoverage,
+}: {
+  pnlCoverage: DashboardPnlCoverageDto;
+}) {
+  const { label, tone } = formatPnlCoverageStatus(pnlCoverage.status);
+
+  return (
+    <SurfaceCard className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
+          PnL coverage
+        </span>
+        <LabelBadge label={label} tone={tone} />
+      </div>
+
+      {pnlCoverage.reasons.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {pnlCoverage.reasons.map((reason) => (
+            <LabelBadge
+              key={reason}
+              label={formatPnlCoverageReason(reason)}
+              tone="neutral"
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {pnlCoverage.affectedSections.length > 0 ? (
+        <p className="text-xs text-[color:var(--color-text-muted)]">
+          Affected sections:{" "}
+          {pnlCoverage.affectedSections.map(formatPnlCoverageSection).join(", ")}
+        </p>
+      ) : null}
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <CoverageCount label="Priced" value={pnlCoverage.pricedPositionsCount} />
+        <CoverageCount label="Unpriced" value={pnlCoverage.unpricedPositionsCount} />
+        <CoverageCount label="Unsupported" value={pnlCoverage.unsupportedPositionsCount} />
+        <CoverageCount
+          label="Incomplete basis"
+          value={pnlCoverage.incompleteBasisPositionsCount}
+        />
+        <CoverageCount label="Stale price" value={pnlCoverage.stalePricePositionsCount} />
+        <CoverageCount
+          label="Source disabled"
+          value={pnlCoverage.sourceDisabledPositionsCount}
+        />
+      </div>
+
+      <TimestampLabel label="As of" value={pnlCoverage.asOf} />
+    </SurfaceCard>
+  );
+}
+
 export function TokenPositionsTable({
   positions,
 }: {
@@ -594,6 +653,52 @@ export function StakePositionsTable({
         ))}
       </tbody>
     </DataTableShell>
+  );
+}
+
+function formatPnlCoverageStatus(status: DashboardPnlCoverageStatus): {
+  label: string;
+  tone: BadgeTone;
+} {
+  switch (status) {
+    case "valued":
+      return { label: "Valued", tone: "fresh" };
+    case "partial":
+      return { label: "Partial", tone: "warn" };
+    case "unavailable":
+      return { label: "Unavailable", tone: "neutral" };
+    case "unsupported":
+      return { label: "Unsupported", tone: "neutral" };
+    case "unknown":
+      return { label: "Unknown", tone: "neutral" };
+  }
+}
+
+function formatPnlCoverageReason(reason: DashboardPnlCoverageReason) {
+  return reason.replaceAll("_", " ");
+}
+
+function formatPnlCoverageSection(section: DashboardPnlCoverageSection) {
+  switch (section) {
+    case "summary":
+      return "summary";
+    case "tokens":
+      return "tokens";
+    case "lpPositions":
+      return "LP positions";
+    case "stakePositions":
+      return "stake positions";
+  }
+}
+
+function CoverageCount({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] p-3">
+      <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
+        {label}
+      </div>
+      <div className="mt-2 cp-data text-sm">{value}</div>
+    </div>
   );
 }
 
