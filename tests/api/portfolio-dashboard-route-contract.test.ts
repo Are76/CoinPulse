@@ -41,8 +41,7 @@ type LedgerEntryRecord = {
   actionGroupId: string;
   txHash: string;
   sourceLogKey: string | null;
-  actionType?: string;
-  actionGroup?: { actionType: string };
+  actionGroup: { actionType: string };
 };
 
 type MaterializationStateRecord = {
@@ -144,10 +143,22 @@ function createMemoryDb(overrides?: {
         },
       },
       ledgerEntry: {
-        async findMany(args: { where: { walletId: string; chainId: number } }) {
-          return ledgerEntries.filter(
+        async findMany(args: {
+          where: { walletId: string; chainId: number };
+          include?: { actionGroup: { select: { actionType: true } } };
+        }) {
+          const rows = ledgerEntries.filter(
             (row) => row.walletId === args.where.walletId && row.chainId === args.where.chainId,
           );
+
+          if (args.include?.actionGroup.select.actionType) {
+            return rows;
+          }
+
+          return rows.map(({ actionGroup, ...row }) => {
+            void actionGroup;
+            return row;
+          });
         },
       },
       priceObservation: {
@@ -313,7 +324,7 @@ describe("GET /api/portfolio/dashboard route contract", () => {
             actionGroupId: "group-1",
             txHash: "0xtx-1",
             sourceLogKey: "log:0xtx-1:0",
-            actionType: "SWAP",
+            actionGroup: { actionType: "SWAP" },
           },
           {
             id: "buy-pls",
@@ -327,7 +338,7 @@ describe("GET /api/portfolio/dashboard route contract", () => {
             actionGroupId: "group-1",
             txHash: "0xtx-1",
             sourceLogKey: "log:0xtx-1:1",
-            actionType: "SWAP",
+            actionGroup: { actionType: "SWAP" },
           },
           {
             id: "sell-target",
@@ -341,7 +352,7 @@ describe("GET /api/portfolio/dashboard route contract", () => {
             actionGroupId: "group-2",
             txHash: "0xtx-2",
             sourceLogKey: "log:0xtx-2:0",
-            actionType: "SWAP",
+            actionGroup: { actionType: "SWAP" },
           },
           {
             id: "sell-pls",
@@ -355,7 +366,7 @@ describe("GET /api/portfolio/dashboard route contract", () => {
             actionGroupId: "group-2",
             txHash: "0xtx-2",
             sourceLogKey: "log:0xtx-2:1",
-            actionType: "SWAP",
+            actionGroup: { actionType: "SWAP" },
           },
         ],
         materializationStates: [
@@ -505,7 +516,7 @@ describe("GET /api/portfolio/dashboard route contract", () => {
             actionGroupId: "group-airdrop",
             txHash: "0xtx-airdrop",
             sourceLogKey: "log:0xtx-airdrop:0",
-            actionType: "TRANSFER",
+            actionGroup: { actionType: "TRANSFER" },
           },
         ],
         materializationStates: [
