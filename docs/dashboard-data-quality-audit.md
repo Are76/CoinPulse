@@ -8,6 +8,48 @@ This document maps the current state of dashboard data quality in CoinPulse V1 b
 
 ---
 
+## Milestone status
+
+The dashboard data-quality milestone has completed the intended visibility and operator-observability slices without changing accounting, valuation, pricing selection, or PnL semantics. The completed work is:
+
+- Materialization freshness is backend-computed in the dashboard DTO.
+- Materialization freshness is rendered in the dashboard UI from backend DTO fields.
+- `ledgerCoverage` is backend-computed in the dashboard DTO.
+- `ledgerCoverage` is rendered in the dashboard UI from backend DTO fields.
+- Pricing source status is exposed through `GET /api/prices/status`.
+- Pricing status aggregation is bounded by `chainId` and a lookback window.
+- Known pricing source types surface `no_observation` or `disabled` states instead of disappearing from operator visibility.
+- A frontend pricing status client and TanStack Query hook exist for the pricing status DTO.
+- An operator pricing status page exists at `/debug/prices/status`.
+- The dashboard links to the pricing status debug page for operator follow-up.
+- Repeated operator tools navigation has been refactored into reusable navigation.
+
+These are visibility and observability improvements. They make backend-owned freshness, ledger coverage, and pricing-source health easier to inspect, but they do not implement native PnL, change pricing selection, add frontend valuation logic, or alter canonical accounting truth.
+
+### Still intentionally deferred
+
+The following items remain intentionally out of scope for this milestone:
+
+- No full pricing status dashboard embed.
+- No pricing or PnL logic changes.
+- No external provider integrations.
+- No RPC or latest-block reads from the frontend.
+- No wallet delete or edit actions.
+- No native PnL implementation.
+- No realized or unrealized PnL UI expansion beyond current backend-supported fields.
+- No Ethereum/Base expansion.
+
+### Recommended next V1 sequence
+
+Recommended follow-up work should stay backend-contract-first and avoid richer analytics UI until the supporting DTOs are explicit:
+
+1. Add a PnL status/coverage contract audit or DTO guardrails to define exactly what the backend supports today.
+2. Add explicit PnL status contract tests if the existing DTO supports PnL warnings or statuses.
+3. Add a token identity/origin metadata plan so future analytics do not depend on symbols, tickers, or frontend inference.
+4. Only then consider richer analytics UI, constrained to backend-provided DTO fields and warnings.
+
+---
+
 ## 2. Current Dashboard Data Flow
 
 ```
