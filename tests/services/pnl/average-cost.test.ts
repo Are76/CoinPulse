@@ -135,6 +135,106 @@ describe("calculateAverageCostPnl", () => {
     expect(result.unrealizedPnl).toBe("30");
   });
 
+
+  it("keeps realized PnL at zero until a disposal event exists", async () => {
+    const result = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry({ quantity: "10" }),
+        createEntry({
+          id: "buy-pls",
+          assetId: PLS_ASSET,
+          entryType: "SWAP_OUT",
+          direction: "OUT",
+          quantity: "100",
+        }),
+      ],
+      resolvePrice: createResolver([
+        createObservation({
+          id: "pls-buy",
+          observedAt: new Date("2026-05-08T12:00:00.000Z"),
+          price: "1",
+        }),
+        createObservation({
+          id: "target-mark",
+          assetId: TARGET_ASSET,
+          assetAddress: TARGET_ADDRESS,
+          observedAt: new Date("2026-05-08T14:00:00.000Z"),
+          price: "15",
+        }),
+      ]),
+    });
+
+    expect(result.holdingsQuantity).toBe("10");
+    expect(result.totalDisposedQuantity).toBe("0");
+    expect(result.realizedPnl).toBe("0");
+    expect(result.markPrice).toBe("15");
+    expect(result.unrealizedPnl).toBe("50");
+  });
+
+  it("keeps missing marks as null and exposes no percentage field for zero-cost positions", async () => {
+    const missingMarkResult = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry({
+          id: "airdrop-target",
+          actionType: "TRANSFER",
+          entryType: "RECEIVE",
+          quantity: "10",
+        }),
+      ],
+      resolvePrice: createResolver([]),
+    });
+
+    expect(missingMarkResult.averageCost).toBe("0");
+    expect(missingMarkResult.markPrice).toBeNull();
+    expect(missingMarkResult.unrealizedPnl).toBeNull();
+    expect(missingMarkResult.warnings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "MARK_PRICE_UNAVAILABLE" })]),
+    );
+    expect(missingMarkResult).not.toHaveProperty("pnlPercent");
+    expect(missingMarkResult).not.toHaveProperty("roi");
+
+    const zeroCostMarkedResult = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry({
+          id: "airdrop-target",
+          actionType: "TRANSFER",
+          entryType: "RECEIVE",
+          quantity: "10",
+        }),
+      ],
+      resolvePrice: createResolver([
+        createObservation({
+          id: "target-mark",
+          assetId: TARGET_ASSET,
+          assetAddress: TARGET_ADDRESS,
+          observedAt: new Date("2026-05-08T14:00:00.000Z"),
+          price: "2",
+        }),
+      ]),
+    });
+
+    expect(zeroCostMarkedResult.averageCost).toBe("0");
+    expect(zeroCostMarkedResult.markPrice).toBe("2");
+    expect(zeroCostMarkedResult.unrealizedPnl).toBe("20");
+    expect(zeroCostMarkedResult).not.toHaveProperty("pnlPercent");
+    expect(zeroCostMarkedResult).not.toHaveProperty("roi");
+  });
+
   it("calculates average cost across multiple buys", async () => {
     const result = await calculateAverageCostPnl({
       walletId: WALLET_ID,
