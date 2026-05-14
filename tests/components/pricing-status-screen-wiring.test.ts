@@ -42,24 +42,12 @@ describe("pricing-status-screen wiring", () => {
     expect(source).not.toContain("fetchPricingStatus");
   });
 
-  it("screen references /debug/prices/status", () => {
+  it("screen renders the shared operator tools nav", () => {
     const source = readScreenSource();
-    expect(source).toContain('href="/debug/prices/status"');
-  });
-
-  it("screen references /debug/sync", () => {
-    const source = readScreenSource();
-    expect(source).toContain('href="/debug/sync"');
-  });
-
-  it("screen references /debug/wallets/import", () => {
-    const source = readScreenSource();
-    expect(source).toContain('href="/debug/wallets/import"');
-  });
-
-  it("screen references /debug/wallets/tracked", () => {
-    const source = readScreenSource();
-    expect(source).toContain('href="/debug/wallets/tracked"');
+    expect(source).toContain(
+      'import { OperatorToolsNav } from "@/components/debug/operator-tools-nav";',
+    );
+    expect(source).toContain("<OperatorToolsNav />");
   });
 
   it("screen renders backend pricing source fields", () => {

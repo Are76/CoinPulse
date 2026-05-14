@@ -2,8 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 
-import Link from "next/link";
-
+import { OperatorToolsNav } from "@/components/debug/operator-tools-nav";
 import { EmptyState } from "@/components/ui/data-state/empty-state";
 import { ErrorState } from "@/components/ui/data-state/error-state";
 import { LoadingState } from "@/components/ui/data-state/loading-state";
@@ -258,37 +257,7 @@ export function DebugSyncScreen() {
         </div>
       </SurfaceCard>
 
-      <SurfaceCard className="flex flex-wrap items-center gap-x-6 gap-y-2">
-        <span className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--color-text-muted)]">
-          Operator tools
-        </span>
-        <div className="flex flex-wrap gap-4">
-          <Link
-            href="/debug/sync"
-            className="text-sm font-medium text-[color:var(--color-accent-2)] hover:underline"
-          >
-            Debug sync
-          </Link>
-          <Link
-            href="/debug/wallets/import"
-            className="text-sm font-medium text-[color:var(--color-accent-2)] hover:underline"
-          >
-            Wallet import
-          </Link>
-          <Link
-            href="/debug/wallets/tracked"
-            className="text-sm font-medium text-[color:var(--color-accent-2)] hover:underline"
-          >
-            Tracked wallets
-          </Link>
-          <Link
-            href="/debug/prices/status"
-            className="text-sm font-medium text-[color:var(--color-accent-2)] hover:underline"
-          >
-            Pricing status
-          </Link>
-        </div>
-      </SurfaceCard>
+      <OperatorToolsNav />
 
       {metaState.kind === "loading" ? (
         <SurfaceCard>
