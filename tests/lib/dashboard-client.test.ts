@@ -122,17 +122,12 @@ describe("dashboard client", () => {
     global.fetch = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { status: "ok" } }), {
-          status: 200,
-        }),
+        new Response(JSON.stringify({ data: { status: "ok" } }), { status: 200 }),
       )
       .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ data: { sourceFamilies: ["TRANSFERS"] } }),
-          {
-            status: 200,
-          },
-        ),
+        new Response(JSON.stringify({ data: { sourceFamilies: ["TRANSFERS"] } }), {
+          status: 200,
+        }),
       ) as typeof fetch;
 
     await expect(fetchDebugHealth()).resolves.toMatchObject({ status: "ok" });

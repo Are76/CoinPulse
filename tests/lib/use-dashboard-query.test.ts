@@ -13,11 +13,7 @@ function makeWrapper() {
     },
   });
   return function Wrapper({ children }: { children: ReactNode }) {
-    return React.createElement(
-      QueryClientProvider,
-      { client: queryClient },
-      children,
-    );
+    return React.createElement(QueryClientProvider, { client: queryClient }, children);
   };
 }
 
@@ -31,21 +27,13 @@ function makeRetryingWrapper() {
     },
   });
   return function Wrapper({ children }: { children: ReactNode }) {
-    return React.createElement(
-      QueryClientProvider,
-      { client: queryClient },
-      children,
-    );
+    return React.createElement(QueryClientProvider, { client: queryClient }, children);
   };
 }
 
 const MOCK_DASHBOARD = {
   schemaVersion: "v1" as const,
-  wallet: {
-    id: "w1",
-    address: "0x1111111111111111111111111111111111111111",
-    chainId: 369,
-  },
+  wallet: { id: "w1", address: "0x1111111111111111111111111111111111111111", chainId: 369 },
   quoteAsset: "fiat:usd",
   asOf: "2026-01-01T00:00:00.000Z",
   materialization: {
@@ -91,11 +79,7 @@ const MOCK_DASHBOARD = {
   summary: {
     totalValueQuote: null,
     valuationStatus: "unsupported" as const,
-    valuationCoverage: {
-      totalPositions: 0,
-      valuedPositions: 0,
-      unvaluedPositions: 0,
-    },
+    valuationCoverage: { totalPositions: 0, valuedPositions: 0, unvaluedPositions: 0 },
     warnings: [],
   },
   tokenPositions: [],
@@ -109,9 +93,7 @@ describe("useDashboardQuery", () => {
   });
 
   it("fetches portfolio dashboard data when enabled with a non-empty wallet address", async () => {
-    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(
-      MOCK_DASHBOARD,
-    );
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
 
     const { result } = renderHook(
       () =>
@@ -133,9 +115,7 @@ describe("useDashboardQuery", () => {
   });
 
   it("trims leading and trailing whitespace from walletAddress before fetching", async () => {
-    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(
-      MOCK_DASHBOARD,
-    );
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
 
     const { result } = renderHook(
       () =>
@@ -155,9 +135,7 @@ describe("useDashboardQuery", () => {
   });
 
   it("does not fetch when walletAddress is empty", async () => {
-    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(
-      MOCK_DASHBOARD,
-    );
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
 
     const { result } = renderHook(
       () =>
@@ -175,9 +153,7 @@ describe("useDashboardQuery", () => {
   });
 
   it("does not fetch when walletAddress is whitespace only", async () => {
-    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(
-      MOCK_DASHBOARD,
-    );
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
 
     const { result } = renderHook(
       () =>
@@ -195,9 +171,7 @@ describe("useDashboardQuery", () => {
   });
 
   it("does not fetch when enabled is false", async () => {
-    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(
-      MOCK_DASHBOARD,
-    );
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
 
     const { result } = renderHook(
       () =>
@@ -235,9 +209,7 @@ describe("useDashboardQuery", () => {
   });
 
   it("uses the default quoteAsset of fiat:usd when not specified", async () => {
-    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(
-      MOCK_DASHBOARD,
-    );
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
 
     const { result } = renderHook(
       () =>
@@ -257,9 +229,7 @@ describe("useDashboardQuery", () => {
   });
 
   it("forwards asOf to fetchPortfolioDashboard when provided", async () => {
-    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(
-      MOCK_DASHBOARD,
-    );
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
 
     const { result } = renderHook(
       () =>
@@ -317,9 +287,7 @@ describe("tracked-wallet request contract", () => {
   });
 
   it("a tracked-looking wallet address is forwarded as explicit walletAddress param without consulting tracked-wallet state", async () => {
-    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(
-      MOCK_DASHBOARD,
-    );
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
 
     const TRACKED_LOOKING = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01";
 
@@ -342,9 +310,7 @@ describe("tracked-wallet request contract", () => {
   });
 
   it("a manually supplied wallet address is forwarded identically to a tracked-looking address", async () => {
-    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(
-      MOCK_DASHBOARD,
-    );
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
 
     const MANUAL_ADDRESS = "0x2222222222222222222222222222222222222222";
 

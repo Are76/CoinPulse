@@ -1,12 +1,5 @@
-import type {
-  AverageCostPnlResult,
-  CalculateAverageCostPnlArgs,
-  PnLWarning,
-} from "@/services/pnl/types";
-import type {
-  PersistedPriceObservation,
-  ResolveBestPriceResult,
-} from "@/services/pricing/types";
+import type { AverageCostPnlResult, CalculateAverageCostPnlArgs, PnLWarning } from "@/services/pnl/types";
+import type { PersistedPriceObservation, ResolveBestPriceResult } from "@/services/pricing/types";
 
 export type DashboardStatus =
   | "available"
@@ -18,10 +11,7 @@ export type DashboardStatus =
   | "partial";
 
 export type DashboardPricingDto = {
-  status: Exclude<
-    DashboardStatus,
-    "partial" | "unsupported" | "incomplete_basis"
-  >;
+  status: Exclude<DashboardStatus, "partial" | "unsupported" | "incomplete_basis">;
   sourceType: PersistedPriceObservation["sourceType"] | null;
   sourceId: string | null;
   confidence: string | null;
@@ -63,10 +53,7 @@ export type DashboardNegativeBalanceDto = {
   decimals: number | null;
 };
 
-export type DashboardMaterializationFreshnessStatus =
-  | "fresh"
-  | "stale"
-  | "unknown";
+export type DashboardMaterializationFreshnessStatus = "fresh" | "stale" | "unknown";
 
 export type DashboardMaterializationFreshnessDto = {
   status: DashboardMaterializationFreshnessStatus;
@@ -102,11 +89,7 @@ export type DashboardPnlCoverageReason =
   | "missing_disposal_events"
   | "missing_native_price_history";
 
-export type DashboardPnlCoverageSection =
-  | "summary"
-  | "tokens"
-  | "lpPositions"
-  | "stakePositions";
+export type DashboardPnlCoverageSection = "summary" | "tokens" | "lpPositions" | "stakePositions";
 
 export type DashboardPnlCoverageDto = {
   status: DashboardPnlCoverageStatus;
@@ -319,11 +302,7 @@ export type DashboardDbClient = {
     >;
   };
   priceObservation?: {
-    findMany: NonNullable<
-      Parameters<
-        typeof import("@/services/pricing/price-resolver").resolveBestPriceFromStore
-      >[1]["db"]
-    >["priceObservation"]["findMany"];
+    findMany: NonNullable<Parameters<typeof import("@/services/pricing/price-resolver").resolveBestPriceFromStore>[1]["db"]>["priceObservation"]["findMany"];
   };
 };
 
