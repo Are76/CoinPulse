@@ -338,6 +338,12 @@ export function MaterializationFreshnessSection({
             Stale after: {freshness.staleAfterSeconds} seconds
           </span>
         ) : null}
+        <Link
+          href="/debug/prices/status"
+          className="text-xs font-medium text-[color:var(--color-accent-2)] hover:underline"
+        >
+          View pricing source status
+        </Link>
       </div>
     </SurfaceCard>
   );
