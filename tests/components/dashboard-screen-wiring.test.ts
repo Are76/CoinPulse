@@ -287,4 +287,81 @@ describe("dashboard-screen wiring", () => {
     const source = readScreen();
     expect(source).toContain("ledgerCoverage={dashboardQuery.data.ledgerCoverage}");
   });
+
+  it("presenters exports PnlCoverageSection", () => {
+    const source = readPresenters();
+    expect(source).toContain("export function PnlCoverageSection");
+  });
+
+  it("PnlCoverageSection consumes dashboard pnlCoverage fields only", () => {
+    const source = readPresenters();
+    const sectionStart = source.indexOf("export function PnlCoverageSection");
+    expect(sectionStart).not.toBe(-1);
+    const nextExportIdx = source.indexOf("\nexport function ", sectionStart + 1);
+    const sectionSource =
+      nextExportIdx === -1 ? source.slice(sectionStart) : source.slice(sectionStart, nextExportIdx);
+
+    expect(sectionSource).toContain("pnlCoverage.status");
+    expect(sectionSource).toContain("pnlCoverage.reasons");
+    expect(sectionSource).toContain("pnlCoverage.affectedSections");
+    expect(sectionSource).toContain("pnlCoverage.pricedPositionsCount");
+    expect(sectionSource).toContain("pnlCoverage.unpricedPositionsCount");
+    expect(sectionSource).toContain("pnlCoverage.unsupportedPositionsCount");
+    expect(sectionSource).toContain("pnlCoverage.incompleteBasisPositionsCount");
+    expect(sectionSource).toContain("pnlCoverage.stalePricePositionsCount");
+    expect(sectionSource).toContain("pnlCoverage.sourceDisabledPositionsCount");
+    expect(sectionSource).toContain("pnlCoverage.asOf");
+    expect(sectionSource).toContain("TimestampLabel");
+
+    expect(sectionSource).not.toContain("tokenPositions");
+    expect(sectionSource).not.toContain("lpPositions");
+    expect(sectionSource).not.toContain("stakePositions");
+  });
+
+  it("PnlCoverageSection maps backend status values to display labels", () => {
+    const source = readPresenters();
+    expect(source).toContain('case "valued"');
+    expect(source).toContain('label: "Valued"');
+    expect(source).toContain('case "partial"');
+    expect(source).toContain('label: "Partial"');
+    expect(source).toContain('case "unavailable"');
+    expect(source).toContain('label: "Unavailable"');
+    expect(source).toContain('case "unsupported"');
+    expect(source).toContain('label: "Unsupported"');
+    expect(source).toContain('case "unknown"');
+    expect(source).toContain('label: "Unknown"');
+  });
+
+  it("screen imports PnlCoverageSection from dashboard-presenters", () => {
+    const source = readScreen();
+    expect(source).toContain("PnlCoverageSection");
+  });
+
+  it("screen passes dashboard.pnlCoverage to PnlCoverageSection", () => {
+    const source = readScreen();
+    expect(source).toContain("pnlCoverage={dashboardQuery.data.pnlCoverage}");
+  });
+
+  it("dashboard PnL coverage rendering avoids backend pricing and PnL service imports", () => {
+    const source = `${readScreen()}\n${readPresenters()}`;
+    expect(source).not.toContain("@/services/pricing");
+    expect(source).not.toContain("@/services/pnl");
+    expect(source).not.toContain('"@/services/pricing');
+    expect(source).not.toContain('"@/services/pnl');
+  });
+
+  it("dashboard PnL coverage rendering does not compute coverage from position arrays", () => {
+    const source = readPresenters();
+    const sectionStart = source.indexOf("export function PnlCoverageSection");
+    expect(sectionStart).not.toBe(-1);
+    const nextExportIdx = source.indexOf("\nexport function ", sectionStart + 1);
+    const sectionSource =
+      nextExportIdx === -1 ? source.slice(sectionStart) : source.slice(sectionStart, nextExportIdx);
+    expect(sectionSource).not.toContain("tokenPositions");
+    expect(sectionSource).not.toContain("lpPositions");
+    expect(sectionSource).not.toContain("stakePositions");
+    expect(sectionSource).not.toContain("reduce");
+    expect(sectionSource).not.toContain("filter");
+  });
+
 });
