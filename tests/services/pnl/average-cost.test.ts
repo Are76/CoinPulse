@@ -136,6 +136,68 @@ describe("calculateAverageCostPnl", () => {
   });
 
 
+  it("keeps cost basis asset-specific for same-symbol token variants", async () => {
+    const otherSameSymbolAsset = "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    const result = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry({ quantity: "10" }),
+        createEntry({
+          id: "buy-target-pls",
+          assetId: PLS_ASSET,
+          entryType: "SWAP_OUT",
+          direction: "OUT",
+          quantity: "100",
+        }),
+        createEntry({
+          id: "buy-other-same-symbol",
+          actionGroupId: "group-other",
+          txHash: "0xtx-other",
+          sourceLogKey: "log:0xtx-other:0",
+          assetId: otherSameSymbolAsset,
+          quantity: "50",
+          occurredAt: new Date("2026-05-08T12:30:00.000Z"),
+        }),
+        createEntry({
+          id: "buy-other-pls",
+          actionGroupId: "group-other",
+          txHash: "0xtx-other",
+          sourceLogKey: "log:0xtx-other:1",
+          assetId: PLS_ASSET,
+          entryType: "SWAP_OUT",
+          direction: "OUT",
+          quantity: "1",
+          occurredAt: new Date("2026-05-08T12:30:00.000Z"),
+        }),
+      ],
+      resolvePrice: createResolver([
+        createObservation({
+          id: "pls-buy-target",
+          observedAt: new Date("2026-05-08T12:00:00.000Z"),
+          price: "1",
+        }),
+        createObservation({
+          id: "target-mark",
+          assetId: TARGET_ASSET,
+          assetAddress: TARGET_ADDRESS,
+          observedAt: new Date("2026-05-08T14:00:00.000Z"),
+          price: "15",
+        }),
+      ]),
+    });
+
+    expect(result.assetId).toBe(TARGET_ASSET);
+    expect(result.holdingsQuantity).toBe("10");
+    expect(result.averageCost).toBe("10");
+    expect(result.realizedPnl).toBe("0");
+    expect(result.unrealizedPnl).toBe("50");
+  });
+
   it("keeps realized PnL at zero until a disposal event exists", async () => {
     const result = await calculateAverageCostPnl({
       walletId: WALLET_ID,
