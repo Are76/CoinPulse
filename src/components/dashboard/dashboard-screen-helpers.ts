@@ -6,6 +6,28 @@ export type SubmittedParams = {
   chainId: number;
 };
 
+type NormalizedWalletSelection = {
+  walletAddress: string;
+  chainId: number;
+};
+
+export function normalizeWalletSelectionInput(args: {
+  walletAddress: string;
+  chainId: string | number;
+}): NormalizedWalletSelection | null {
+  const walletAddress = args.walletAddress.trim();
+  const chainId = Number(args.chainId);
+
+  if (walletAddress.length === 0 || !Number.isInteger(chainId) || chainId <= 0) {
+    return null;
+  }
+
+  return {
+    walletAddress: walletAddress.toLowerCase(),
+    chainId,
+  };
+}
+
 /**
  * Returns a UI-ready string describing the source of the submitted wallet.
  * Returns null when no params have been submitted yet (before first submit).
@@ -20,7 +42,7 @@ export function resolveSubmittedWalletSource(
   const label = findTrackedWalletLabel(
     wallets,
     submittedParams.walletAddress,
-    String(submittedParams.chainId),
+    submittedParams.chainId,
   );
   if (label !== null) {
     return `Submitted from tracked wallet: ${label}`;
@@ -30,21 +52,36 @@ export function resolveSubmittedWalletSource(
 
 /**
  * Returns the TrackedWalletDto whose address and chainId match the given
- * values, or null if no match is found. Address comparison is case-insensitive.
- * chainId is compared as strings so numeric and string equivalents both match.
+ * values, or null if no match is found. Address matching trims input and is
+ * case-insensitive. chainId is normalized through Number(...) so equivalent
+ * form values such as "0369" and 369 match.
  */
 export function findTrackedWalletMatch(
   wallets: TrackedWalletDto[] | undefined,
   walletAddress: string,
-  chainId: string,
+  chainId: string | number,
 ): TrackedWalletDto | null {
-  if (!wallets || !walletAddress || !chainId) return null;
+  if (!wallets) return null;
+
+  const normalizedSelection = normalizeWalletSelectionInput({
+    walletAddress,
+    chainId,
+  });
+  if (normalizedSelection === null) return null;
+
   return (
-    wallets.find(
-      (w) =>
-        w.address.toLowerCase() === walletAddress.toLowerCase() &&
-        String(w.chainId) === chainId,
-    ) ?? null
+    wallets.find((wallet) => {
+      const normalizedWallet = normalizeWalletSelectionInput({
+        walletAddress: wallet.address,
+        chainId: wallet.chainId,
+      });
+
+      return (
+        normalizedWallet !== null &&
+        normalizedWallet.walletAddress === normalizedSelection.walletAddress &&
+        normalizedWallet.chainId === normalizedSelection.chainId
+      );
+    }) ?? null
   );
 }
 
@@ -56,7 +93,7 @@ export function findTrackedWalletMatch(
 export function findTrackedWalletLabel(
   wallets: TrackedWalletDto[] | undefined,
   walletAddress: string,
-  chainId: string,
+  chainId: string | number,
 ): string | null {
   const match = findTrackedWalletMatch(wallets, walletAddress, chainId);
   return match !== null ? (match.label ?? "Unlabeled") : null;
