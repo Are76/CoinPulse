@@ -17,6 +17,7 @@ const LP_ASSET = "chain:369:erc20:0xlp";
 const LP_ADDRESS = "0xlp";
 const STAKE_ASSET = "chain:369:erc20:0xphex";
 const STAKE_ADDRESS = "0xphex";
+const NATIVE_ASSET = "chain:369:native:PLS";
 
 type TokenBalanceRecord = {
   walletId: string;
@@ -582,6 +583,87 @@ describe("assemblePortfolioDashboard", () => {
     expect(pnlAssets).toEqual([sameSymbolAlpha, sameSymbolBeta]);
   });
 
+  it("keeps native and ERC20 display-equivalent assets separate by explicit asset identity", async () => {
+    const wrappedPlsAsset = "chain:369:erc20:0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const resolvedPriceAssets: string[] = [];
+
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: NATIVE_ASSET,
+            assetAddress: null,
+            balanceQuantity: "2",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: wrappedPlsAsset,
+            assetAddress: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            balanceQuantity: "4",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async (args) => {
+        resolvedPriceAssets.push(args.assetId);
+        return createResolvedPrice({
+          selected: createPriceObservation({
+            id: args.assetId === NATIVE_ASSET ? "native-pls-price" : "erc20-pls-price",
+            assetId: args.assetId,
+            assetAddress:
+              args.assetId === NATIVE_ASSET
+                ? null
+                : "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            price: args.assetId === NATIVE_ASSET ? "1" : "3",
+            sourceId:
+              args.assetId === NATIVE_ASSET
+                ? "native:oracle:pls"
+                : "pulsex:pair:wrapped-pls",
+          }),
+        });
+      },
+      calculatePnl: async (args) =>
+        createPnlResult({
+          assetId: args.assetId,
+          holdingsQuantity: args.assetId === NATIVE_ASSET ? "2" : "4",
+          markPrice: args.assetId === NATIVE_ASSET ? "1" : "3",
+          unrealizedPnl: args.assetId === NATIVE_ASSET ? "1" : "8",
+        }),
+    });
+
+    expect(result.tokenPositions).toEqual([
+      expect.objectContaining({
+        assetId: NATIVE_ASSET,
+        assetAddress: null,
+        decimals: 18,
+        valuation: expect.objectContaining({ valueQuote: "2" }),
+        pricing: expect.objectContaining({ sourceId: "native:oracle:pls" }),
+      }),
+      expect.objectContaining({
+        assetId: wrappedPlsAsset,
+        assetAddress: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        decimals: 18,
+        valuation: expect.objectContaining({ valueQuote: "12" }),
+        pricing: expect.objectContaining({ sourceId: "pulsex:pair:wrapped-pls" }),
+      }),
+    ]);
+    expect(result.summary.totalValueQuote).toBe("14");
+    expect(resolvedPriceAssets).toEqual([NATIVE_ASSET, wrappedPlsAsset]);
+  });
+
   it("returns an explicit unpriced token position status", async () => {
     const result = await assemblePortfolioDashboard({
       wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
@@ -614,6 +696,8 @@ describe("assemblePortfolioDashboard", () => {
     expect(result.summary.totalValueQuote).toBeNull();
     expect(result.summary.valuationStatus).toBe("unavailable");
     expect(result.tokenPositions[0]).toMatchObject({
+      assetId: TOKEN_ASSET,
+      decimals: null,
       pricing: { status: "unavailable" },
       valuation: { status: "unavailable", valueQuote: null },
       pnl: { status: "unavailable" },
