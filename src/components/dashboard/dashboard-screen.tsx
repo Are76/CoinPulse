@@ -46,6 +46,7 @@ export function DashboardScreen() {
   const [walletAddress, setWalletAddress] = useState("");
   const [chainId, setChainId] = useState(DEFAULT_CHAIN_ID);
   const [submittedParams, setSubmittedParams] = useState<SubmittedParams | null>(null);
+  const [submittedWalletSource, setSubmittedWalletSource] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const trackedWalletsQuery = useTrackedWalletsQuery();
@@ -74,15 +75,14 @@ export function DashboardScreen() {
   });
 
   const trackedWallets = trackedWalletsQuery.data?.wallets;
-  const selectedTrackedWalletLabel = findTrackedWalletLabel(
-    trackedWallets,
-    walletAddress,
-    chainId,
-  );
-  const submittedWalletSource = resolveSubmittedWalletSource(
-    submittedParams,
-    trackedWallets,
-  );
+  const hasHealthyTrackedWallets = trackedWalletsQuery.isSuccess;
+  const selectedTrackedWalletLabel = hasHealthyTrackedWallets
+    ? findTrackedWalletLabel(
+        trackedWallets,
+        walletAddress,
+        chainId,
+      )
+    : null;
 
   function handleSelectTrackedWallet(address: string, selectedChainId: string) {
     setWalletAddress(address);
@@ -98,6 +98,7 @@ export function DashboardScreen() {
     if (submission.validationError !== null) {
       setValidationError(submission.validationError);
       setSubmittedParams(null);
+      setSubmittedWalletSource(null);
       return;
     }
 
@@ -116,6 +117,12 @@ export function DashboardScreen() {
     });
 
     setSubmittedParams(params);
+    setSubmittedWalletSource(
+      resolveSubmittedWalletSource(
+        params,
+        hasHealthyTrackedWallets ? trackedWallets : undefined,
+      ),
+    );
   }
 
   const health = healthQuery.data ?? null;

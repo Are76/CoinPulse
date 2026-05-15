@@ -150,11 +150,13 @@ export function TrackedWalletSelector(args: {
   selectedWalletAddress?: string;
   selectedChainId?: string;
 }) {
-  const matchedWallet = findTrackedWalletMatch(
-    args.wallets,
-    args.selectedWalletAddress ?? "",
-    args.selectedChainId ?? "",
-  );
+  const matchedWallet = !args.isLoading && !args.isError
+    ? findTrackedWalletMatch(
+        args.wallets,
+        args.selectedWalletAddress ?? "",
+        args.selectedChainId ?? "",
+      )
+    : null;
 
   return (
     <SectionCard
