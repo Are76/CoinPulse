@@ -85,11 +85,11 @@ describe("resolveTokenMetadata token identity contracts", () => {
     const metadataByAddress = new Map<string, { decimals: number; symbol: string; name: string }>([
       [
         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        { decimals: 6, symbol: "SAME", name: "Same Symbol Alpha" },
+        { decimals: 6, symbol: "SAME", name: "Shared Metadata Name" },
       ],
       [
         "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        { decimals: 18, symbol: "SAME", name: "Same Symbol Beta" },
+        { decimals: 18, symbol: "SAME", name: "Shared Metadata Name" },
       ],
     ]);
 
@@ -114,7 +114,7 @@ describe("resolveTokenMetadata token identity contracts", () => {
       }),
     };
 
-    return { db, publicClient, tokens };
+    return { db, publicClient, tokens, metadataSources };
   }
 
   it("keeps same-symbol tokens distinct by normalized contract address and chain", async () => {
@@ -163,7 +163,63 @@ describe("resolveTokenMetadata token identity contracts", () => {
       "SAME",
       "SAME",
     ]);
+    expect(Array.from(harness.tokens.values()).map((token) => token.name)).toEqual([
+      "Shared Metadata Name",
+      "Shared Metadata Name",
+      "Shared Metadata Name",
+    ]);
     expect(Array.from(harness.tokens.values()).map((token) => token.decimals)).toEqual([6, 18, 6]);
+  });
+
+  it("records RPC metadata provenance separately for same-symbol and same-name tokens", async () => {
+    const harness = createTokenIdentityHarness();
+
+    const alpha = await resolveTokenMetadata({
+      db: harness.db as never,
+      publicClient: harness.publicClient as never,
+      chainId: 369,
+      tokenAddress: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    });
+    const beta = await resolveTokenMetadata({
+      db: harness.db as never,
+      publicClient: harness.publicClient as never,
+      chainId: 369,
+      tokenAddress: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB",
+    });
+
+    expect(harness.metadataSources).toEqual(
+      new Map([
+        [
+          `${alpha.tokenId}:RPC:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+          {
+            tokenId: alpha.tokenId,
+            sourceKind: "RPC",
+            sourceRef: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            decimals: 6,
+            symbol: "SAME",
+            name: "Shared Metadata Name",
+          },
+        ],
+        [
+          `${beta.tokenId}:RPC:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`,
+          {
+            tokenId: beta.tokenId,
+            sourceKind: "RPC",
+            sourceRef: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            decimals: 18,
+            symbol: "SAME",
+            name: "Shared Metadata Name",
+          },
+        ],
+      ]),
+    );
+    expect(
+      new Set(
+        Array.from(harness.metadataSources.values()).map(
+          (source) => (source as { tokenId: string }).tokenId,
+        ),
+      ),
+    ).toEqual(new Set([alpha.tokenId, beta.tokenId]));
   });
 
   it("returns existing normalized-address metadata without re-inferring decimals from symbol", async () => {

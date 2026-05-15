@@ -145,6 +145,48 @@ describe("resolveBestPriceObservation", () => {
     expect(result.rejected).toEqual([]);
   });
 
+  it("keeps pricing provenance on the requested contract when route metadata has matching display strings", () => {
+    const sameNameAlpha = "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const sameNameBeta = "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    const result = resolveBestPriceObservation({
+      chainId: CHAIN_ID,
+      assetId: sameNameAlpha,
+      quoteAsset: QUOTE_ASSET,
+      observedAt: new Date("2026-05-08T12:01:00.000Z"),
+      observations: [
+        createObservation({
+          id: "beta-shared-display",
+          assetId: sameNameBeta,
+          assetAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          price: "99",
+          confidence: "0.99",
+          sourceId: "pulsex:pair:beta",
+          routeMetadata: { symbol: "SAME", name: "Shared Metadata Name" },
+        }),
+        createObservation({
+          id: "alpha-shared-display",
+          assetId: sameNameAlpha,
+          assetAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          price: "5",
+          confidence: "0.91",
+          sourceId: "pulsex:pair:alpha",
+          routeMetadata: { symbol: "SAME", name: "Shared Metadata Name" },
+        }),
+      ],
+    });
+
+    expect(result.selected).toMatchObject({
+      id: "alpha-shared-display",
+      assetId: sameNameAlpha,
+      assetAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      price: "5",
+      sourceId: "pulsex:pair:alpha",
+      routeMetadata: { symbol: "SAME", name: "Shared Metadata Name" },
+    });
+    expect(result.rejected).toEqual([]);
+  });
+
   it("treats pDAI as volatile rather than pegging it to one dollar", () => {
     const result = resolveBestPriceObservation({
       chainId: CHAIN_ID,
