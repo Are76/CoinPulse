@@ -500,6 +500,88 @@ describe("assemblePortfolioDashboard", () => {
     });
   });
 
+  it("preserves separate token rows, pricing, PnL, and decimals for same-symbol asset variants", async () => {
+    const sameSymbolAlpha = "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const sameSymbolBeta = "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const resolvedPriceAssets: string[] = [];
+    const pnlAssets: string[] = [];
+
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: sameSymbolAlpha,
+            assetAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            balanceQuantity: "3",
+            decimals: 6,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: sameSymbolBeta,
+            assetAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            balanceQuantity: "1",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async (args) => {
+        resolvedPriceAssets.push(args.assetId);
+        return createResolvedPrice({
+          selected: createPriceObservation({
+            id: args.assetId === sameSymbolAlpha ? "alpha-price" : "beta-price",
+            assetId: args.assetId,
+            assetAddress:
+              args.assetId === sameSymbolAlpha
+                ? "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                : "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            price: args.assetId === sameSymbolAlpha ? "5" : "2",
+            sourceId: args.assetId === sameSymbolAlpha ? "pulsex:pair:alpha" : "pulsex:pair:beta",
+            confidence: args.assetId === sameSymbolAlpha ? "0.91" : "0.89",
+          }),
+        });
+      },
+      calculatePnl: async (args) => {
+        pnlAssets.push(args.assetId);
+        return createPnlResult({
+          assetId: args.assetId,
+          holdingsQuantity: args.assetId === sameSymbolAlpha ? "3" : "1",
+          averageCost: args.assetId === sameSymbolAlpha ? "4" : "1.5",
+          unrealizedPnl: args.assetId === sameSymbolAlpha ? "3" : "0.5",
+          markPrice: args.assetId === sameSymbolAlpha ? "5" : "2",
+          totalAcquiredQuantity: args.assetId === sameSymbolAlpha ? "3" : "1",
+        });
+      },
+    });
+
+    expect(result.tokenPositions).toHaveLength(2);
+    expect(result.tokenPositions.map((position) => position.assetId)).toEqual([
+      sameSymbolAlpha,
+      sameSymbolBeta,
+    ]);
+    expect(result.tokenPositions.map((position) => position.decimals)).toEqual([6, 18]);
+    expect(result.tokenPositions.map((position) => position.valuation.valueQuote)).toEqual(["15", "2"]);
+    expect(result.tokenPositions.map((position) => position.pricing.sourceId)).toEqual([
+      "pulsex:pair:alpha",
+      "pulsex:pair:beta",
+    ]);
+    expect(result.tokenPositions.map((position) => position.pnl.unrealizedPnl)).toEqual(["3", "0.5"]);
+    expect(result.summary.totalValueQuote).toBe("17");
+    expect(resolvedPriceAssets).toEqual([sameSymbolAlpha, sameSymbolBeta]);
+    expect(pnlAssets).toEqual([sameSymbolAlpha, sameSymbolBeta]);
+  });
+
   it("returns an explicit unpriced token position status", async () => {
     const result = await assemblePortfolioDashboard({
       wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },

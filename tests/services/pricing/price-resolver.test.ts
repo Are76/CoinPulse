@@ -106,6 +106,45 @@ describe("resolveBestPriceObservation", () => {
     ]);
   });
 
+  it("resolves observations by chain and asset identifier instead of same-symbol assumptions", () => {
+    const sameSymbolOtherContract = "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    const result = resolveBestPriceObservation({
+      chainId: CHAIN_ID,
+      assetId: PHEX_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      observedAt: new Date("2026-05-08T12:01:00.000Z"),
+      observations: [
+        createObservation({
+          id: "same-symbol-other-contract",
+          assetId: sameSymbolOtherContract,
+          assetAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          price: "99",
+          confidence: "0.99",
+        }),
+        createObservation({
+          id: "same-contract-other-chain",
+          chainId: 943,
+          assetId: "chain:943:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+          price: "77",
+          confidence: "0.99",
+        }),
+        createObservation({
+          id: "target-asset",
+          assetId: PHEX_ASSET,
+          price: "0.021",
+          confidence: "0.91",
+        }),
+      ],
+    });
+
+    expect(result.selected?.id).toBe("target-asset");
+    expect(result.selected?.assetId).toBe(PHEX_ASSET);
+    expect(result.selected?.chainId).toBe(CHAIN_ID);
+    expect(result.selected?.price).toBe("0.021");
+    expect(result.rejected).toEqual([]);
+  });
+
   it("treats pDAI as volatile rather than pegging it to one dollar", () => {
     const result = resolveBestPriceObservation({
       chainId: CHAIN_ID,

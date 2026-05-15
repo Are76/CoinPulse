@@ -287,6 +287,114 @@ describe("GET /api/portfolio/dashboard route contract", () => {
     });
   });
 
+  it("preserves separate token rows for same-symbol different-contract assets", async () => {
+    const sameSymbolAlpha = "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const sameSymbolBeta = "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: sameSymbolAlpha,
+            assetAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            balanceQuantity: "3",
+            decimals: 6,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: sameSymbolBeta,
+            assetAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            balanceQuantity: "1",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: null,
+            sourceLedgerToBlock: null,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 0,
+            warningDetails: [],
+            errorMessage: null,
+          },
+        ],
+        priceObservations: [
+          createPriceObservation({
+            id: "alpha-price",
+            assetId: sameSymbolAlpha,
+            assetAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            price: "5",
+            sourceId: "pulsex:pair:alpha",
+          }),
+          createPriceObservation({
+            id: "beta-price",
+            assetId: sameSymbolBeta,
+            assetAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            price: "2",
+            sourceId: "pulsex:pair:beta",
+          }),
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+
+    expect(body.data.tokenPositions).toEqual([
+      expect.objectContaining({
+        assetId: sameSymbolAlpha,
+        assetAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        balanceQuantity: "3",
+        decimals: 6,
+        pricing: expect.objectContaining({ sourceId: "pulsex:pair:alpha" }),
+        valuation: expect.objectContaining({ valueQuote: "15" }),
+      }),
+      expect.objectContaining({
+        assetId: sameSymbolBeta,
+        assetAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        balanceQuantity: "1",
+        decimals: 18,
+        pricing: expect.objectContaining({ sourceId: "pulsex:pair:beta" }),
+        valuation: expect.objectContaining({ valueQuote: "2" }),
+      }),
+    ]);
+    expect(body.data.summary).toMatchObject({
+      totalValueQuote: "17",
+      valuationCoverage: { totalPositions: 2, valuedPositions: 2, unvaluedPositions: 0 },
+    });
+  });
+
   it("preserves backend-computed PnL fields and pricing provenance in the response envelope", async () => {
     getDb.mockReturnValue(
       createMemoryDb({
