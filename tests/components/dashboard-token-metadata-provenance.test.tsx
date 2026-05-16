@@ -114,6 +114,7 @@ describe("TokenPositionsTable metadata provenance", () => {
     expect(screen.getByText("Metadata source unknown")).toBeInTheDocument();
     expect(screen.queryByText("Observed metadata")).not.toBeInTheDocument();
     expect(screen.queryByText("Metadata confidence: high")).not.toBeInTheDocument();
+    expect(screen.getAllByText("available")).toHaveLength(2);
   });
 
   it("continues to render token identity from asset fields rather than metadata provenance", () => {

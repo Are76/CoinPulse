@@ -497,6 +497,7 @@ export function TokenPositionsTable({
             <td>
               <div className="flex flex-col gap-2">
                 <span className="cp-data">{position.assetAddress ?? position.assetId}</span>
+                <StatusBadge status={position.pricing.status} />
                 <MetadataProvenanceDetails provenance={position.metadataProvenance} />
               </div>
             </td>
