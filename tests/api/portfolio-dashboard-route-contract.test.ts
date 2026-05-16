@@ -44,6 +44,13 @@ type LedgerEntryRecord = {
   actionGroup: { actionType: string };
 };
 
+type TokenRecord = {
+  chainId: number;
+  assetId: string;
+  decimalsSource: string | null;
+  metadataSources?: Array<{ sourceKind: "SEED" | "RPC" | "MANUAL" | string; observedAt: Date | null }>;
+};
+
 type MaterializationStateRecord = {
   walletId: string;
   chainId: number;
@@ -90,12 +97,14 @@ function createMemoryDb(overrides?: {
   ledgerEntries?: LedgerEntryRecord[];
   materializationStates?: MaterializationStateRecord[];
   priceObservations?: PersistedPriceObservation[];
+  tokens?: TokenRecord[];
 }) {
   const wallets = overrides?.wallets ?? [];
   const tokenBalances = overrides?.tokenBalances ?? [];
   const ledgerEntries = overrides?.ledgerEntries ?? [];
   const materializationStates = overrides?.materializationStates ?? [];
   const priceObservations = overrides?.priceObservations ?? [];
+  const tokens = overrides?.tokens ?? [];
 
   return new Proxy(
     {
@@ -159,6 +168,13 @@ function createMemoryDb(overrides?: {
             void actionGroup;
             return row;
           });
+        },
+      },
+      token: {
+        async findMany(args: { where: { chainId: number; assetId: { in: string[] } } }) {
+          return tokens.filter(
+            (row) => row.chainId === args.where.chainId && args.where.assetId.in.includes(row.assetId),
+          );
         },
       },
       priceObservation: {
@@ -246,6 +262,14 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           },
         ],
         priceObservations: [createPriceObservation()],
+        tokens: [
+          {
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            decimalsSource: "RPC",
+            metadataSources: [{ sourceKind: "RPC", observedAt: new Date("2026-05-08T11:59:00.000Z") }],
+          },
+        ],
       }),
     );
 
@@ -268,6 +292,18 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           totalValueQuote: "10",
           valuationStatus: "available",
         },
+        tokenPositions: [
+          expect.objectContaining({
+            assetId: TOKEN_ASSET,
+            metadataProvenance: {
+              status: "observed",
+              source: "chain",
+              observedAt: "2026-05-08T11:59:00.000Z",
+              confidence: "medium",
+              conflictReason: null,
+            },
+          }),
+        ],
         materialization: {
           status: "COMPLETED",
           completedSuccessfully: true,
@@ -377,6 +413,7 @@ describe("GET /api/portfolio/dashboard route contract", () => {
         assetAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         balanceQuantity: "3",
         decimals: 6,
+        metadataProvenance: expect.objectContaining({ status: "unknown" }),
         pricing: expect.objectContaining({ sourceId: "pulsex:pair:alpha" }),
         valuation: expect.objectContaining({ valueQuote: "15" }),
       }),
@@ -385,10 +422,13 @@ describe("GET /api/portfolio/dashboard route contract", () => {
         assetAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         balanceQuantity: "1",
         decimals: 18,
+        metadataProvenance: expect.objectContaining({ status: "unknown" }),
         pricing: expect.objectContaining({ sourceId: "pulsex:pair:beta" }),
         valuation: expect.objectContaining({ valueQuote: "2" }),
       }),
     ]);
+    expect(body.data.tokenPositions[0]).not.toHaveProperty("tokenOrigin");
+    expect(body.data.tokenPositions[1]).not.toHaveProperty("tokenOrigin");
     expect(body.data.summary).toMatchObject({
       totalValueQuote: "17",
       valuationCoverage: { totalPositions: 2, valuedPositions: 2, unvaluedPositions: 0 },
@@ -907,6 +947,17 @@ describe("GET /api/portfolio/dashboard route contract", () => {
         summary: {
           totalValueQuote: "10",
         },
+        tokenPositions: [
+          expect.objectContaining({
+            metadataProvenance: {
+              status: "unknown",
+              source: "unknown",
+              observedAt: null,
+              confidence: "unknown",
+              conflictReason: null,
+            },
+          }),
+        ],
         materialization: {
           status: null,
           completedSuccessfully: null,

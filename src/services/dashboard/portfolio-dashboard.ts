@@ -13,6 +13,8 @@ import type {
   DashboardMaterializationDto,
   DashboardMaterializationFreshnessDto,
   DashboardMaterializationWarningDto,
+  DashboardMetadataProvenanceConfidence,
+  DashboardMetadataProvenanceSource,
   DashboardPnlCalculator,
   DashboardPnlCoverageDto,
   DashboardPnlCoverageReason,
@@ -21,6 +23,7 @@ import type {
   DashboardPriceResolver,
   DashboardPricingDto,
   DashboardStatus,
+  DashboardTokenMetadataProvenanceDto,
   PortfolioDashboardDto,
 } from "@/services/dashboard/types";
 
@@ -110,6 +113,22 @@ export async function assemblePortfolioDashboard(args: {
     }),
   ]);
 
+  const tokenMetadataRows = tokenBalances.length === 0 || !db.token
+    ? []
+    : await db.token.findMany({
+        where: { chainId: args.wallet.chainId, assetId: { in: tokenBalances.map((row) => row.assetId) } },
+        select: {
+          assetId: true,
+          decimalsSource: true,
+          metadataSources: {
+            select: { sourceKind: true, observedAt: true },
+            orderBy: [{ observedAt: "desc" }],
+            take: 1,
+          },
+        },
+      });
+  const tokenMetadataByAssetId = new Map(tokenMetadataRows.map((row) => [row.assetId, row]));
+
   const pnlEntries = ledgerEntries.map<PnLEntry>((entry) => ({
     id: entry.id,
     chainId: entry.chainId,
@@ -179,6 +198,7 @@ export async function assemblePortfolioDashboard(args: {
         assetAddress: row.assetAddress,
         balanceQuantity: toStringValue(row.balanceQuantity),
         decimals: row.decimals,
+        metadataProvenance: toTokenMetadataProvenanceDto(tokenMetadataByAssetId.get(row.assetId) ?? null),
         updatedFromBlock: bigintToString(row.updatedFromBlock),
         updatedToBlock: bigintToString(row.updatedToBlock),
         pricing,
@@ -270,6 +290,76 @@ export async function assemblePortfolioDashboard(args: {
     lpPositions: lpDtos,
     stakePositions: stakeDtos,
   };
+}
+
+function toTokenMetadataProvenanceDto(
+  token: {
+    decimalsSource: string | null;
+    metadataSources?: Array<{ sourceKind: string; observedAt: Date | null }>;
+  } | null,
+): DashboardTokenMetadataProvenanceDto {
+  if (!token) {
+    return UNKNOWN_METADATA_PROVENANCE;
+  }
+
+  const latestSource = token.metadataSources?.[0] ?? null;
+  const sourceEvidence = latestSource?.sourceKind ?? token.decimalsSource ?? null;
+  if (!sourceEvidence) {
+    return UNKNOWN_METADATA_PROVENANCE;
+  }
+
+  const source = mapTokenMetadataSource(sourceEvidence);
+  if (source === "unknown") {
+    return UNKNOWN_METADATA_PROVENANCE;
+  }
+
+  return {
+    status: "observed",
+    source,
+    observedAt: latestSource?.observedAt?.toISOString() ?? null,
+    confidence: mapTokenMetadataConfidence(sourceEvidence),
+    conflictReason: null,
+  };
+}
+
+const UNKNOWN_METADATA_PROVENANCE: DashboardTokenMetadataProvenanceDto = {
+  status: "unknown",
+  source: "unknown",
+  observedAt: null,
+  confidence: "unknown",
+  conflictReason: null,
+};
+
+function mapTokenMetadataSource(sourceEvidence: string): DashboardMetadataProvenanceSource {
+  const normalized = sourceEvidence.toLowerCase();
+
+  if (normalized === "rpc") {
+    return "chain";
+  }
+  if (normalized === "manual" || normalized.startsWith("manual")) {
+    return "manual";
+  }
+  if (normalized === "seed" || normalized.startsWith("seed:")) {
+    return "derived";
+  }
+
+  return "unknown";
+}
+
+function mapTokenMetadataConfidence(sourceEvidence: string): DashboardMetadataProvenanceConfidence {
+  const normalized = sourceEvidence.toLowerCase();
+
+  if (normalized === "rpc") {
+    return "medium";
+  }
+  if (normalized === "manual" || normalized.startsWith("manual")) {
+    return "medium";
+  }
+  if (normalized === "seed" || normalized.startsWith("seed:")) {
+    return "low";
+  }
+
+  return "unknown";
 }
 
 function buildInitialPnlCoverage(args: {

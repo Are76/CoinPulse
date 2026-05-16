@@ -92,6 +92,38 @@ describe("dashboard client", () => {
     );
   });
 
+  it("passes dashboard token metadata provenance through without frontend inference", async () => {
+    const metadataProvenance = {
+      status: "observed",
+      source: "chain",
+      observedAt: "2026-05-08T11:59:00.000Z",
+      confidence: "medium",
+      conflictReason: null,
+    };
+
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            schemaVersion: "v1",
+            pnlCoverage: EMPTY_PNL_COVERAGE,
+            tokenPositions: [{ metadataProvenance }],
+            lpPositions: [],
+            stakePositions: [],
+          },
+        }),
+        { status: 200 },
+      ),
+    ) as typeof fetch;
+
+    await expect(
+      fetchPortfolioDashboard({
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        chainId: 369,
+      }),
+    ).resolves.toMatchObject({ tokenPositions: [{ metadataProvenance }] });
+  });
+
   it("throws structured API errors", async () => {
     global.fetch = vi.fn().mockResolvedValue(
       new Response(

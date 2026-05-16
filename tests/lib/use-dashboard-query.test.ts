@@ -114,6 +114,64 @@ describe("useDashboardQuery", () => {
     expect(result.current.data).toEqual(MOCK_DASHBOARD);
   });
 
+  it("passes backend metadata provenance through the query result", async () => {
+    const metadataProvenance = {
+      status: "observed" as const,
+      source: "chain" as const,
+      observedAt: "2026-05-08T11:59:00.000Z",
+      confidence: "medium" as const,
+      conflictReason: null,
+    };
+    const dashboard = {
+      ...MOCK_DASHBOARD,
+      tokenPositions: [
+        {
+          assetId: "chain:369:erc20:0xtoken",
+          assetAddress: "0xtoken",
+          balanceQuantity: "5",
+          decimals: 18,
+          metadataProvenance,
+          updatedFromBlock: null,
+          updatedToBlock: null,
+          pricing: {
+            status: "unavailable" as const,
+            sourceType: null,
+            sourceId: null,
+            confidence: null,
+            observedAt: null,
+            staleAfterSeconds: null,
+            rejectedReasons: [],
+          },
+          valuation: { status: "unavailable" as const, valueQuote: null },
+          pnl: {
+            status: "unavailable" as const,
+            holdingsQuantity: null,
+            averageCost: null,
+            realizedPnl: null,
+            unrealizedPnl: null,
+            markPrice: null,
+            totalAcquiredQuantity: null,
+            totalDisposedQuantity: null,
+            warnings: [],
+          },
+        },
+      ],
+    };
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(dashboard);
+
+    const { result } = renderHook(
+      () =>
+        useDashboardQuery({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+        }),
+      { wrapper: makeWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.tokenPositions[0].metadataProvenance).toEqual(metadataProvenance);
+  });
+
   it("trims leading and trailing whitespace from walletAddress before fetching", async () => {
     vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
 
