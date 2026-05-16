@@ -191,9 +191,10 @@ describe("dashboard-screen wiring", () => {
     expect(source).not.toContain("GeckoTerminal");
     expect(source).not.toContain("Piteas");
     expect(source).not.toContain("Moralis");
-    expect(source).not.toContain("rpc");
-    expect(source).not.toContain("RPC");
     expect(source).not.toContain("PULSECHAIN_RPC_URL");
+    expect(source).not.toContain("createPublicClient");
+    expect(source).not.toContain("http(");
+    expect(source).not.toContain("fetch(");
   });
 
   it("screen imports MaterializationFreshnessSection from dashboard-presenters", () => {

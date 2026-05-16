@@ -32,6 +32,7 @@ import type {
   DashboardPnlDto,
   DashboardPricingDto,
   DashboardStakePositionDto,
+  DashboardTokenMetadataProvenanceDto,
   DashboardStatus,
   DashboardTokenPositionDto,
   PortfolioDashboardDto,
@@ -496,7 +497,7 @@ export function TokenPositionsTable({
             <td>
               <div className="flex flex-col gap-2">
                 <span className="cp-data">{position.assetAddress ?? position.assetId}</span>
-                <StatusBadge status={position.pricing.status} />
+                <MetadataProvenanceDetails provenance={position.metadataProvenance} />
               </div>
             </td>
             <td className="cp-data">{position.balanceQuantity}</td>
@@ -702,6 +703,67 @@ function CoverageCount({ label, value }: { label: string; value: number }) {
       <div className="mt-2 cp-data text-sm">{value}</div>
     </div>
   );
+}
+
+function MetadataProvenanceDetails({
+  provenance,
+}: {
+  provenance: DashboardTokenMetadataProvenanceDto;
+}) {
+  const statusLabel = formatMetadataProvenanceStatus(provenance.status);
+  const sourceLabel = formatMetadataProvenanceSource(provenance.source);
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap gap-2">
+        <LabelBadge label={statusLabel} tone="neutral" />
+        <LabelBadge label={sourceLabel} tone="neutral" />
+      </div>
+      <span className="text-xs text-[color:var(--color-text-muted)]">
+        Metadata confidence: {provenance.confidence}
+      </span>
+      <TimestampLabel
+        label="metadata observed"
+        value={provenance.observedAt}
+        fallback="Metadata observation unavailable"
+      />
+      {provenance.conflictReason != null ? (
+        <span className="text-xs text-[color:var(--color-text-muted)]">
+          Metadata conflict: {provenance.conflictReason}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function formatMetadataProvenanceStatus(
+  status: DashboardTokenMetadataProvenanceDto["status"],
+) {
+  switch (status) {
+    case "observed":
+      return "Observed metadata";
+    case "unknown":
+      return "Metadata status unknown";
+    case "verified":
+    case "conflicting":
+    case "stale":
+      return "Metadata status provided";
+  }
+}
+
+function formatMetadataProvenanceSource(
+  source: DashboardTokenMetadataProvenanceDto["source"],
+) {
+  switch (source) {
+    case "chain":
+      return "Metadata observed from RPC";
+    case "scanner":
+    case "manual":
+    case "derived":
+      return "Metadata source: " + source;
+    case "unknown":
+      return "Metadata source unknown";
+  }
 }
 
 function PricingDetails({ pricing }: { pricing: DashboardPricingDto }) {
