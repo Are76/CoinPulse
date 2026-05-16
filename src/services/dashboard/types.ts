@@ -10,6 +10,18 @@ export type DashboardStatus =
   | "incomplete_basis"
   | "partial";
 
+export type DashboardMetadataProvenanceStatus = "verified" | "observed" | "conflicting" | "stale" | "unknown";
+export type DashboardMetadataProvenanceSource = "chain" | "scanner" | "manual" | "derived" | "unknown";
+export type DashboardMetadataProvenanceConfidence = "high" | "medium" | "low" | "unknown";
+
+export type DashboardTokenMetadataProvenanceDto = {
+  status: DashboardMetadataProvenanceStatus;
+  source: DashboardMetadataProvenanceSource;
+  observedAt: string | null;
+  confidence: DashboardMetadataProvenanceConfidence;
+  conflictReason: string | null;
+};
+
 export type DashboardPricingDto = {
   status: Exclude<DashboardStatus, "partial" | "unsupported" | "incomplete_basis">;
   sourceType: PersistedPriceObservation["sourceType"] | null;
@@ -137,6 +149,7 @@ export type DashboardTokenPositionDto = {
   assetAddress: string | null;
   balanceQuantity: string;
   decimals: number | null;
+  metadataProvenance: DashboardTokenMetadataProvenanceDto;
   updatedFromBlock: string | null;
   updatedToBlock: string | null;
   pricing: DashboardPricingDto;
@@ -298,6 +311,26 @@ export type DashboardDbClient = {
         sourceLogKey: string | null;
         actionType?: string;
         actionGroup?: { actionType: string };
+      }>
+    >;
+  };
+  token?: {
+    findMany(args: {
+      where: { chainId: number; assetId: { in: string[] } };
+      select: {
+        assetId: true;
+        decimalsSource: true;
+        metadataSources: {
+          select: { sourceKind: true; observedAt: true };
+          orderBy: Array<{ observedAt: "desc" }>;
+          take: number;
+        };
+      };
+    }): Promise<
+      Array<{
+        assetId: string;
+        decimalsSource: string | null;
+        metadataSources?: Array<{ sourceKind: "SEED" | "RPC" | "MANUAL" | string; observedAt: Date | null }>;
       }>
     >;
   };

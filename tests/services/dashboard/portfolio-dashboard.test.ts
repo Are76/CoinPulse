@@ -79,6 +79,13 @@ type LedgerEntryRecord = {
   sourceLogKey: string | null;
 };
 
+type TokenRecord = {
+  chainId: number;
+  assetId: string;
+  decimalsSource: string | null;
+  metadataSources?: Array<{ sourceKind: "SEED" | "RPC" | "MANUAL" | string; observedAt: Date | null }>;
+};
+
 type MaterializationStateRecord = {
   walletId: string;
   chainId: number;
@@ -165,12 +172,14 @@ function createMemoryDb(overrides?: {
   stakePositions?: StakePositionRecord[];
   ledgerEntries?: LedgerEntryRecord[];
   materializationStates?: MaterializationStateRecord[];
+  tokens?: TokenRecord[];
 }) {
   const tokenBalances = overrides?.tokenBalances ?? [];
   const lpPositions = overrides?.lpPositions ?? [];
   const stakePositions = overrides?.stakePositions ?? [];
   const ledgerEntries = overrides?.ledgerEntries ?? [];
   const materializationStates = overrides?.materializationStates ?? [];
+  const tokens = overrides?.tokens ?? [];
 
   return new Proxy(
     {
@@ -203,6 +212,13 @@ function createMemoryDb(overrides?: {
           return ledgerEntries.filter(
             (row) =>
               row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+          );
+        },
+      },
+      token: {
+        async findMany(args: { where: { chainId: number; assetId: { in: string[] } } }) {
+          return tokens.filter(
+            (row) => row.chainId === args.where.chainId && args.where.assetId.in.includes(row.assetId),
           );
         },
       },
@@ -251,6 +267,14 @@ describe("assemblePortfolioDashboard", () => {
             updatedToBlock: null,
           },
         ],
+        tokens: [
+          {
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            decimalsSource: "RPC",
+            metadataSources: [{ sourceKind: "RPC", observedAt: new Date("2026-05-08T11:59:00.000Z") }],
+          },
+        ],
       }) as never,
       resolvePrice: async () => createResolvedPrice(),
       calculatePnl: async () => createPnlResult(),
@@ -267,6 +291,13 @@ describe("assemblePortfolioDashboard", () => {
       expect.objectContaining({
         assetId: TOKEN_ASSET,
         balanceQuantity: "5",
+        metadataProvenance: {
+          status: "observed",
+          source: "chain",
+          observedAt: "2026-05-08T11:59:00.000Z",
+          confidence: "medium",
+          conflictReason: null,
+        },
         valuation: expect.objectContaining({
           status: "available",
           valueQuote: "10",
@@ -325,6 +356,40 @@ describe("assemblePortfolioDashboard", () => {
         staleAfterSeconds: null,
       },
     });
+  });
+
+  it("uses unknown metadata provenance when persisted token metadata is missing", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    expect(result.tokenPositions[0].metadataProvenance).toEqual({
+      status: "unknown",
+      source: "unknown",
+      observedAt: null,
+      confidence: "unknown",
+      conflictReason: null,
+    });
+    expect(result.tokenPositions[0]).not.toHaveProperty("tokenOrigin");
   });
 
   it("includes persisted materialization metadata when provenance exists", async () => {
@@ -572,6 +637,8 @@ describe("assemblePortfolioDashboard", () => {
       sameSymbolBeta,
     ]);
     expect(result.tokenPositions.map((position) => position.decimals)).toEqual([6, 18]);
+    expect(result.tokenPositions.map((position) => position.metadataProvenance.status)).toEqual(["unknown", "unknown"]);
+    expect(result.tokenPositions[0]).not.toHaveProperty("tokenOrigin");
     expect(result.tokenPositions.map((position) => position.valuation.valueQuote)).toEqual(["15", "2"]);
     expect(result.tokenPositions.map((position) => position.pricing.sourceId)).toEqual([
       "pulsex:pair:alpha",
