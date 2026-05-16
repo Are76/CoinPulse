@@ -92,6 +92,75 @@ describe("dashboard client", () => {
     );
   });
 
+  it("passes dashboard token metadata provenance through without frontend inference", async () => {
+    const metadataProvenance = {
+      status: "observed",
+      source: "chain",
+      observedAt: "2026-05-08T11:59:00.000Z",
+      confidence: "medium",
+      conflictReason: null,
+    };
+
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: {
+            schemaVersion: "v1",
+            pnlCoverage: EMPTY_PNL_COVERAGE,
+            tokenPositions: [
+              {
+                assetId: "chain:369:erc20:0xtoken",
+                assetAddress: "0xtoken",
+                balanceQuantity: "5",
+                decimals: 18,
+                metadataProvenance,
+                updatedFromBlock: null,
+                updatedToBlock: null,
+                pricing: {
+                  status: "unavailable",
+                  sourceType: null,
+                  sourceId: null,
+                  confidence: null,
+                  observedAt: null,
+                  staleAfterSeconds: null,
+                  rejectedReasons: [],
+                },
+                valuation: { status: "unavailable", valueQuote: null },
+                pnl: {
+                  status: "unavailable",
+                  holdingsQuantity: null,
+                  averageCost: null,
+                  realizedPnl: null,
+                  unrealizedPnl: null,
+                  markPrice: null,
+                  totalAcquiredQuantity: null,
+                  totalDisposedQuantity: null,
+                  warnings: [],
+                },
+              },
+            ],
+            lpPositions: [],
+            stakePositions: [],
+          },
+        }),
+        { status: 200 },
+      ),
+    ) as typeof fetch;
+
+    await expect(
+      fetchPortfolioDashboard({
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        chainId: 369,
+      }),
+    ).resolves.toMatchObject({
+      tokenPositions: [
+        {
+          metadataProvenance,
+        },
+      ],
+    });
+  });
+
   it("throws structured API errors", async () => {
     global.fetch = vi.fn().mockResolvedValue(
       new Response(
@@ -122,12 +191,17 @@ describe("dashboard client", () => {
     global.fetch = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { status: "ok" } }), { status: 200 }),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { sourceFamilies: ["TRANSFERS"] } }), {
+        new Response(JSON.stringify({ data: { status: "ok" } }), {
           status: 200,
         }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ data: { sourceFamilies: ["TRANSFERS"] } }),
+          {
+            status: 200,
+          },
+        ),
       ) as typeof fetch;
 
     await expect(fetchDebugHealth()).resolves.toMatchObject({ status: "ok" });

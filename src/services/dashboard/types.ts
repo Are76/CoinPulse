@@ -1,5 +1,12 @@
-import type { AverageCostPnlResult, CalculateAverageCostPnlArgs, PnLWarning } from "@/services/pnl/types";
-import type { PersistedPriceObservation, ResolveBestPriceResult } from "@/services/pricing/types";
+import type {
+  AverageCostPnlResult,
+  CalculateAverageCostPnlArgs,
+  PnLWarning,
+} from "@/services/pnl/types";
+import type {
+  PersistedPriceObservation,
+  ResolveBestPriceResult,
+} from "@/services/pricing/types";
 
 export type DashboardStatus =
   | "available"
@@ -10,8 +17,39 @@ export type DashboardStatus =
   | "incomplete_basis"
   | "partial";
 
+export type DashboardMetadataProvenanceStatus =
+  | "verified"
+  | "observed"
+  | "conflicting"
+  | "stale"
+  | "unknown";
+
+export type DashboardMetadataProvenanceSource =
+  | "chain"
+  | "scanner"
+  | "manual"
+  | "derived"
+  | "unknown";
+
+export type DashboardMetadataProvenanceConfidence =
+  | "high"
+  | "medium"
+  | "low"
+  | "unknown";
+
+export type DashboardTokenMetadataProvenanceDto = {
+  status: DashboardMetadataProvenanceStatus;
+  source: DashboardMetadataProvenanceSource;
+  observedAt: string | null;
+  confidence: DashboardMetadataProvenanceConfidence;
+  conflictReason: string | null;
+};
+
 export type DashboardPricingDto = {
-  status: Exclude<DashboardStatus, "partial" | "unsupported" | "incomplete_basis">;
+  status: Exclude<
+    DashboardStatus,
+    "partial" | "unsupported" | "incomplete_basis"
+  >;
   sourceType: PersistedPriceObservation["sourceType"] | null;
   sourceId: string | null;
   confidence: string | null;
@@ -53,7 +91,10 @@ export type DashboardNegativeBalanceDto = {
   decimals: number | null;
 };
 
-export type DashboardMaterializationFreshnessStatus = "fresh" | "stale" | "unknown";
+export type DashboardMaterializationFreshnessStatus =
+  | "fresh"
+  | "stale"
+  | "unknown";
 
 export type DashboardMaterializationFreshnessDto = {
   status: DashboardMaterializationFreshnessStatus;
@@ -89,7 +130,11 @@ export type DashboardPnlCoverageReason =
   | "missing_disposal_events"
   | "missing_native_price_history";
 
-export type DashboardPnlCoverageSection = "summary" | "tokens" | "lpPositions" | "stakePositions";
+export type DashboardPnlCoverageSection =
+  | "summary"
+  | "tokens"
+  | "lpPositions"
+  | "stakePositions";
 
 export type DashboardPnlCoverageDto = {
   status: DashboardPnlCoverageStatus;
@@ -137,6 +182,7 @@ export type DashboardTokenPositionDto = {
   assetAddress: string | null;
   balanceQuantity: string;
   decimals: number | null;
+  metadataProvenance: DashboardTokenMetadataProvenanceDto;
   updatedFromBlock: string | null;
   updatedToBlock: string | null;
   pricing: DashboardPricingDto;
@@ -301,8 +347,38 @@ export type DashboardDbClient = {
       }>
     >;
   };
+  token: {
+    findMany(args: {
+      where: { chainId: number; assetId: { in: string[] } };
+      select: {
+        assetId: true;
+        decimalsSource: true;
+        metadataSources: {
+          select: {
+            sourceKind: true;
+            observedAt: true;
+          };
+          orderBy: Array<{ observedAt: "desc" }>;
+          take: number;
+        };
+      };
+    }): Promise<
+      Array<{
+        assetId: string;
+        decimalsSource: string | null;
+        metadataSources: Array<{
+          sourceKind: "SEED" | "RPC" | "MANUAL" | string;
+          observedAt: Date | null;
+        }>;
+      }>
+    >;
+  };
   priceObservation?: {
-    findMany: NonNullable<Parameters<typeof import("@/services/pricing/price-resolver").resolveBestPriceFromStore>[1]["db"]>["priceObservation"]["findMany"];
+    findMany: NonNullable<
+      Parameters<
+        typeof import("@/services/pricing/price-resolver").resolveBestPriceFromStore
+      >[1]["db"]
+    >["priceObservation"]["findMany"];
   };
 };
 

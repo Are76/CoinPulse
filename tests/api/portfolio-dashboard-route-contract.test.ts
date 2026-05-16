@@ -44,6 +44,16 @@ type LedgerEntryRecord = {
   actionGroup: { actionType: string };
 };
 
+type TokenRecord = {
+  chainId: number;
+  assetId: string;
+  decimalsSource: string | null;
+  metadataSources: Array<{
+    sourceKind: "SEED" | "RPC" | "MANUAL" | string;
+    observedAt: Date | null;
+  }>;
+};
+
 type MaterializationStateRecord = {
   walletId: string;
   chainId: number;
@@ -90,24 +100,29 @@ function createMemoryDb(overrides?: {
   ledgerEntries?: LedgerEntryRecord[];
   materializationStates?: MaterializationStateRecord[];
   priceObservations?: PersistedPriceObservation[];
+  tokens?: TokenRecord[];
 }) {
   const wallets = overrides?.wallets ?? [];
   const tokenBalances = overrides?.tokenBalances ?? [];
   const ledgerEntries = overrides?.ledgerEntries ?? [];
   const materializationStates = overrides?.materializationStates ?? [];
   const priceObservations = overrides?.priceObservations ?? [];
+  const tokens = overrides?.tokens ?? [];
 
   return new Proxy(
     {
       wallet: {
         async findUnique(args: {
-          where: { chainId_addressLower: { chainId: number; addressLower: string } };
+          where: {
+            chainId_addressLower: { chainId: number; addressLower: string };
+          };
         }) {
           return (
             wallets.find(
               (row) =>
                 row.chainId === args.where.chainId_addressLower.chainId &&
-                row.addressLower === args.where.chainId_addressLower.addressLower,
+                row.addressLower ===
+                  args.where.chainId_addressLower.addressLower,
             ) ?? null
           );
         },
@@ -115,7 +130,9 @@ function createMemoryDb(overrides?: {
       portfolioTokenBalance: {
         async findMany(args: { where: { walletId: string; chainId: number } }) {
           return tokenBalances.filter(
-            (row) => row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+            (row) =>
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
           );
         },
       },
@@ -127,6 +144,17 @@ function createMemoryDb(overrides?: {
       portfolioStakePosition: {
         async findMany() {
           return [];
+        },
+      },
+      token: {
+        async findMany(args: {
+          where: { chainId: number; assetId: { in: string[] } };
+        }) {
+          return tokens.filter(
+            (row) =>
+              row.chainId === args.where.chainId &&
+              args.where.assetId.in.includes(row.assetId),
+          );
         },
       },
       portfolioMaterializationState: {
@@ -148,7 +176,9 @@ function createMemoryDb(overrides?: {
           include?: { actionGroup: { select: { actionType: true } } };
         }) {
           const rows = ledgerEntries.filter(
-            (row) => row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+            (row) =>
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
           );
 
           if (args.include?.actionGroup.select.actionType) {
@@ -174,7 +204,8 @@ function createMemoryDb(overrides?: {
             return (
               (where.chainId === undefined || row.chainId === where.chainId) &&
               (where.assetId === undefined || row.assetId === where.assetId) &&
-              (where.quoteAsset === undefined || row.quoteAsset === where.quoteAsset)
+              (where.quoteAsset === undefined ||
+                row.quoteAsset === where.quoteAsset)
             );
           });
         },
@@ -228,6 +259,19 @@ describe("GET /api/portfolio/dashboard route contract", () => {
             updatedToBlock: 120n,
           },
         ],
+        tokens: [
+          {
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            decimalsSource: "RPC",
+            metadataSources: [
+              {
+                sourceKind: "RPC",
+                observedAt: new Date("2026-05-08T11:59:00.000Z"),
+              },
+            ],
+          },
+        ],
         materializationStates: [
           {
             walletId: WALLET_ID,
@@ -268,6 +312,18 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           totalValueQuote: "10",
           valuationStatus: "available",
         },
+        tokenPositions: [
+          expect.objectContaining({
+            assetId: TOKEN_ASSET,
+            metadataProvenance: {
+              status: "observed",
+              source: "chain",
+              observedAt: "2026-05-08T11:59:00.000Z",
+              confidence: "medium",
+              conflictReason: null,
+            },
+          }),
+        ],
         materialization: {
           status: "COMPLETED",
           completedSuccessfully: true,
@@ -288,8 +344,10 @@ describe("GET /api/portfolio/dashboard route contract", () => {
   });
 
   it("preserves separate token rows for same-symbol different-contract assets", async () => {
-    const sameSymbolAlpha = "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const sameSymbolBeta = "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const sameSymbolAlpha =
+      "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const sameSymbolBeta =
+      "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     getDb.mockReturnValue(
       createMemoryDb({
@@ -377,6 +435,7 @@ describe("GET /api/portfolio/dashboard route contract", () => {
         assetAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         balanceQuantity: "3",
         decimals: 6,
+        metadataProvenance: expect.objectContaining({ status: "unknown" }),
         pricing: expect.objectContaining({ sourceId: "pulsex:pair:alpha" }),
         valuation: expect.objectContaining({ valueQuote: "15" }),
       }),
@@ -385,13 +444,20 @@ describe("GET /api/portfolio/dashboard route contract", () => {
         assetAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         balanceQuantity: "1",
         decimals: 18,
+        metadataProvenance: expect.objectContaining({ status: "unknown" }),
         pricing: expect.objectContaining({ sourceId: "pulsex:pair:beta" }),
         valuation: expect.objectContaining({ valueQuote: "2" }),
       }),
     ]);
+    expect(body.data.tokenPositions[0]).not.toHaveProperty("tokenOrigin");
+    expect(body.data.tokenPositions[1]).not.toHaveProperty("tokenOrigin");
     expect(body.data.summary).toMatchObject({
       totalValueQuote: "17",
-      valuationCoverage: { totalPositions: 2, valuedPositions: 2, unvaluedPositions: 0 },
+      valuationCoverage: {
+        totalPositions: 2,
+        valuedPositions: 2,
+        unvaluedPositions: 0,
+      },
     });
   });
 
@@ -600,10 +666,18 @@ describe("GET /api/portfolio/dashboard route contract", () => {
     expect(Array.isArray(body.data.pnlCoverage.affectedSections)).toBe(true);
     expect(typeof body.data.pnlCoverage.pricedPositionsCount).toBe("number");
     expect(typeof body.data.pnlCoverage.unpricedPositionsCount).toBe("number");
-    expect(typeof body.data.pnlCoverage.unsupportedPositionsCount).toBe("number");
-    expect(typeof body.data.pnlCoverage.incompleteBasisPositionsCount).toBe("number");
-    expect(typeof body.data.pnlCoverage.stalePricePositionsCount).toBe("number");
-    expect(typeof body.data.pnlCoverage.sourceDisabledPositionsCount).toBe("number");
+    expect(typeof body.data.pnlCoverage.unsupportedPositionsCount).toBe(
+      "number",
+    );
+    expect(typeof body.data.pnlCoverage.incompleteBasisPositionsCount).toBe(
+      "number",
+    );
+    expect(typeof body.data.pnlCoverage.stalePricePositionsCount).toBe(
+      "number",
+    );
+    expect(typeof body.data.pnlCoverage.sourceDisabledPositionsCount).toBe(
+      "number",
+    );
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("pnlPercent");
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("roi");
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("nativePnl");
@@ -714,7 +788,9 @@ describe("GET /api/portfolio/dashboard route contract", () => {
               markPrice: null,
               totalAcquiredQuantity: "10",
               totalDisposedQuantity: "0",
-              warnings: [expect.objectContaining({ code: "MARK_PRICE_UNAVAILABLE" })],
+              warnings: [
+                expect.objectContaining({ code: "MARK_PRICE_UNAVAILABLE" }),
+              ],
             },
           },
         ],
@@ -731,7 +807,8 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           fromBlock: "50",
           toBlock: null,
           sourceFamilies: [],
-          reason: "Only a partial block range is recorded in persisted materialization state.",
+          reason:
+            "Only a partial block range is recorded in persisted materialization state.",
         },
         pnlCoverage: {
           status: "unavailable",
@@ -751,7 +828,6 @@ describe("GET /api/portfolio/dashboard route contract", () => {
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("roi");
     expect(body.data.tokenPositions[0].pnl).not.toHaveProperty("nativePnl");
   });
-
 
   it("returns failed materialization metadata, warnings, and negative balances from persisted state", async () => {
     getDb.mockReturnValue(
@@ -844,7 +920,8 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           warnings: [
             {
               code: "negative_token_balance",
-              message: "Negative materialized token balance for chain:369:native:PLS: -0.25",
+              message:
+                "Negative materialized token balance for chain:369:native:PLS: -0.25",
             },
             {
               code: "generic_persisted_warning",
@@ -1141,7 +1218,8 @@ describe("GET /api/portfolio/dashboard route contract", () => {
         materialization: {
           freshness: {
             status: "stale",
-            reason: "Materialization failed: materialization failed with stale prior data",
+            reason:
+              "Materialization failed: materialization failed with stale prior data",
             lastMaterializedAt: "2026-05-08T10:00:00.000Z",
             staleAfterSeconds: 900,
           },
@@ -1401,7 +1479,8 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           fromBlock: "50",
           toBlock: null,
           sourceFamilies: [],
-          reason: "Only a partial block range is recorded in persisted materialization state.",
+          reason:
+            "Only a partial block range is recorded in persisted materialization state.",
         },
       },
     });

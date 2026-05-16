@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { assemblePortfolioDashboard } from "@/services/dashboard/portfolio-dashboard";
-import type { PersistedPriceObservation, ResolveBestPriceResult } from "@/services/pricing/types";
+import type {
+  PersistedPriceObservation,
+  ResolveBestPriceResult,
+} from "@/services/pricing/types";
 import type { AverageCostPnlResult, PnLWarning } from "@/services/pnl/types";
 
 const WALLET_ID = "wallet-1";
@@ -77,6 +80,16 @@ type LedgerEntryRecord = {
   actionGroupId: string;
   txHash: string;
   sourceLogKey: string | null;
+};
+
+type TokenRecord = {
+  chainId: number;
+  assetId: string;
+  decimalsSource: string | null;
+  metadataSources: Array<{
+    sourceKind: "SEED" | "RPC" | "MANUAL" | string;
+    observedAt: Date | null;
+  }>;
 };
 
 type MaterializationStateRecord = {
@@ -165,12 +178,14 @@ function createMemoryDb(overrides?: {
   stakePositions?: StakePositionRecord[];
   ledgerEntries?: LedgerEntryRecord[];
   materializationStates?: MaterializationStateRecord[];
+  tokens?: TokenRecord[];
 }) {
   const tokenBalances = overrides?.tokenBalances ?? [];
   const lpPositions = overrides?.lpPositions ?? [];
   const stakePositions = overrides?.stakePositions ?? [];
   const ledgerEntries = overrides?.ledgerEntries ?? [];
   const materializationStates = overrides?.materializationStates ?? [];
+  const tokens = overrides?.tokens ?? [];
 
   return new Proxy(
     {
@@ -178,7 +193,8 @@ function createMemoryDb(overrides?: {
         async findMany(args: { where: { walletId: string; chainId: number } }) {
           return tokenBalances.filter(
             (row) =>
-              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
           );
         },
       },
@@ -186,7 +202,8 @@ function createMemoryDb(overrides?: {
         async findMany(args: { where: { walletId: string; chainId: number } }) {
           return lpPositions.filter(
             (row) =>
-              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
           );
         },
       },
@@ -194,7 +211,8 @@ function createMemoryDb(overrides?: {
         async findMany(args: { where: { walletId: string; chainId: number } }) {
           return stakePositions.filter(
             (row) =>
-              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
           );
         },
       },
@@ -202,7 +220,19 @@ function createMemoryDb(overrides?: {
         async findMany(args: { where: { walletId: string; chainId: number } }) {
           return ledgerEntries.filter(
             (row) =>
-              row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+              row.walletId === args.where.walletId &&
+              row.chainId === args.where.chainId,
+          );
+        },
+      },
+      token: {
+        async findMany(args: {
+          where: { chainId: number; assetId: { in: string[] } };
+        }) {
+          return tokens.filter(
+            (row) =>
+              row.chainId === args.where.chainId &&
+              args.where.assetId.in.includes(row.assetId),
           );
         },
       },
@@ -251,6 +281,19 @@ describe("assemblePortfolioDashboard", () => {
             updatedToBlock: null,
           },
         ],
+        tokens: [
+          {
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            decimalsSource: "RPC",
+            metadataSources: [
+              {
+                sourceKind: "RPC",
+                observedAt: new Date("2026-05-08T11:59:00.000Z"),
+              },
+            ],
+          },
+        ],
       }) as never,
       resolvePrice: async () => createResolvedPrice(),
       calculatePnl: async () => createPnlResult(),
@@ -267,6 +310,13 @@ describe("assemblePortfolioDashboard", () => {
       expect.objectContaining({
         assetId: TOKEN_ASSET,
         balanceQuantity: "5",
+        metadataProvenance: {
+          status: "observed",
+          source: "chain",
+          observedAt: "2026-05-08T11:59:00.000Z",
+          confidence: "medium",
+          conflictReason: null,
+        },
         valuation: expect.objectContaining({
           status: "available",
           valueQuote: "10",
@@ -301,9 +351,13 @@ describe("assemblePortfolioDashboard", () => {
     expect(typeof result.pnlCoverage.pricedPositionsCount).toBe("number");
     expect(typeof result.pnlCoverage.unpricedPositionsCount).toBe("number");
     expect(typeof result.pnlCoverage.unsupportedPositionsCount).toBe("number");
-    expect(typeof result.pnlCoverage.incompleteBasisPositionsCount).toBe("number");
+    expect(typeof result.pnlCoverage.incompleteBasisPositionsCount).toBe(
+      "number",
+    );
     expect(typeof result.pnlCoverage.stalePricePositionsCount).toBe("number");
-    expect(typeof result.pnlCoverage.sourceDisabledPositionsCount).toBe("number");
+    expect(typeof result.pnlCoverage.sourceDisabledPositionsCount).toBe(
+      "number",
+    );
     expect(result.materialization).toEqual({
       status: null,
       completedSuccessfully: null,
@@ -325,6 +379,40 @@ describe("assemblePortfolioDashboard", () => {
         staleAfterSeconds: null,
       },
     });
+  });
+
+  it("uses unknown metadata provenance when no persisted token metadata exists", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    expect(result.tokenPositions[0].metadataProvenance).toEqual({
+      status: "unknown",
+      source: "unknown",
+      observedAt: null,
+      confidence: "unknown",
+      conflictReason: null,
+    });
+    expect(result.tokenPositions[0]).not.toHaveProperty("tokenOrigin");
   });
 
   it("includes persisted materialization metadata when provenance exists", async () => {
@@ -475,7 +563,8 @@ describe("assemblePortfolioDashboard", () => {
       warnings: [
         {
           code: "negative_token_balance",
-          message: "Negative materialized token balance for chain:369:native:PLS: -0.25",
+          message:
+            "Negative materialized token balance for chain:369:native:PLS: -0.25",
         },
         {
           code: "generic_persisted_warning",
@@ -502,8 +591,10 @@ describe("assemblePortfolioDashboard", () => {
   });
 
   it("preserves separate token rows, pricing, PnL, and decimals for same-symbol asset variants", async () => {
-    const sameSymbolAlpha = "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const sameSymbolBeta = "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const sameSymbolAlpha =
+      "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const sameSymbolBeta =
+      "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const resolvedPriceAssets: string[] = [];
     const pnlAssets: string[] = [];
 
@@ -548,7 +639,10 @@ describe("assemblePortfolioDashboard", () => {
                 ? "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 : "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             price: args.assetId === sameSymbolAlpha ? "5" : "2",
-            sourceId: args.assetId === sameSymbolAlpha ? "pulsex:pair:alpha" : "pulsex:pair:beta",
+            sourceId:
+              args.assetId === sameSymbolAlpha
+                ? "pulsex:pair:alpha"
+                : "pulsex:pair:beta",
             confidence: args.assetId === sameSymbolAlpha ? "0.91" : "0.89",
           }),
         });
@@ -571,20 +665,31 @@ describe("assemblePortfolioDashboard", () => {
       sameSymbolAlpha,
       sameSymbolBeta,
     ]);
-    expect(result.tokenPositions.map((position) => position.decimals)).toEqual([6, 18]);
-    expect(result.tokenPositions.map((position) => position.valuation.valueQuote)).toEqual(["15", "2"]);
-    expect(result.tokenPositions.map((position) => position.pricing.sourceId)).toEqual([
-      "pulsex:pair:alpha",
-      "pulsex:pair:beta",
+    expect(result.tokenPositions.map((position) => position.decimals)).toEqual([
+      6, 18,
     ]);
-    expect(result.tokenPositions.map((position) => position.pnl.unrealizedPnl)).toEqual(["3", "0.5"]);
+    expect(
+      result.tokenPositions.map(
+        (position) => position.metadataProvenance.status,
+      ),
+    ).toEqual(["unknown", "unknown"]);
+    expect(
+      result.tokenPositions.map((position) => position.valuation.valueQuote),
+    ).toEqual(["15", "2"]);
+    expect(
+      result.tokenPositions.map((position) => position.pricing.sourceId),
+    ).toEqual(["pulsex:pair:alpha", "pulsex:pair:beta"]);
+    expect(
+      result.tokenPositions.map((position) => position.pnl.unrealizedPnl),
+    ).toEqual(["3", "0.5"]);
     expect(result.summary.totalValueQuote).toBe("17");
     expect(resolvedPriceAssets).toEqual([sameSymbolAlpha, sameSymbolBeta]);
     expect(pnlAssets).toEqual([sameSymbolAlpha, sameSymbolBeta]);
   });
 
   it("keeps native and ERC20 display-equivalent assets separate by explicit asset identity", async () => {
-    const wrappedPlsAsset = "chain:369:erc20:0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const wrappedPlsAsset =
+      "chain:369:erc20:0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
     const resolvedPriceAssets: string[] = [];
 
     const result = await assemblePortfolioDashboard({
@@ -621,7 +726,10 @@ describe("assemblePortfolioDashboard", () => {
         resolvedPriceAssets.push(args.assetId);
         return createResolvedPrice({
           selected: createPriceObservation({
-            id: args.assetId === NATIVE_ASSET ? "native-pls-price" : "erc20-pls-price",
+            id:
+              args.assetId === NATIVE_ASSET
+                ? "native-pls-price"
+                : "erc20-pls-price",
             assetId: args.assetId,
             assetAddress:
               args.assetId === NATIVE_ASSET
@@ -657,7 +765,9 @@ describe("assemblePortfolioDashboard", () => {
         assetAddress: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         decimals: 18,
         valuation: expect.objectContaining({ valueQuote: "12" }),
-        pricing: expect.objectContaining({ sourceId: "pulsex:pair:wrapped-pls" }),
+        pricing: expect.objectContaining({
+          sourceId: "pulsex:pair:wrapped-pls",
+        }),
       }),
     ]);
     expect(result.summary.totalValueQuote).toBe("14");
@@ -783,7 +893,9 @@ describe("assemblePortfolioDashboard", () => {
         }),
     });
 
-    expect(result.tokenPositions[0]?.pricing.status).toBe("low_confidence_price");
+    expect(result.tokenPositions[0]?.pricing.status).toBe(
+      "low_confidence_price",
+    );
   });
 
   it("preserves current PnL contract fields without exposing unsafe percentage metrics", async () => {
@@ -921,14 +1033,15 @@ describe("assemblePortfolioDashboard", () => {
     expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("pnlPercent");
     expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("roi");
     expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("nativePnl");
-    expect(result.summary.warnings).toContain("pnl-warning:INSUFFICIENT_COST_BASIS");
+    expect(result.summary.warnings).toContain(
+      "pnl-warning:INSUFFICIENT_COST_BASIS",
+    );
     expect(result.pnlCoverage).toMatchObject({
       status: "unavailable",
       reasons: ["insufficient_cost_basis"],
       incompleteBasisPositionsCount: 1,
     });
   });
-
 
   it("surfaces pnl warnings in the token dto", async () => {
     const result = await assemblePortfolioDashboard({
@@ -972,7 +1085,9 @@ describe("assemblePortfolioDashboard", () => {
         }),
       ],
     });
-    expect(result.summary.warnings).toContain("pnl-warning:MARK_PRICE_UNAVAILABLE");
+    expect(result.summary.warnings).toContain(
+      "pnl-warning:MARK_PRICE_UNAVAILABLE",
+    );
   });
 
   it("includes lp and stake positions without fabricating valuation", async () => {
@@ -1030,8 +1145,16 @@ describe("assemblePortfolioDashboard", () => {
           },
         ],
       }) as never,
-      resolvePrice: async () => createResolvedPrice({ selected: createPriceObservation({ price: "3" }) }),
-      calculatePnl: async () => createPnlResult({ holdingsQuantity: "1", markPrice: "3", unrealizedPnl: "1.5" }),
+      resolvePrice: async () =>
+        createResolvedPrice({
+          selected: createPriceObservation({ price: "3" }),
+        }),
+      calculatePnl: async () =>
+        createPnlResult({
+          holdingsQuantity: "1",
+          markPrice: "3",
+          unrealizedPnl: "1.5",
+        }),
     });
 
     expect(result.summary.valuationStatus).toBe("partial");
@@ -1101,7 +1224,7 @@ describe("assemblePortfolioDashboard", () => {
       "utf8",
     );
 
-    expect(source).not.toContain("\"use client\"");
+    expect(source).not.toContain('"use client"');
     expect(source).not.toContain("React");
     expect(source).not.toContain("return (");
   });
@@ -1112,7 +1235,8 @@ describe("assemblePortfolioDashboard", () => {
       quoteAsset: QUOTE_ASSET,
       asOf: new Date("2026-05-08T12:04:00.000Z"),
       db: createMemoryDb() as never,
-      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      resolvePrice: async () =>
+        createResolvedPrice({ selected: null, rejected: [] }),
       calculatePnl: async () => createPnlResult(),
     });
 
@@ -1149,7 +1273,8 @@ describe("assemblePortfolioDashboard", () => {
           },
         ],
       }) as never,
-      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      resolvePrice: async () =>
+        createResolvedPrice({ selected: null, rejected: [] }),
       calculatePnl: async () => createPnlResult(),
     });
 
@@ -1186,7 +1311,8 @@ describe("assemblePortfolioDashboard", () => {
           },
         ],
       }) as never,
-      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      resolvePrice: async () =>
+        createResolvedPrice({ selected: null, rejected: [] }),
       calculatePnl: async () => createPnlResult(),
     });
 
@@ -1223,7 +1349,8 @@ describe("assemblePortfolioDashboard", () => {
           },
         ],
       }) as never,
-      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      resolvePrice: async () =>
+        createResolvedPrice({ selected: null, rejected: [] }),
       calculatePnl: async () => createPnlResult(),
     });
 
@@ -1232,7 +1359,8 @@ describe("assemblePortfolioDashboard", () => {
       fromBlock: "50",
       toBlock: null,
       sourceFamilies: [],
-      reason: "Only a partial block range is recorded in persisted materialization state.",
+      reason:
+        "Only a partial block range is recorded in persisted materialization state.",
     });
   });
 

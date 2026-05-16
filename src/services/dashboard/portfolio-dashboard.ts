@@ -12,6 +12,8 @@ import type {
   DashboardLedgerCoverageDto,
   DashboardMaterializationDto,
   DashboardMaterializationFreshnessDto,
+  DashboardMetadataProvenanceConfidence,
+  DashboardMetadataProvenanceSource,
   DashboardMaterializationWarningDto,
   DashboardPnlCalculator,
   DashboardPnlCoverageDto,
@@ -21,6 +23,7 @@ import type {
   DashboardPriceResolver,
   DashboardPricingDto,
   DashboardStatus,
+  DashboardTokenMetadataProvenanceDto,
   PortfolioDashboardDto,
 } from "@/services/dashboard/types";
 
@@ -64,7 +67,10 @@ export async function assemblePortfolioDashboard(args: {
     args.resolvePrice ??
     (async (priceArgs) => {
       if (!db.priceObservation) {
-        return { selected: null, rejected: [] } satisfies ResolveBestPriceResult;
+        return {
+          selected: null,
+          rejected: [],
+        } satisfies ResolveBestPriceResult;
       }
 
       return resolveBestPriceFromStore(
@@ -82,7 +88,13 @@ export async function assemblePortfolioDashboard(args: {
     });
   const calculatePnl = args.calculatePnl ?? calculateAverageCostPnl;
 
-  const [tokenBalances, lpPositions, stakePositions, materializationState, ledgerEntries] = await Promise.all([
+  const [
+    tokenBalances,
+    lpPositions,
+    stakePositions,
+    materializationState,
+    ledgerEntries,
+  ] = await Promise.all([
     db.portfolioTokenBalance.findMany({
       where: { walletId: args.wallet.id, chainId: args.wallet.chainId },
       orderBy: [{ assetId: "asc" }],
@@ -110,13 +122,40 @@ export async function assemblePortfolioDashboard(args: {
     }),
   ]);
 
+  const tokenMetadataRows =
+    tokenBalances.length === 0
+      ? []
+      : await db.token.findMany({
+          where: {
+            chainId: args.wallet.chainId,
+            assetId: { in: tokenBalances.map((row) => row.assetId) },
+          },
+          select: {
+            assetId: true,
+            decimalsSource: true,
+            metadataSources: {
+              select: {
+                sourceKind: true,
+                observedAt: true,
+              },
+              orderBy: [{ observedAt: "desc" }],
+              take: 1,
+            },
+          },
+        });
+  const tokenMetadataByAssetId = new Map(
+    tokenMetadataRows.map((row) => [row.assetId, row]),
+  );
+
   const pnlEntries = ledgerEntries.map<PnLEntry>((entry) => ({
     id: entry.id,
     chainId: entry.chainId,
     walletId: entry.walletId,
     assetId: entry.assetId,
     entryType: entry.entryType as PnLEntry["entryType"],
-    actionType: (entry.actionType ?? entry.actionGroup?.actionType ?? "TRANSFER") as PnLEntry["actionType"],
+    actionType: (entry.actionType ??
+      entry.actionGroup?.actionType ??
+      "TRANSFER") as PnLEntry["actionType"],
     direction: entry.direction as PnLEntry["direction"],
     quantity: toStringValue(entry.quantity),
     occurredAt: entry.occurredAt,
@@ -141,7 +180,11 @@ export async function assemblePortfolioDashboard(args: {
       const pricing = toPricingDto(resolvedPrice);
       const valueQuote =
         resolvedPrice.selected && pricing.status === "available"
-          ? toOutput(new Decimal(toStringValue(row.balanceQuantity)).mul(resolvedPrice.selected.price))
+          ? toOutput(
+              new Decimal(toStringValue(row.balanceQuantity)).mul(
+                resolvedPrice.selected.price,
+              ),
+            )
           : null;
       const valuationStatus = pricing.status;
 
@@ -149,7 +192,9 @@ export async function assemblePortfolioDashboard(args: {
         totalValue = totalValue.plus(valueQuote);
         valuedPositions += 1;
       } else {
-        summaryWarnings.add(`pricing-unavailable:${row.assetId}:${valuationStatus}`);
+        summaryWarnings.add(
+          `pricing-unavailable:${row.assetId}:${valuationStatus}`,
+        );
       }
 
       const pnlResult = await calculatePnl({
@@ -179,6 +224,9 @@ export async function assemblePortfolioDashboard(args: {
         assetAddress: row.assetAddress,
         balanceQuantity: toStringValue(row.balanceQuantity),
         decimals: row.decimals,
+        metadataProvenance: toTokenMetadataProvenanceDto(
+          tokenMetadataByAssetId.get(row.assetId) ?? null,
+        ),
         updatedFromBlock: bigintToString(row.updatedFromBlock),
         updatedToBlock: bigintToString(row.updatedToBlock),
         pricing,
@@ -230,7 +278,8 @@ export async function assemblePortfolioDashboard(args: {
     warnings: ["stake-valuation-unsupported-v1"],
   }));
 
-  const totalPositions = tokenPositionDtos.length + lpDtos.length + stakeDtos.length;
+  const totalPositions =
+    tokenPositionDtos.length + lpDtos.length + stakeDtos.length;
   const unvaluedPositions = totalPositions - valuedPositions;
   const valuationStatus: DashboardStatus =
     totalPositions === 0
@@ -238,9 +287,13 @@ export async function assemblePortfolioDashboard(args: {
       : valuedPositions === totalPositions
         ? "available"
         : valuedPositions === 0
-          ? tokenPositionDtos[0]?.valuation.status ?? "unavailable"
+          ? (tokenPositionDtos[0]?.valuation.status ?? "unavailable")
           : "partial";
-  const materialization = toMaterializationDto(tokenBalances, materializationState, args.asOf);
+  const materialization = toMaterializationDto(
+    tokenBalances,
+    materializationState,
+    args.asOf,
+  );
   const ledgerCoverage = computeLedgerCoverage(materializationState);
 
   return {
@@ -270,6 +323,92 @@ export async function assemblePortfolioDashboard(args: {
     lpPositions: lpDtos,
     stakePositions: stakeDtos,
   };
+}
+
+function toTokenMetadataProvenanceDto(
+  token: {
+    decimalsSource: string | null;
+    metadataSources: Array<{
+      sourceKind: string;
+      observedAt: Date | null;
+    }>;
+  } | null,
+): DashboardTokenMetadataProvenanceDto {
+  if (!token) {
+    return UNKNOWN_METADATA_PROVENANCE;
+  }
+
+  const metadataSources = Array.isArray(token.metadataSources)
+    ? token.metadataSources
+    : [];
+  const latestSource = metadataSources[0] ?? null;
+  const sourceEvidence =
+    latestSource?.sourceKind ?? token.decimalsSource ?? null;
+
+  if (!sourceEvidence) {
+    return UNKNOWN_METADATA_PROVENANCE;
+  }
+
+  const source = mapTokenMetadataSource(sourceEvidence);
+  if (source === "unknown") {
+    return UNKNOWN_METADATA_PROVENANCE;
+  }
+
+  return {
+    status: "observed",
+    source,
+    observedAt: latestSource?.observedAt?.toISOString() ?? null,
+    confidence: mapTokenMetadataConfidence(sourceEvidence),
+    conflictReason: null,
+  };
+}
+
+const UNKNOWN_METADATA_PROVENANCE: DashboardTokenMetadataProvenanceDto = {
+  status: "unknown",
+  source: "unknown",
+  observedAt: null,
+  confidence: "unknown",
+  conflictReason: null,
+};
+
+function mapTokenMetadataSource(
+  sourceEvidence: string,
+): DashboardMetadataProvenanceSource {
+  const normalized = sourceEvidence.toLowerCase();
+
+  if (normalized === "rpc") {
+    return "chain";
+  }
+
+  if (normalized === "manual" || normalized.startsWith("manual")) {
+    return "manual";
+  }
+
+  if (normalized === "seed" || normalized.startsWith("seed:")) {
+    return "derived";
+  }
+
+  return "unknown";
+}
+
+function mapTokenMetadataConfidence(
+  sourceEvidence: string,
+): DashboardMetadataProvenanceConfidence {
+  const normalized = sourceEvidence.toLowerCase();
+
+  if (normalized === "rpc") {
+    return "medium";
+  }
+
+  if (normalized === "manual" || normalized.startsWith("manual")) {
+    return "medium";
+  }
+
+  if (normalized === "seed" || normalized.startsWith("seed:")) {
+    return "low";
+  }
+
+  return "unknown";
 }
 
 function buildInitialPnlCoverage(args: {
@@ -359,7 +498,10 @@ function buildInitialPnlCoverage(args: {
     affectedSections.add("summary");
   }
 
-  const totalPositions = args.tokenPositions.length + args.lpPositions.length + args.stakePositions.length;
+  const totalPositions =
+    args.tokenPositions.length +
+    args.lpPositions.length +
+    args.stakePositions.length;
   const affectedPositionsCount =
     unpricedPositionsCount +
     unsupportedPositionsCount +
@@ -381,7 +523,9 @@ function buildInitialPnlCoverage(args: {
   return {
     status,
     reasons: PNL_COVERAGE_REASON_ORDER.filter((reason) => reasons.has(reason)),
-    affectedSections: PNL_COVERAGE_SECTION_ORDER.filter((section) => affectedSections.has(section)),
+    affectedSections: PNL_COVERAGE_SECTION_ORDER.filter((section) =>
+      affectedSections.has(section),
+    ),
     pricedPositionsCount,
     unpricedPositionsCount,
     unsupportedPositionsCount,
@@ -393,9 +537,15 @@ function buildInitialPnlCoverage(args: {
 }
 
 function toMaterializationDto(
-  tokenBalances: Awaited<ReturnType<DashboardDbClient["portfolioTokenBalance"]["findMany"]>>,
+  tokenBalances: Awaited<
+    ReturnType<DashboardDbClient["portfolioTokenBalance"]["findMany"]>
+  >,
   materializationState: Awaited<
-    ReturnType<NonNullable<DashboardDbClient["portfolioMaterializationState"]>["findUnique"]>
+    ReturnType<
+      NonNullable<
+        DashboardDbClient["portfolioMaterializationState"]
+      >["findUnique"]
+    >
   >,
   asOf: Date,
 ): DashboardMaterializationDto {
@@ -420,12 +570,22 @@ function toMaterializationDto(
   return {
     status: materializationState?.status ?? null,
     completedSuccessfully: materializationState?.completedSuccessfully ?? null,
-    lastAttemptedAt: materializationState?.lastAttemptedAt?.toISOString() ?? null,
-    latestMaterializedAt: materializationState?.latestMaterializedAt?.toISOString() ?? null,
-    updatedFromBlock: bigintToString(materializationState?.updatedFromBlock ?? null),
-    updatedToBlock: bigintToString(materializationState?.updatedToBlock ?? null),
-    sourceLedgerFromBlock: bigintToString(materializationState?.sourceLedgerFromBlock ?? null),
-    sourceLedgerToBlock: bigintToString(materializationState?.sourceLedgerToBlock ?? null),
+    lastAttemptedAt:
+      materializationState?.lastAttemptedAt?.toISOString() ?? null,
+    latestMaterializedAt:
+      materializationState?.latestMaterializedAt?.toISOString() ?? null,
+    updatedFromBlock: bigintToString(
+      materializationState?.updatedFromBlock ?? null,
+    ),
+    updatedToBlock: bigintToString(
+      materializationState?.updatedToBlock ?? null,
+    ),
+    sourceLedgerFromBlock: bigintToString(
+      materializationState?.sourceLedgerFromBlock ?? null,
+    ),
+    sourceLedgerToBlock: bigintToString(
+      materializationState?.sourceLedgerToBlock ?? null,
+    ),
     warningCount: warnings.length,
     warnings,
     errorMessage: materializationState?.errorMessage ?? null,
@@ -437,7 +597,11 @@ function toMaterializationDto(
 
 function computeMaterializationFreshness(
   materializationState: Awaited<
-    ReturnType<NonNullable<DashboardDbClient["portfolioMaterializationState"]>["findUnique"]>
+    ReturnType<
+      NonNullable<
+        DashboardDbClient["portfolioMaterializationState"]
+      >["findUnique"]
+    >
   >,
   now: Date,
 ): DashboardMaterializationFreshnessDto {
@@ -450,7 +614,10 @@ function computeMaterializationFreshness(
     };
   }
 
-  if (materializationState.status === "FAILED" && !materializationState.latestMaterializedAt) {
+  if (
+    materializationState.status === "FAILED" &&
+    !materializationState.latestMaterializedAt
+  ) {
     return {
       status: "unknown",
       reason: materializationState.errorMessage
@@ -506,7 +673,11 @@ function computeMaterializationFreshness(
 
 function computeLedgerCoverage(
   materializationState: Awaited<
-    ReturnType<NonNullable<DashboardDbClient["portfolioMaterializationState"]>["findUnique"]>
+    ReturnType<
+      NonNullable<
+        DashboardDbClient["portfolioMaterializationState"]
+      >["findUnique"]
+    >
   >,
 ): DashboardLedgerCoverageDto {
   if (!materializationState) {
@@ -538,7 +709,8 @@ function computeLedgerCoverage(
       fromBlock,
       toBlock,
       sourceFamilies: [],
-      reason: "Only a partial block range is recorded in persisted materialization state.",
+      reason:
+        "Only a partial block range is recorded in persisted materialization state.",
     };
   }
 
@@ -588,21 +760,30 @@ function toPnlDto(
   if (result.warnings.length > 0) {
     if (
       result.warnings.some((warning) =>
-        ["COUNTER_ASSET_PRICE_UNAVAILABLE", "INSUFFICIENT_COST_BASIS", "UNSUPPORTED_ACTION_GROUP"].includes(
-          warning.code,
-        ),
+        [
+          "COUNTER_ASSET_PRICE_UNAVAILABLE",
+          "INSUFFICIENT_COST_BASIS",
+          "UNSUPPORTED_ACTION_GROUP",
+        ].includes(warning.code),
       )
     ) {
       status = "incomplete_basis";
     } else if (
       result.warnings.some((warning) =>
-        ["UNSUPPORTED_LP_ACTION", "UNSUPPORTED_STAKE_ACTION"].includes(warning.code),
+        ["UNSUPPORTED_LP_ACTION", "UNSUPPORTED_STAKE_ACTION"].includes(
+          warning.code,
+        ),
       )
     ) {
       status = "unsupported";
-    } else if (result.warnings.some((warning) => warning.code === "MARK_PRICE_UNAVAILABLE")) {
+    } else if (
+      result.warnings.some(
+        (warning) => warning.code === "MARK_PRICE_UNAVAILABLE",
+      )
+    ) {
       status =
-        valuationStatus === "stale_price" || valuationStatus === "low_confidence_price"
+        valuationStatus === "stale_price" ||
+        valuationStatus === "low_confidence_price"
           ? valuationStatus
           : "unavailable";
     }
@@ -652,7 +833,9 @@ function bigintToString(value: bigint | null) {
   return value === null ? null : value.toString();
 }
 
-function normalizePersistedWarnings(value: unknown): DashboardMaterializationWarningDto[] {
+function normalizePersistedWarnings(
+  value: unknown,
+): DashboardMaterializationWarningDto[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -700,14 +883,20 @@ function mergeMaterializationWarnings(
     merged.set(`${warning.code}:${warning.message}`, warning);
   }
 
-  return Array.from(merged.values()).sort((left, right) => left.message.localeCompare(right.message));
+  return Array.from(merged.values()).sort((left, right) =>
+    left.message.localeCompare(right.message),
+  );
 }
 
 function isNegativeDecimal(value: string) {
-  return value.trim().startsWith("-") && value.trim() !== "-0" && value.trim() !== "-0.0";
+  const trimmed = value.trim();
+  return trimmed.startsWith("-") && trimmed !== "-0" && trimmed !== "-0.0";
 }
 
 function toOutput(value: Decimal | string) {
   const decimal = typeof value === "string" ? new Decimal(value) : value;
-  return decimal.toFixed().replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+  return decimal
+    .toFixed()
+    .replace(/\.0+$/, "")
+    .replace(/(\.\d*?)0+$/, "$1");
 }
