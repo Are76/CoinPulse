@@ -156,7 +156,9 @@ describe("DashboardScreen submitted wallet source behavior", () => {
   it("disables dashboard metadata polling through shared debug query hooks", () => {
     renderDashboard();
 
+    expect(mockUseDebugHealthQuery).toHaveBeenCalledTimes(1);
     expect(mockUseDebugHealthQuery).toHaveBeenCalledWith({ refetchInterval: false });
+    expect(mockUseDebugStatusQuery).toHaveBeenCalledTimes(1);
     expect(mockUseDebugStatusQuery).toHaveBeenCalledWith({ refetchInterval: false });
   });
 
