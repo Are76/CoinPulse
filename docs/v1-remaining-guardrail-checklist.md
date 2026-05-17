@@ -1,0 +1,86 @@
+# CoinPulse V1 Remaining Guardrail Checklist
+
+## Purpose
+
+This checklist reconciles the V1 guardrail docs with the current repository state after the dashboard data-quality, PnL coverage, token metadata provenance, pricing status, and TanStack Query slices. It is intentionally documentation-only and does not authorize source, test, schema, route, pricing, PnL, frontend, template extraction, or multi-chain execution work.
+
+## Source docs reviewed
+
+- `docs/dashboard-data-quality-audit.md`
+- `docs/pnl-accounting-guardrails.md`
+- `docs/pnl-status-coverage-audit.md`
+- `docs/token-identity-origin-plan.md`
+- `docs/token-metadata-provenance-plan.md`
+- `docs/reusable-data-fetching-template-plan.md`
+- `docs/frontend-query-standardization-audit.md`
+- `docs/data-fetching-architecture.md`
+- `docs/reusable-backend-template-plan.md`
+
+## Current reconciliation notes
+
+- The dashboard visibility milestone is complete: materialization freshness, ledger coverage, pricing source status, the pricing status debug page, dashboard link-out, and operator navigation exist as observability improvements only.
+- PnL coverage is no longer only a planning topic: the dashboard DTO includes backend-computed `pnlCoverage`, route/service/component coverage exists for supported PnL status and warning cases, and unsupported LP/stake PnL remains explicit.
+- Token metadata provenance is partially implemented: token dashboard rows expose backend-owned `metadataProvenance`, and the UI renders that DTO without inferring trust. This does not yet equal a full token identity/origin implementation.
+- Frontend query standardization has moved beyond the original audit: shared query keys, `QueryProvider`, dashboard/debug/pricing read hooks, tracked-wallet reads, and operator mutation hooks exist. Treat the original frontend query audit findings that say TanStack Query is not wired in as stale historical notes.
+- `GET /api/prices/status` exists and has a client/query/debug surface. Treat older reusable-template and PnL guardrail sequence items that describe this endpoint as future work as stale.
+- Reusable template extraction has not started and remains gated. The existing template docs are plans, not approval to extract shared infrastructure.
+
+## 1. Completed / no action needed
+
+- [x] Keep frontend dashboard reads DTO-only and backend-truth-first; no frontend RPC, DexScreener truth, symbol identity, or frontend PnL/valuation computation is needed.
+- [x] Preserve materialization freshness and provenance in the dashboard DTO and UI.
+- [x] Preserve `ledgerCoverage` as backend-computed dashboard metadata.
+- [x] Preserve pricing source status as a backend DTO exposed by `GET /api/prices/status` with a frontend client, query hook, and operator debug page.
+- [x] Preserve PnL coverage as backend-computed observability metadata. `pnlCoverage` is not native PnL, does not change formulas, and does not make unsupported LP/stake PnL supported.
+- [x] Preserve explicit unsupported LP/stake valuation and PnL sentinels.
+- [x] Preserve token metadata provenance display as a pass-through of backend DTO state, not frontend trust inference.
+- [x] Preserve same-symbol/different-contract separation by chain/address/asset ID.
+- [x] Preserve the TanStack Query foundation that is already present: shared query keys, query provider, query hooks, mutation hooks, and invalidation behavior.
+
+## 2. V1-next safe tasks
+
+These are the safest implementation candidates because they are additive, contract-first, and do not require pricing/PnL formula changes.
+
+- [ ] Add or tighten PnL status contract tests for any warning/status combinations not explicitly asserted yet. Required gap areas include `INSUFFICIENT_COST_BASIS`, stale price PnL status, low-confidence price PnL status, disabled source PnL status, unsupported action-group propagation, and summary warning aggregation stability.
+- [ ] Add token metadata provenance contract tests for stale/conflicting/unknown metadata behavior if not already covered by current route, service, and component tests.
+- [ ] Define a token metadata trust/source policy that distinguishes `unknown`, `observed`, `seeded`, `manual`, `verified`, `stale`, and `conflict` semantics before any stronger UI label or analytics dependency is added.
+- [ ] Add backend-only metadata status computation for stale/conflicting metadata if persisted evidence is already available or can be added in a minimal additive slice.
+- [ ] Audit current dashboard, pricing, PnL, and materialization tests for symbol-as-identity regressions and add focused contract assertions where gaps remain.
+- [ ] Refresh stale planning docs or add status notes to them so reviewers do not mistake completed TanStack Query/pricing-status work for remaining work.
+
+## 3. V1-adjacent but not immediate
+
+These tasks may still belong near V1, but only after the V1-next contract and policy gaps above are closed.
+
+- [ ] Add additive token identity DTO fields only if the current `assetId`, `assetAddress`, `chainId`, and `metadataProvenance` surfaces are insufficient for operators to inspect identity safely.
+- [ ] Add origin classification as unknown-first backend metadata. The first safe implementation should return `unknown` unless persisted backend evidence supports a stronger classification.
+- [ ] Add bridge/source attribution planning after token metadata trust policy and origin DTO shape are explicit. Attribution must be evidence-based, backend-owned, and additive.
+- [ ] Add per-asset pricing/metadata coverage diagnostics to pricing status only after source-health semantics remain stable and no UI has to infer coverage.
+- [ ] Add canonical transactions DTO planning and contract tests if needed as the next reusable DTO surface.
+- [ ] Define route-normalization compatibility strategy before renaming or duplicating routes such as `/api/portfolio/dashboard`.
+
+## 4. V2 / research only
+
+These are not V1 implementation tasks unless a later plan explicitly narrows prerequisites, DTO contracts, tests, and failure modes.
+
+- [ ] Native-denominated PnL, including PLS-denominated PnL, because it requires historical native-asset price observations aligned to each PnL-impacting ledger event.
+- [ ] Richer analytics UI beyond backend-provided statuses, warnings, provenance, and coverage.
+- [ ] PnL percent, ROI, risk metrics, volatility-adjusted analytics, benchmarking, AI-generated PnL commentary, or projections.
+- [ ] Full bridge classifier implementation across bridge families and chains.
+- [ ] Reusable frontend/backend template extraction into a separate repository.
+- [ ] Ethereum/Base or other multi-chain execution support.
+
+## 5. Explicitly forbidden until prerequisites are met
+
+- [ ] Do not add frontend accounting, pricing, PnL, LP valuation, stake valuation, native PnL, bridge classification, or metadata trust inference.
+- [ ] Do not treat missing, unsupported, partial, stale, or unavailable values as zero.
+- [ ] Do not use symbols, names, tickers, or stablecoin branding as accounting, pricing, bridge, cache, or analytics identity.
+- [ ] Do not treat DexScreener, subgraphs, or frontend RPC reads as canonical truth.
+- [ ] Do not add native PnL until historical native price coverage, event-level provenance, status contracts, and backend conversion semantics exist.
+- [ ] Do not add bridge/source attribution until token identity, metadata trust/source policy, origin metadata shape, and evidence rules are explicit.
+- [ ] Do not start reusable template extraction until the documented extraction gates are satisfied: stable DTOs through production-like cycles, failure-path contract tests for operator read routes, stable materialization provenance, exercised TanStack Query consumption, at least a second reusable DTO surface, and route compatibility strategy.
+- [ ] Do not add Ethereum/Base execution until PulseChain V1 backend truth, identity, origin, pricing, and PnL guardrails are stable enough to generalize.
+
+## Recommended next implementation PR
+
+The next bounded implementation PR should be a test-only or contract-first slice: add missing PnL status contract tests for stale/low-confidence/disabled-source and insufficient-basis cases, plus explicit assertions that unsupported LP/stake and unavailable token PnL remain `null` with backend statuses rather than zero. This is safer than origin, bridge, native PnL, or template extraction because it hardens the current DTO contract without changing accounting or UI behavior.
