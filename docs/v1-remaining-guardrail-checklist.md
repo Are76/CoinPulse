@@ -11,6 +11,7 @@ This checklist reconciles the V1 guardrail docs with the current repository stat
 - `docs/pnl-status-coverage-audit.md`
 - `docs/token-identity-origin-plan.md`
 - `docs/token-metadata-provenance-plan.md`
+- `docs/token-metadata-trust-source-policy.md`
 - `docs/reusable-data-fetching-template-plan.md`
 - `docs/frontend-query-standardization-audit.md`
 - `docs/data-fetching-architecture.md`
@@ -21,6 +22,7 @@ This checklist reconciles the V1 guardrail docs with the current repository stat
 - The dashboard visibility milestone is complete: materialization freshness, ledger coverage, pricing source status, the pricing status debug page, dashboard link-out, and operator navigation exist as observability improvements only.
 - PnL coverage is no longer only a planning topic: the dashboard DTO includes backend-computed `pnlCoverage`, route/service/component coverage exists for supported PnL status and warning cases, and unsupported LP/stake PnL remains explicit.
 - Token metadata provenance is partially implemented: token dashboard rows expose backend-owned `metadataProvenance`, and the UI renders that DTO without inferring trust. This does not yet equal a full token identity/origin implementation.
+- The token metadata trust/source policy now exists in `docs/token-metadata-trust-source-policy.md`; token identity/origin, bridge/source attribution, native/wrapped labels, and verified metadata work should reconcile to that policy before implementation.
 - Frontend query standardization has moved beyond the original audit: shared query keys, `QueryProvider`, dashboard/debug/pricing read hooks, tracked-wallet reads, and operator mutation hooks exist. Treat the original frontend query audit findings that say TanStack Query is not wired in as stale historical notes.
 - `GET /api/prices/status` exists and has a client/query/debug surface. Treat older reusable-template and PnL guardrail sequence items that describe this endpoint as future work as stale.
 - Reusable template extraction has not started and remains gated. The existing template docs are plans, not approval to extract shared infrastructure.
@@ -43,7 +45,8 @@ These are the safest implementation candidates because they are additive, contra
 
 - [ ] Add or tighten PnL status contract tests for any warning/status combinations not explicitly asserted yet. Required gap areas include `INSUFFICIENT_COST_BASIS`, stale price PnL status, low-confidence price PnL status, disabled source PnL status, unsupported action-group propagation, and summary warning aggregation stability.
 - [ ] Add token metadata provenance contract tests for stale/conflicting/unknown metadata behavior if not already covered by current route, service, and component tests.
-- [ ] Define a token metadata trust/source policy that distinguishes `unknown`, `observed`, `seeded`, `manual`, `verified`, `stale`, and `conflict` semantics before any stronger UI label or analytics dependency is added.
+- [x] Define a token metadata trust/source policy that distinguishes `unknown`, `observed`, `seeded`, `manual`, `verified`, `stale`, `conflict`, and `rejected` semantics before any stronger UI label or analytics dependency is added.
+- [ ] Add contract tests and policy mapping for token metadata status/source behavior, especially `unknown`, `stale`, `conflict`, and `rejected`, before implementing origin classification or bridge/source attribution.
 - [ ] Add backend-only metadata status computation for stale/conflicting metadata if persisted evidence is already available or can be added in a minimal additive slice.
 - [ ] Audit current dashboard, pricing, PnL, and materialization tests for symbol-as-identity regressions and add focused contract assertions where gaps remain.
 - [ ] Refresh stale planning docs or add status notes to them so reviewers do not mistake completed TanStack Query/pricing-status work for remaining work.
@@ -53,8 +56,8 @@ These are the safest implementation candidates because they are additive, contra
 These tasks may still belong near V1, but only after the V1-next contract and policy gaps above are closed.
 
 - [ ] Add additive token identity DTO fields only if the current `assetId`, `assetAddress`, `chainId`, and `metadataProvenance` surfaces are insufficient for operators to inspect identity safely.
-- [ ] Add origin classification as unknown-first backend metadata. The first safe implementation should return `unknown` unless persisted backend evidence supports a stronger classification.
-- [ ] Add bridge/source attribution planning after token metadata trust policy and origin DTO shape are explicit. Attribution must be evidence-based, backend-owned, and additive.
+- [ ] Add origin classification as unknown-first backend metadata only after the trust/source policy mapping is covered. The first safe implementation should return `unknown` when evidence is missing, stale, conflicting, rejected, or unsupported.
+- [ ] Add bridge/source attribution planning after token metadata trust policy and origin DTO shape are explicit. Attribution must be evidence-based, backend-owned, additive, and never inferred from symbol, name, stablecoin branding, route labels, or icons.
 - [ ] Add per-asset pricing/metadata coverage diagnostics to pricing status only after source-health semantics remain stable and no UI has to infer coverage.
 - [ ] Add canonical transactions DTO planning and contract tests if needed as the next reusable DTO surface.
 - [ ] Define route-normalization compatibility strategy before renaming or duplicating routes such as `/api/portfolio/dashboard`.
@@ -83,4 +86,4 @@ These are not V1 implementation tasks unless a later plan explicitly narrows pre
 
 ## Recommended next implementation PR
 
-The next bounded implementation PR should be a test-only or contract-first slice: add missing PnL status contract tests for stale/low-confidence/disabled-source and insufficient-basis cases, plus explicit assertions that unsupported LP/stake and unavailable token PnL remain `null` with backend statuses rather than zero. This is safer than origin, bridge, native PnL, or template extraction because it hardens the current DTO contract without changing accounting or UI behavior.
+The next bounded implementation PR should be a test-only or contract-first slice: add token metadata trust/source policy mapping tests for unknown/stale/conflict/rejected metadata behavior and symbol-not-identity assertions before any origin implementation. PnL status contract tests for stale/low-confidence/disabled-source and insufficient-basis cases remain safe follow-up work. This is safer than origin, bridge, native PnL, or template extraction because it hardens current DTO contracts without changing accounting or UI behavior.
