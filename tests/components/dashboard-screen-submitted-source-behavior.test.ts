@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardScreen } from "@/components/dashboard/dashboard-screen";
 import type { TrackedWalletDto } from "@/lib/api/debug-client";
 import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
+import { useDebugHealthQuery } from "@/lib/query/use-debug-health-query";
+import { useDebugStatusQuery } from "@/lib/query/use-debug-status-query";
 import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
 
 vi.mock("@/lib/api/dashboard-client", () => ({
@@ -24,6 +26,14 @@ vi.mock("@/lib/api/dashboard-client", () => ({
 
 vi.mock("@/lib/query/use-dashboard-query", () => ({
   useDashboardQuery: vi.fn(),
+}));
+
+vi.mock("@/lib/query/use-debug-health-query", () => ({
+  useDebugHealthQuery: vi.fn(),
+}));
+
+vi.mock("@/lib/query/use-debug-status-query", () => ({
+  useDebugStatusQuery: vi.fn(),
 }));
 
 vi.mock("@/lib/query/use-tracked-wallets-query", () => ({
@@ -49,6 +59,8 @@ const LATER_IMPORTED_WALLET: TrackedWalletDto = {
 };
 
 const mockUseDashboardQuery = vi.mocked(useDashboardQuery);
+const mockUseDebugHealthQuery = vi.mocked(useDebugHealthQuery);
+const mockUseDebugStatusQuery = vi.mocked(useDebugStatusQuery);
 const mockUseTrackedWalletsQuery = vi.mocked(useTrackedWalletsQuery);
 
 type TrackedWalletsState = {
@@ -116,6 +128,24 @@ describe("DashboardScreen submitted wallet source behavior", () => {
       isFetching: false,
       isLoading: false,
     } as ReturnType<typeof useDashboardQuery>);
+    mockUseDebugHealthQuery.mockReturnValue({
+      data: {
+        status: "ok",
+        dependencies: {
+          database: { status: "ready" },
+          redis: { status: "ready" },
+        },
+      },
+      error: null,
+      isError: false,
+    } as ReturnType<typeof useDebugHealthQuery>);
+    mockUseDebugStatusQuery.mockReturnValue({
+      data: {
+        sourceFamilies: ["pulsechain"],
+      },
+      error: null,
+      isError: false,
+    } as ReturnType<typeof useDebugStatusQuery>);
   });
 
   afterEach(() => {

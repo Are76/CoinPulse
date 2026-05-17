@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 
 import { PageContainer } from "@/components/ui/page-container";
@@ -22,10 +22,6 @@ import {
   WalletQueryForm,
 } from "@/components/dashboard/dashboard-presenters";
 import {
-  fetchDebugHealth,
-  fetchDebugStatus,
-} from "@/lib/api/dashboard-client";
-import {
   getDashboardErrorMessage,
   getDashboardMetaErrorMessage,
   resolveDashboardSubmission,
@@ -35,6 +31,8 @@ import {
 } from "@/components/dashboard/dashboard-screen-helpers";
 import { queryKeys } from "@/lib/query/query-keys";
 import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
+import { useDebugHealthQuery } from "@/lib/query/use-debug-health-query";
+import { useDebugStatusQuery } from "@/lib/query/use-debug-status-query";
 import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
 
 const DEFAULT_CHAIN_ID = "369";
@@ -51,21 +49,8 @@ export function DashboardScreen() {
 
   const trackedWalletsQuery = useTrackedWalletsQuery();
 
-  const healthQuery = useQuery({
-    queryKey: queryKeys.debug.health(),
-    queryFn: fetchDebugHealth,
-    retry: false,
-    staleTime: 15_000,
-    gcTime: 5 * 60_000,
-  });
-
-  const statusQuery = useQuery({
-    queryKey: queryKeys.debug.status(),
-    queryFn: fetchDebugStatus,
-    retry: false,
-    staleTime: 10_000,
-    gcTime: 5 * 60_000,
-  });
+  const healthQuery = useDebugHealthQuery({ refetchInterval: false });
+  const statusQuery = useDebugStatusQuery({ refetchInterval: false });
 
   const dashboardQuery = useDashboardQuery({
     walletAddress: submittedParams?.walletAddress ?? "",
