@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { runManualSync } from "@/lib/api/debug-client";
-import { queryKeys } from "@/lib/query/query-keys";
+import { invalidateDebugOperationQueries } from "@/lib/query/invalidation";
 
 /**
  * Shared TanStack Query mutation hook for manual debug sync operations.
@@ -17,8 +17,7 @@ export function useManualSyncMutation() {
     mutationFn: (args: Parameters<typeof runManualSync>[0]) => runManualSync(args),
     retry: false,
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.debug.status() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.debug.health() });
+      invalidateDebugOperationQueries(queryClient);
     },
   });
 }

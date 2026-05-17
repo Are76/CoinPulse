@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { runRebuild } from "@/lib/api/debug-client";
-import { queryKeys } from "@/lib/query/query-keys";
+import { invalidateDebugOperationQueries } from "@/lib/query/invalidation";
 
 /**
  * Shared TanStack Query mutation hook for debug rebuild operations.
@@ -17,8 +17,7 @@ export function useRebuildMutation() {
     mutationFn: (args: Parameters<typeof runRebuild>[0]) => runRebuild(args),
     retry: false,
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.debug.status() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.debug.health() });
+      invalidateDebugOperationQueries(queryClient);
     },
   });
 }
