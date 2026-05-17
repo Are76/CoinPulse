@@ -2,11 +2,13 @@
 
 ## 1. Purpose
 
-CoinPulse V1 is PulseChain-first and backend-truth-first. The next analytics work must make token identity and origin metadata explicit before native PnL, bridge attribution, richer analytics, or multi-chain expansion are planned or implemented.
+CoinPulse V1 is PulseChain-first and backend-truth-first. The next analytics work must keep token identity and origin metadata explicit before native PnL, bridge attribution, richer analytics, or multi-chain expansion are planned or implemented.
 
 Token identity is a prerequisite because PnL, pricing, ledger grouping, materialized balances, bridge attribution, and analytics all depend on knowing exactly which asset is being discussed. Symbols and names are useful display metadata, but they are unsafe as accounting keys because the same symbol can exist on multiple contracts, multiple chains, and multiple token variants. Origin metadata is also needed before bridge or native-vs-wrapped analytics can be represented without guessing.
 
-This PR is documentation-only. It adds this plan and intentionally does not change source code, tests, schema, routes, package files, pricing logic, PnL formulas, dashboard UI, query hooks, or API clients.
+`docs/token-metadata-trust-source-policy.md` is now the required trust/source vocabulary for any future origin, bridge, native/wrapped, verified metadata, or stronger metadata implementation. This plan must be read as an identity/origin planning document layered on top of that policy, not as a duplicate policy or a separate source of truth for metadata trust semantics.
+
+This document is documentation-only. It intentionally does not change source code, tests, schema, routes, package files, pricing logic, PnL formulas, dashboard UI, query hooks, or API clients.
 
 ## 2. Current state
 
@@ -55,6 +57,8 @@ Current docs already prohibit symbol-based accounting identity. `docs/data-fetch
 
 The following rules are non-negotiable for future implementation:
 
+Token identity remains the chain-safe backend identity layer. Metadata trust/status is a separate policy layer described in `docs/token-metadata-trust-source-policy.md`; a token can have a stable backend identity while its symbol, name, decimals, origin hint, or bridge hint remains `unknown`, `stale`, `conflict`, or `rejected` under that policy.
+
 1. **Token identity must be `chainId + normalized contract address`.** For ERC-20-like assets, the canonical contract address must be normalized before it is used in persisted identity, query keys, ledger grouping, pricing lookup, PnL lookup, or analytics grouping.
 2. **Symbol/name alone must never be identity.** `symbol` and `name` are display metadata only. They must not be used as database uniqueness, cache identity, PnL identity, pricing identity, bridge identity, or analytics identity.
 3. **Native coin identity must be explicit.** Native PLS must use a deterministic native identity and must not be confused with wrapped PLS or native-like ERC-20 contracts. A zero-address placeholder can be display or compatibility metadata only when the backend contract defines that convention.
@@ -66,7 +70,9 @@ The following rules are non-negotiable for future implementation:
 
 ## 4. Origin metadata concepts
 
-Future token origin metadata should use explicit, descriptive statuses. These statuses describe what the backend knows about an asset's origin; they are not valuation claims, safety claims, liquidity claims, or trust guarantees.
+Future token origin metadata should separate **classification** from **trust/status**. Origin classifications describe what the backend believes the asset relationship is; trust/status fields describe whether the evidence is usable under `docs/token-metadata-trust-source-policy.md`.
+
+Possible future origin classifications, subject to the policy status layer, include:
 
 - **`native`** — the chain's native coin, such as PulseChain PLS, represented through an explicit native asset identity rather than an ERC-20 contract identity.
 - **`bridged`** — an asset whose current chain representation is associated with a source-chain asset through bridge evidence or trusted metadata.
@@ -74,6 +80,8 @@ Future token origin metadata should use explicit, descriptive statuses. These st
 - **`canonical`** — the backend's current canonical representation for an asset within a defined chain or ecosystem context, supported by explicit metadata policy.
 - **`synthetic`** — an asset that tracks or represents another asset without being the same contract/native asset, where the relationship is metadata only unless ledger evidence supports stronger claims.
 - **`unknown`** — the backend does not have enough trusted evidence to classify origin. This must be the default for unclassified assets.
+
+Origin classification must use the policy's trust/status vocabulary (`unknown`, `observed`, `seeded`, `manual`, `verified`, `stale`, `conflict`, and `rejected`) for the evidence behind the classification. Classification must default to `unknown` when evidence is missing, stale beyond the applicable threshold, conflicting, rejected, unavailable, or not mapped into an allowed policy source kind.
 
 Origin metadata must not imply price equivalence, peg stability, bridge solvency, redemption guarantees, or accounting fungibility. For example, a bridged stablecoin or pDAI-like token must not be assumed to equal $1 or to equal another same-symbol token without backend price observations and explicit metadata provenance.
 
@@ -91,7 +99,9 @@ tokenIdentity: {
 }
 
 tokenOrigin: {
-  status: "native" | "bridged" | "wrapped" | "canonical" | "synthetic" | "unknown";
+  classification: "native" | "bridged" | "wrapped" | "canonical" | "synthetic" | "unknown";
+  metadataStatus: "unknown" | "observed" | "seeded" | "manual" | "verified" | "stale" | "conflict" | "rejected";
+  sourceKind: "rpc_observed" | "seed_data" | "manual_override" | "trusted_registry" | "derived_internal" | "unknown";
   sourceChainId: number | null;
   sourceContractAddress: string | null;
   bridgeName: string | null;
@@ -105,9 +115,10 @@ Potential project-specific adjustments:
 - Keep existing `assetId` fields during migration for compatibility, but add a structured `tokenIdentity` object beside them rather than silently changing current DTO fields.
 - Use `assetIdentity` instead of `tokenIdentity` if the field must cover LP tokens, stake receipt positions, native assets, and future non-ERC-20 assets.
 - Use `origin` or `assetOrigin` instead of `tokenOrigin` if the metadata applies beyond fungible ERC-20 tokens.
-- Keep source-chain and bridge fields nullable until evidence exists. `unknown` with null details is preferable to invented classification.
+- Keep source-chain and bridge fields nullable until evidence exists. `classification: "unknown"` with null details is preferable to invented classification.
+- Use `metadataStatus`, `sourceKind`, provenance timestamps, confidence, and reason fields from `docs/token-metadata-trust-source-policy.md` rather than defining a competing trust vocabulary in this plan.
 
-If schema changes are later proposed, they should be additive and should preserve deterministic rebuildability. No schema change is made by this documentation PR.
+If schema changes are later proposed, they should be additive and should preserve deterministic rebuildability. This document makes no schema change.
 
 ## 6. Required provenance
 
@@ -115,11 +126,11 @@ Future token metadata must expose provenance and status clearly enough that the 
 
 Required future provenance fields or equivalents:
 
-- **Source of metadata:** for example seed data, RPC, manual operator override, token list, bridge registry, or internal classifier.
+- **Source of metadata:** one of the source kinds defined in `docs/token-metadata-trust-source-policy.md`, such as `rpc_observed`, `seed_data`, `manual_override`, `trusted_registry`, `derived_internal`, or `unknown`.
 - **Observed/imported timestamp:** `observedAt`, `importedAt`, or both, depending on whether the value was observed from chain/provider state or imported from a maintained list.
 - **Confidence:** a backend-owned confidence status such as `high`, `medium`, `low`, or `unknown`.
-- **Stale/unknown handling:** explicit status and reason when metadata is stale, absent, unsupported, or not yet classified.
-- **Conflict handling:** rejection or conflict reason when sources disagree on decimals, symbol, name, origin, bridge, or source-chain mapping.
+- **Stale/unknown handling:** explicit policy status and reason when metadata is stale, absent, unsupported, rejected, conflicting, or not yet classified.
+- **Conflict handling:** rejection or conflict reason when sources disagree on decimals, symbol, name, origin, bridge, or source-chain mapping; conflict and rejected evidence must keep origin classification `unknown`.
 
 Existing `TokenMetadataSource` already records source kind, source reference, decimals, optional symbol/name, and observed time. Future metadata work should extend the same provenance discipline instead of replacing it with frontend inference.
 
@@ -149,7 +160,7 @@ Materialized portfolio state is derived from canonical ledger truth. Token metad
 
 ### `ledgerCoverage`
 
-`ledgerCoverage` describes the persisted ledger block range backing materialized dashboard state. Future origin metadata should not exceed ledger coverage claims. Bridge attribution, source-chain attribution, or origin classification should report `unknown` or low confidence when the ledger/raw evidence is incomplete.
+`ledgerCoverage` describes the persisted ledger block range backing materialized dashboard state. Future origin metadata should not exceed ledger coverage claims. Bridge attribution, source-chain attribution, or origin classification should report `unknown` when the ledger/raw evidence is incomplete, stale, conflicting, rejected, or unsupported by an allowed policy source/status.
 
 ### Pricing status endpoint
 
@@ -161,7 +172,7 @@ Wallet import and tracked wallet flows are chain-scoped. Future token metadata s
 
 ### Future bridge attribution
 
-Bridge/source attribution should come after identity and provenance are explicit. A future bridge classifier must be unknown-first, evidence-based, and additive. It should not classify assets by symbol, stablecoin branding, or frontend display names.
+Bridge/source attribution should come after identity and provenance are explicit and after the trust/source policy has a tested mapping in backend contracts. A future bridge classifier must be unknown-first, evidence-based, additive, and dependent on allowed policy source kinds and metadata statuses. It must not classify assets by symbol, name, stablecoin branding, route labels, icons, frontend display names, or price-source labels.
 
 ## 8. Known risks
 
@@ -180,14 +191,15 @@ Bridge/source attribution should come after identity and provenance are explicit
 
 Each item should be a separate bounded future PR:
 
-1. Audit current token metadata fields, seed data, generated fixtures, route fixtures, and contract tests for every place that uses `assetId`, `assetAddress`, `tokenAddress`, `symbol`, `name`, or `decimals`.
-2. Add contract tests proving symbol is not identity for dashboard DTOs, pricing lookups, PnL grouping, and any future token metadata routes.
-3. Add backend token identity DTO fields if missing, preferably as additive `tokenIdentity`/`assetIdentity` fields alongside existing `assetId` fields.
-4. Add metadata provenance/status fields for identity and display metadata, including source, observed/imported time, confidence, stale handling, and conflict/rejection reason.
-5. Add origin classification as unknown-first metadata. The first implementation should safely return `unknown` unless backend evidence supports a stronger status.
-6. Add bridge/source attribution only when ledger evidence, raw data, or trusted backend metadata supports it without weakening deterministic rebuildability.
-7. Only later plan or implement native PnL, after historical native price observations, origin/identity metadata, and event-level provenance are explicit.
-8. Only later add richer analytics UI, and only from backend DTO fields that expose statuses, warnings, provenance, and coverage without frontend inference.
+1. Add contract tests and policy-mapping tests that prove the `docs/token-metadata-trust-source-policy.md` status/source vocabulary is preserved for token metadata, including stale, conflict, rejected, and unknown cases.
+2. Audit current token metadata fields, seed data, generated fixtures, route fixtures, and contract tests for every place that uses `assetId`, `assetAddress`, `tokenAddress`, `symbol`, `name`, or `decimals`.
+3. Add contract tests proving symbol is not identity for dashboard DTOs, pricing lookups, PnL grouping, and any future token metadata routes.
+4. Add backend token identity DTO fields only if missing, preferably as additive `tokenIdentity`/`assetIdentity` fields alongside existing `assetId` fields.
+5. Add metadata provenance/status fields for identity and display metadata, using the policy source/status vocabulary for source, observed/imported time, confidence, stale handling, and conflict/rejection reason.
+6. Add origin classification only after policy mapping is covered by tests. The first implementation should safely return `classification: "unknown"` unless backend evidence maps to an allowed policy source/status.
+7. Add bridge/source attribution only when ledger evidence, raw data, or trusted backend metadata supports it without weakening deterministic rebuildability and without inferring from symbols, names, stablecoin branding, route labels, icons, or frontend display text.
+8. Only later plan or implement native PnL, after historical native price observations, origin/identity metadata, and event-level provenance are explicit.
+9. Only later add richer analytics UI, and only from backend DTO fields that expose statuses, warnings, provenance, and coverage without frontend inference.
 
 ## 10. Non-goals
 
@@ -209,8 +221,8 @@ This documentation plan does not include:
 
 ## 11. Decision
 
-Token identity must be explicit before analytics expand. The safe identity baseline is chain-safe backend identity: `chainId + normalized contract address` for ERC-20-like assets and an explicit deterministic identity for native coins.
+Token identity must be explicit before analytics expand. The safe identity baseline is chain-safe backend identity: `chainId + normalized contract address` for ERC-20-like assets and an explicit deterministic identity for native coins. Token metadata trust/status remains a separate policy layer governed by `docs/token-metadata-trust-source-policy.md`.
 
-Unknown origin is safer than invented origin. Origin metadata must default to `unknown` until backend-owned evidence supports a stronger classification.
+Unknown origin is safer than invented origin. Origin metadata must default to `unknown` until backend-owned evidence maps to an allowed policy source/status and supports a stronger classification. Missing, stale, conflicting, or rejected evidence must not be promoted into bridge, native/wrapped, canonical, or synthetic claims.
 
 Backend-owned metadata comes first, UI second. The backend must own token identity, origin, provenance, freshness, confidence, and conflict status before the frontend renders richer analytics or bridge/native PnL surfaces.
