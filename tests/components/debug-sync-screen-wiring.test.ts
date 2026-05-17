@@ -12,7 +12,30 @@ function readDebugSyncScreenSource() {
   return fs.readFileSync(DEBUG_SYNC_SCREEN_PATH, "utf8");
 }
 
-describe("debug-sync-screen mutation wiring", () => {
+describe("debug-sync-screen TanStack Query wiring", () => {
+  it("wires debug metadata reads through shared query hooks without changing operator state handling", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).toContain(
+      'import { useDebugHealthQuery } from "@/lib/query/use-debug-health-query";',
+    );
+    expect(source).toContain(
+      'import { useDebugStatusQuery } from "@/lib/query/use-debug-status-query";',
+    );
+    expect(source).not.toContain("fetchDebugHealth");
+    expect(source).not.toContain("fetchDebugStatus");
+    expect(source).not.toContain("useEffect");
+    expect(source).toContain("const healthQuery = useDebugHealthQuery();");
+    expect(source).toContain("const statusQuery = useDebugStatusQuery();");
+    expect(source).toContain("health: healthQuery.data,");
+    expect(source).toContain("healthError: healthQuery.error,");
+    expect(source).toContain("status: statusQuery.data,");
+    expect(source).toContain("statusError: statusQuery.error,");
+    expect(source).toContain('title="Backend debug metadata failed"');
+    expect(source).toContain("return { kind: \"ready\", health, status };");
+    expect(source).toContain("return { kind: \"loading\" };");
+  });
+
   it("wires manual sync submit through the shared mutation hook without changing existing sync state handling", () => {
     const source = readDebugSyncScreenSource();
 
