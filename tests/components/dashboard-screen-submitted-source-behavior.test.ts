@@ -153,6 +153,13 @@ describe("DashboardScreen submitted wallet source behavior", () => {
     vi.clearAllMocks();
   });
 
+  it("disables dashboard metadata polling through shared debug query hooks", () => {
+    renderDashboard();
+
+    expect(mockUseDebugHealthQuery).toHaveBeenCalledWith({ refetchInterval: false });
+    expect(mockUseDebugStatusQuery).toHaveBeenCalledWith({ refetchInterval: false });
+  });
+
   it("selecting a tracked wallet then submitting shows the submit-time tracked source", () => {
     renderDashboard();
 
