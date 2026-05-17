@@ -748,7 +748,7 @@ function formatMetadataProvenanceStatus(
     case "verified":
     case "conflicting":
     case "stale":
-      return "Metadata status provided";
+      return `Metadata status: ${status}`;
   }
 }
 

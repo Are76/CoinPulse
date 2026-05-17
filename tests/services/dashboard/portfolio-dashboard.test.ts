@@ -392,6 +392,119 @@ describe("assemblePortfolioDashboard", () => {
     expect(result.tokenPositions[0]).not.toHaveProperty("tokenOrigin");
   });
 
+  it("does not promote unknown token metadata from pricing availability or pricing confidence", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () =>
+        createResolvedPrice({
+          selected: createPriceObservation({
+            confidence: "0.99",
+            sourceType: "DEXSCREENER",
+            sourceId: "dexscreener:pulsechain:0xpair",
+          }),
+        }),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    expect(result.tokenPositions[0]).toMatchObject({
+      metadataProvenance: {
+        status: "unknown",
+        source: "unknown",
+        observedAt: null,
+        confidence: "unknown",
+        conflictReason: null,
+      },
+      pricing: {
+        status: "available",
+        sourceType: "DEXSCREENER",
+        sourceId: "dexscreener:pulsechain:0xpair",
+        confidence: "0.99",
+      },
+    });
+    expect(result.tokenPositions[0]).not.toHaveProperty("tokenOrigin");
+    expect(result.tokenPositions[0]).not.toHaveProperty("bridgeClassification");
+  });
+
+  it("keeps stablecoin-like unsupported metadata evidence unknown without origin or peg inference", async () => {
+    const stablecoinLikeAsset = "chain:369:erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: stablecoinLikeAsset,
+            assetAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            balanceQuantity: "5",
+            decimals: 6,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+        tokens: [
+          {
+            chainId: CHAIN_ID,
+            assetId: stablecoinLikeAsset,
+            decimalsSource: "SYMBOL:USDC",
+            metadataSources: [
+              {
+                sourceKind: "SYMBOL:USDC",
+                observedAt: new Date("2026-05-08T11:59:00.000Z"),
+              },
+            ],
+          },
+        ],
+      }) as never,
+      resolvePrice: async (args) =>
+        createResolvedPrice({
+          selected: createPriceObservation({
+            assetId: args.assetId,
+            assetAddress: args.assetId.split(":").at(-1) ?? null,
+          }),
+        }),
+      calculatePnl: async (args) => createPnlResult({ assetId: args.assetId }),
+    });
+
+    expect(result.tokenPositions[0]).toMatchObject({
+      assetId: stablecoinLikeAsset,
+      assetAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      metadataProvenance: {
+        status: "unknown",
+        source: "unknown",
+        observedAt: null,
+        confidence: "unknown",
+        conflictReason: null,
+      },
+    });
+    // Metadata status values currently include verified/conflicting/stale/unknown/observed,
+    // but no rejected/native/bridged/wrapped/canonical/trusted/origin status exists yet.
+    expect(result.tokenPositions[0]).not.toHaveProperty("tokenOrigin");
+    expect(result.tokenPositions[0]).not.toHaveProperty("bridgeClassification");
+    expect(result.tokenPositions[0]).not.toHaveProperty("peg");
+  });
+
   it("includes persisted materialization metadata when provenance exists", async () => {
     const result = await assemblePortfolioDashboard({
       wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
