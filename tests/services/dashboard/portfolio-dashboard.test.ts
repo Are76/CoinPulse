@@ -767,7 +767,11 @@ describe("assemblePortfolioDashboard", () => {
       decimals: null,
       pricing: { status: "unavailable" },
       valuation: { status: "unavailable", valueQuote: null },
-      pnl: { status: "unavailable" },
+      pnl: {
+        status: "unavailable",
+        unrealizedPnl: null,
+        markPrice: null,
+      },
     });
     expect(result.pnlCoverage).toMatchObject({
       status: "unavailable",
@@ -851,6 +855,128 @@ describe("assemblePortfolioDashboard", () => {
     });
 
     expect(result.tokenPositions[0]?.pricing.status).toBe("low_confidence_price");
+  });
+
+  it("propagates stale mark price conditions to token pnl status without zero coercion", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => ({
+        selected: null,
+        rejected: [{ id: "obs-stale", reason: "STALE" }],
+      }),
+      calculatePnl: async () =>
+        createPnlResult({
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [
+            createPnlWarning({
+              code: "MARK_PRICE_UNAVAILABLE",
+              detail: "Mark price is stale and unavailable for dashboard PnL.",
+            }),
+          ],
+        }),
+    });
+
+    expect(result.tokenPositions[0]?.pricing).toMatchObject({
+      status: "stale_price",
+      rejectedReasons: ["STALE"],
+    });
+    expect(result.tokenPositions[0]?.valuation).toEqual({ status: "stale_price", valueQuote: null });
+    expect(result.tokenPositions[0]?.pnl).toMatchObject({
+      status: "stale_price",
+      unrealizedPnl: null,
+      markPrice: null,
+      warnings: [expect.objectContaining({ code: "MARK_PRICE_UNAVAILABLE" })],
+    });
+    expect(result.summary.warnings).toEqual([
+      `pnl-warning:MARK_PRICE_UNAVAILABLE`,
+      `pricing-unavailable:${TOKEN_ASSET}:stale_price`,
+    ]);
+    expect(result.pnlCoverage).toMatchObject({
+      status: "unavailable",
+      reasons: ["unpriced", "stale_price"],
+      affectedSections: ["summary", "tokens"],
+      unpricedPositionsCount: 1,
+      stalePricePositionsCount: 1,
+    });
+  });
+
+  it("propagates low-confidence mark price conditions to token pnl status without zero coercion", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => ({
+        selected: null,
+        rejected: [{ id: "obs-low-confidence", reason: "LOW_CONFIDENCE" }],
+      }),
+      calculatePnl: async () =>
+        createPnlResult({
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [
+            createPnlWarning({
+              code: "MARK_PRICE_UNAVAILABLE",
+              detail: "Mark price was rejected below confidence threshold.",
+            }),
+          ],
+        }),
+    });
+
+    expect(result.tokenPositions[0]?.pricing).toMatchObject({
+      status: "low_confidence_price",
+      rejectedReasons: ["LOW_CONFIDENCE"],
+    });
+    expect(result.tokenPositions[0]?.valuation).toEqual({ status: "low_confidence_price", valueQuote: null });
+    expect(result.tokenPositions[0]?.pnl).toMatchObject({
+      status: "low_confidence_price",
+      unrealizedPnl: null,
+      markPrice: null,
+      warnings: [expect.objectContaining({ code: "MARK_PRICE_UNAVAILABLE" })],
+    });
+    expect(result.summary.warnings).toEqual([
+      `pnl-warning:MARK_PRICE_UNAVAILABLE`,
+      `pricing-unavailable:${TOKEN_ASSET}:low_confidence_price`,
+    ]);
+    expect(result.pnlCoverage).toMatchObject({
+      status: "unavailable",
+      reasons: ["unpriced"],
+      affectedSections: ["summary", "tokens"],
+      unpricedPositionsCount: 1,
+      stalePricePositionsCount: 0,
+    });
   });
 
   it("preserves current PnL contract fields without exposing unsafe percentage metrics", async () => {
@@ -985,6 +1111,10 @@ describe("assemblePortfolioDashboard", () => {
       markPrice: null,
       warnings: [expect.objectContaining({ code: "INSUFFICIENT_COST_BASIS" })],
     });
+    expect(result.tokenPositions[0]?.pnl.realizedPnl).not.toBe("0");
+    expect(result.tokenPositions[0]?.pnl.unrealizedPnl).toBeNull();
+    expect(result.tokenPositions[0]?.pnl.markPrice).toBeNull();
+    expect(result.tokenPositions[0]?.valuation.valueQuote).toBe("10");
     expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("pnlPercent");
     expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("roi");
     expect(result.tokenPositions[0]?.pnl).not.toHaveProperty("nativePnl");
@@ -1040,6 +1170,105 @@ describe("assemblePortfolioDashboard", () => {
       ],
     });
     expect(result.summary.warnings).toContain("pnl-warning:MARK_PRICE_UNAVAILABLE");
+  });
+
+  it("keeps unsupported action group warnings explicit without fabricated token PnL", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () =>
+        createPnlResult({
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [
+            createPnlWarning({
+              code: "UNSUPPORTED_ACTION_GROUP",
+              detail: "Unsupported action group cannot be converted into deterministic PnL.",
+            }),
+          ],
+        }),
+    });
+
+    expect(result.tokenPositions[0]?.pnl).toMatchObject({
+      status: "incomplete_basis",
+      holdingsQuantity: "5",
+      unrealizedPnl: null,
+      markPrice: null,
+      warnings: [
+        {
+          code: "UNSUPPORTED_ACTION_GROUP",
+          detail: "Unsupported action group cannot be converted into deterministic PnL.",
+        },
+      ],
+    });
+    expect(result.summary.warnings).toEqual(["pnl-warning:UNSUPPORTED_ACTION_GROUP"]);
+    expect(result.pnlCoverage).toMatchObject({
+      status: "unavailable",
+      reasons: ["insufficient_cost_basis"],
+      incompleteBasisPositionsCount: 1,
+      pricedPositionsCount: 0,
+    });
+  });
+
+  it("keeps pnl warning summary aggregation stable and de-duplicated by warning code", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () =>
+        createPnlResult({
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [
+            createPnlWarning({ code: "MARK_PRICE_UNAVAILABLE", detail: "mark unavailable one" }),
+            createPnlWarning({ code: "INSUFFICIENT_COST_BASIS", detail: "basis incomplete" }),
+            createPnlWarning({ code: "MARK_PRICE_UNAVAILABLE", detail: "mark unavailable two" }),
+          ],
+        }),
+    });
+
+    expect(result.tokenPositions[0]?.pnl.warnings.map((warning) => warning.code)).toEqual([
+      "MARK_PRICE_UNAVAILABLE",
+      "INSUFFICIENT_COST_BASIS",
+      "MARK_PRICE_UNAVAILABLE",
+    ]);
+    expect(result.summary.warnings).toEqual([
+      "pnl-warning:INSUFFICIENT_COST_BASIS",
+      "pnl-warning:MARK_PRICE_UNAVAILABLE",
+    ]);
   });
 
   it("includes lp and stake positions without fabricating valuation", async () => {
@@ -1104,11 +1333,29 @@ describe("assemblePortfolioDashboard", () => {
     expect(result.summary.valuationStatus).toBe("partial");
     expect(result.lpPositions[0]).toMatchObject({
       valuation: { status: "unsupported", valueQuote: null },
-      pnl: { status: "unsupported", realizedPnl: null, unrealizedPnl: null },
+      pnl: {
+        status: "unsupported",
+        holdingsQuantity: null,
+        averageCost: null,
+        realizedPnl: null,
+        unrealizedPnl: null,
+        markPrice: null,
+        totalAcquiredQuantity: null,
+        totalDisposedQuantity: null,
+      },
     });
     expect(result.stakePositions[0]).toMatchObject({
       valuation: { status: "unsupported", valueQuote: null },
-      pnl: { status: "unsupported", realizedPnl: null, unrealizedPnl: null },
+      pnl: {
+        status: "unsupported",
+        holdingsQuantity: null,
+        averageCost: null,
+        realizedPnl: null,
+        unrealizedPnl: null,
+        markPrice: null,
+        totalAcquiredQuantity: null,
+        totalDisposedQuantity: null,
+      },
     });
     expect(result.pnlCoverage).toMatchObject({
       status: "partial",
