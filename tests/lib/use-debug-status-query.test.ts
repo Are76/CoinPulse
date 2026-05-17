@@ -75,6 +75,22 @@ describe("useDebugStatusQuery", () => {
     expect(queryOptions.retry).toBe(false);
   });
 
+  it("allows polling to be disabled for dashboard metadata", async () => {
+    vi.spyOn(debugClient, "fetchDebugStatus").mockResolvedValue(MOCK_STATUS);
+    const { queryClient, Wrapper } = makeWrapper();
+
+    const { result } = renderHook(() => useDebugStatusQuery({ refetchInterval: false }), {
+      wrapper: Wrapper,
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const query = queryClient.getQueryCache().find({ queryKey: queryKeys.debug.status() });
+    expect(query).toBeDefined();
+    const queryOptions = query!.options as { refetchInterval?: unknown };
+    expect(queryOptions.refetchInterval).toBe(false);
+  });
+
   it("does not fetch debug status when disabled", async () => {
     vi.spyOn(debugClient, "fetchDebugStatus").mockResolvedValue(MOCK_STATUS);
     const { Wrapper } = makeWrapper();

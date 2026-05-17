@@ -9,6 +9,7 @@ export const DEBUG_HEALTH_REFETCH_INTERVAL = 30_000;
 
 export type UseDebugHealthQueryParams = {
   enabled?: boolean;
+  refetchInterval?: number | false;
 };
 
 /**
@@ -17,7 +18,10 @@ export type UseDebugHealthQueryParams = {
  * Calls the existing debug client fetcher and surfaces the backend DTO/error as-is.
  * This hook is read-only and does not infer or compute operational truth in the UI.
  */
-export function useDebugHealthQuery({ enabled = true }: UseDebugHealthQueryParams = {}) {
+export function useDebugHealthQuery({
+  enabled = true,
+  refetchInterval = DEBUG_HEALTH_REFETCH_INTERVAL,
+}: UseDebugHealthQueryParams = {}) {
   return useQuery({
     queryKey: queryKeys.debug.health(),
     queryFn: fetchDebugHealth,
@@ -25,6 +29,6 @@ export function useDebugHealthQuery({ enabled = true }: UseDebugHealthQueryParam
     retry: false,
     staleTime: DEBUG_HEALTH_STALE_TIME,
     gcTime: DEBUG_HEALTH_GC_TIME,
-    refetchInterval: DEBUG_HEALTH_REFETCH_INTERVAL,
+    refetchInterval,
   });
 }
