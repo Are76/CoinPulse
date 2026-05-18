@@ -1092,6 +1092,196 @@ describe("assemblePortfolioDashboard", () => {
     });
   });
 
+
+  it("aggregates summary warnings by backend code and asset identity instead of display symbol", async () => {
+    const sameSymbolAlpha = "chain:369:erc20:0xcccccccccccccccccccccccccccccccccccccccc";
+    const sameSymbolBeta = "chain:369:erc20:0xdddddddddddddddddddddddddddddddddddddddd";
+
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: sameSymbolAlpha,
+            assetAddress: "0xcccccccccccccccccccccccccccccccccccccccc",
+            balanceQuantity: "10",
+            decimals: 6,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: sameSymbolBeta,
+            assetAddress: "0xdddddddddddddddddddddddddddddddddddddddd",
+            balanceQuantity: "7",
+            decimals: 6,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+        // Dashboard DTOs intentionally do not expose symbol/name fields. These two
+        // balances model display-equivalent token records by sharing metadata provenance
+        // evidence while keeping distinct asset ids and contract addresses.
+        tokens: [
+          {
+            chainId: CHAIN_ID,
+            assetId: sameSymbolAlpha,
+            decimalsSource: "RPC",
+            metadataSources: [{ sourceKind: "RPC", observedAt: new Date("2026-05-08T11:59:00.000Z") }],
+          },
+          {
+            chainId: CHAIN_ID,
+            assetId: sameSymbolBeta,
+            decimalsSource: "RPC",
+            metadataSources: [{ sourceKind: "RPC", observedAt: new Date("2026-05-08T11:59:30.000Z") }],
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => ({
+        selected: null,
+        rejected: [],
+      }),
+      calculatePnl: async (args) =>
+        createPnlResult({
+          assetId: args.assetId,
+          holdingsQuantity: args.assetId === sameSymbolAlpha ? "10" : "7",
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [
+            createPnlWarning({
+              code: "MARK_PRICE_UNAVAILABLE",
+              detail: `Mark price unavailable for ${args.assetId}.`,
+            }),
+          ],
+        }),
+    });
+
+    expect(result.tokenPositions.map((position) => position.assetId)).toEqual([sameSymbolAlpha, sameSymbolBeta]);
+    expect(result.tokenPositions.map((position) => position.assetAddress)).toEqual([
+      "0xcccccccccccccccccccccccccccccccccccccccc",
+      "0xdddddddddddddddddddddddddddddddddddddddd",
+    ]);
+    expect(result.tokenPositions.map((position) => position.metadataProvenance)).toEqual([
+      {
+        status: "observed",
+        source: "chain",
+        observedAt: "2026-05-08T11:59:00.000Z",
+        confidence: "medium",
+        conflictReason: null,
+      },
+      {
+        status: "observed",
+        source: "chain",
+        observedAt: "2026-05-08T11:59:30.000Z",
+        confidence: "medium",
+        conflictReason: null,
+      },
+    ]);
+    expect(result.summary.warnings).toEqual([
+      "pnl-warning:MARK_PRICE_UNAVAILABLE",
+      `pricing-unavailable:${sameSymbolAlpha}:unavailable`,
+      `pricing-unavailable:${sameSymbolBeta}:unavailable`,
+    ]);
+    expect(JSON.stringify(result.summary.warnings)).not.toMatch(/USDC|USD Coin|symbol|name/i);
+  });
+
+  it("keeps materialization warning aggregation keyed by backend code and asset identity", async () => {
+    const sameSymbolAlpha = "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const sameSymbolBeta = "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: sameSymbolAlpha,
+            assetAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            balanceQuantity: "-1",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: sameSymbolBeta,
+            assetAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            balanceQuantity: "-1",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        materializationStates: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            status: "COMPLETED",
+            completedSuccessfully: true,
+            lastAttemptedAt: new Date("2026-05-08T12:03:00.000Z"),
+            latestMaterializedAt: new Date("2026-05-08T12:03:30.000Z"),
+            sourceLedgerFromBlock: 100n,
+            sourceLedgerToBlock: 120n,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+            warningCount: 2,
+            warningDetails: [
+              `negative-token-balance:${sameSymbolAlpha}:-1`,
+              `negative-token-balance:${sameSymbolBeta}:-1`,
+            ],
+            errorMessage: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async (args) =>
+        createResolvedPrice({
+          selected: createPriceObservation({
+            assetId: args.assetId,
+            assetAddress: args.assetId === sameSymbolAlpha
+              ? "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              : "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            price: "1",
+          }),
+        }),
+      calculatePnl: async (args) =>
+        createPnlResult({
+          assetId: args.assetId,
+          holdingsQuantity: "-1",
+          markPrice: "1",
+          unrealizedPnl: "-1",
+        }),
+    });
+
+    expect(result.materialization.warnings).toEqual([
+      {
+        code: "negative_token_balance",
+        message: `Negative materialized token balance for ${sameSymbolAlpha}: -1`,
+      },
+      {
+        code: "negative_token_balance",
+        message: `Negative materialized token balance for ${sameSymbolBeta}: -1`,
+      },
+    ]);
+    expect(result.materialization.negativeBalances.map((balance) => balance.assetId)).toEqual([
+      sameSymbolAlpha,
+      sameSymbolBeta,
+    ]);
+    expect(result.materialization.warningCount).toBe(2);
+  });
+
   it("preserves current PnL contract fields without exposing unsafe percentage metrics", async () => {
     const result = await assemblePortfolioDashboard({
       wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
