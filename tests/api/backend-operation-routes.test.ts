@@ -105,6 +105,68 @@ describe("POST /api/sync/manual", () => {
     expect(runWalletSync).not.toHaveBeenCalled();
   });
 
+  it("returns not found when the requested tracked wallet is absent", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue(null);
+
+    const { POST } = await import("../../app/api/sync/manual/route");
+    const response = await POST(
+      new Request("http://localhost/api/sync/manual", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          sourceFamilies: ["TRANSFERS"],
+          endBlock: "200",
+          policyLabel: "manual-dashboard-sync",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "WALLET_NOT_FOUND",
+        message: "Wallet not found for the requested chain.",
+      },
+    });
+    expect(runWalletSync).not.toHaveBeenCalled();
+  });
+
+  it("returns a safe internal error response for unexpected sync failures", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-1",
+      address: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+    });
+    runWalletSync.mockRejectedValue(new Error("rpc token secret leaked"));
+
+    const { POST } = await import("../../app/api/sync/manual/route");
+    const response = await POST(
+      new Request("http://localhost/api/sync/manual", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          sourceFamilies: ["TRANSFERS"],
+          endBlock: "200",
+          policyLabel: "manual-dashboard-sync",
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Internal server error.",
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("rpc token secret leaked");
+  });
+
   it("returns a structured 409 conflict when manual sync is blocked by an active rebuild", async () => {
     resolveTrackedWalletByAddress.mockResolvedValue({
       id: "wallet-1",
@@ -267,6 +329,98 @@ describe("POST /api/rebuild", () => {
       toBlock: 200n,
       sourceFamilies: ["TRANSFERS", "DEX"],
     });
+  });
+
+  it("returns a structured validation error for invalid rebuild input", async () => {
+    const { POST } = await import("../../app/api/rebuild/route");
+    const response = await POST(
+      new Request("http://localhost/api/rebuild", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "bad",
+          chainId: "oops",
+          fromBlock: "200",
+          toBlock: "100",
+          sourceFamilies: [],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "INVALID_INPUT",
+        message: "Invalid request input.",
+        details: expect.any(Array),
+      },
+    });
+    expect(resolveTrackedWalletByAddress).not.toHaveBeenCalled();
+    expect(runRebuildOperation).not.toHaveBeenCalled();
+  });
+
+  it("returns not found when the requested rebuild wallet is absent", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue(null);
+
+    const { POST } = await import("../../app/api/rebuild/route");
+    const response = await POST(
+      new Request("http://localhost/api/rebuild", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          fromBlock: "100",
+          toBlock: "200",
+          sourceFamilies: ["TRANSFERS"],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "WALLET_NOT_FOUND",
+        message: "Wallet not found for the requested chain.",
+      },
+    });
+    expect(runRebuildOperation).not.toHaveBeenCalled();
+  });
+
+  it("returns a safe internal error response for unexpected rebuild failures", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-1",
+      address: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+    });
+    runRebuildOperation.mockRejectedValue(
+      new Error("ledger secret stack detail"),
+    );
+
+    const { POST } = await import("../../app/api/rebuild/route");
+    const response = await POST(
+      new Request("http://localhost/api/rebuild", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          fromBlock: "100",
+          toBlock: "200",
+          sourceFamilies: ["TRANSFERS"],
+        }),
+      }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Internal server error.",
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("ledger secret stack detail");
   });
 
   it("returns a structured 409 conflict when rebuild is blocked by an active sync", async () => {

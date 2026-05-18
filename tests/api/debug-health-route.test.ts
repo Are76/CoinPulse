@@ -57,6 +57,27 @@ describe("GET /api/debug/health", () => {
 
     expect(response.status).toBe(503);
   });
+
+  it("returns a stable internal error response when health assembly throws", async () => {
+    getHealthReport.mockRejectedValue(
+      new Error("database password leaked in stack"),
+    );
+
+    const { GET } = await import("../../app/api/debug/health/route");
+    const response = await GET();
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body).toEqual({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Unable to determine backend health.",
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain(
+      "database password leaked in stack",
+    );
+  });
 });
 
 describe("GET /api/debug/status", () => {
@@ -69,7 +90,13 @@ describe("GET /api/debug/status", () => {
       status: "ok",
       timestamp: "2026-05-08T12:00:00.000Z",
       app: { env: "test" },
-      supportedChains: [{ chainId: 369, name: "PulseChain", nativeAssetId: "chain:369:native:PLS" }],
+      supportedChains: [
+        {
+          chainId: 369,
+          name: "PulseChain",
+          nativeAssetId: "chain:369:native:PLS",
+        },
+      ],
       sourceFamilies: ["TRANSFERS", "DEX", "LP", "STAKING", "NATIVE"],
       pricing: {
         persistedObservationsOnly: true,
@@ -108,7 +135,13 @@ describe("GET /api/debug/status", () => {
         status: "ok",
         timestamp: "2026-05-08T12:00:00.000Z",
         app: { env: "test" },
-        supportedChains: [{ chainId: 369, name: "PulseChain", nativeAssetId: "chain:369:native:PLS" }],
+        supportedChains: [
+          {
+            chainId: 369,
+            name: "PulseChain",
+            nativeAssetId: "chain:369:native:PLS",
+          },
+        ],
         sourceFamilies: ["TRANSFERS", "DEX", "LP", "STAKING", "NATIVE"],
         pricing: {
           persistedObservationsOnly: true,
