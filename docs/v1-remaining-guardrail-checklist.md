@@ -61,6 +61,7 @@ These tasks may still belong near V1, but only after the V1-next contract and po
 - [ ] Add per-asset pricing/metadata coverage diagnostics to pricing status only after source-health semantics remain stable and no UI has to infer coverage.
 - [ ] Add canonical transactions DTO planning and contract tests if needed as the next reusable DTO surface.
 - [ ] Define route-normalization compatibility strategy before renaming or duplicating routes such as `/api/portfolio/dashboard`.
+- [ ] Portfolio Intelligence Layer is documented as a V1-adjacent future module in `docs/portfolio-intelligence-layer-plan.md` and must remain documentation-only until deterministic DTO/status/provenance prerequisites are complete.
 
 ## 4. V2 / research only
 
