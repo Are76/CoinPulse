@@ -19,6 +19,44 @@ describe("query keys", () => {
     ).toEqual(["dashboard", "v1", 369, "0xabcdef", "fiat:usd", "latest"]);
   });
 
+
+  it("keeps dashboard, debug, pricing, and tracked-wallet keys free of token symbol or name identity", () => {
+    const forbiddenDisplayIdentity = ["USDC", "USD Coin", "PLS", "Pulse", "Wrapped PLS"];
+    const keys = [
+      queryKeys.debug.health(),
+      queryKeys.debug.status(),
+      queryKeys.dashboard({
+        schemaVersion: "v1",
+        chainId: 369,
+        walletAddress: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        quoteAsset: "fiat:usd",
+        asOf: "2026-05-08T12:04:00.000Z",
+      }),
+      queryKeys.prices.status(),
+      queryKeys.wallets.tracked(369),
+    ];
+
+    expect(keys).toEqual([
+      ["debug", "health"],
+      ["debug", "status"],
+      [
+        "dashboard",
+        "v1",
+        369,
+        "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "fiat:usd",
+        "2026-05-08T12:04:00.000Z",
+      ],
+      ["prices", "status"],
+      ["wallets", "tracked", 369],
+    ]);
+
+    const serializedKeys = JSON.stringify(keys);
+    for (const displayValue of forbiddenDisplayIdentity) {
+      expect(serializedKeys).not.toContain(displayValue);
+    }
+  });
+
   it("builds future chain-scoped and filtered keys", () => {
     expect(queryKeys.prices.status()).toEqual(["prices", "status"]);
     expect(queryKeys.wallets.tracked(369)).toEqual(["wallets", "tracked", 369]);
