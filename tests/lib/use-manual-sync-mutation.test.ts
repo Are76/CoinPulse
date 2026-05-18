@@ -48,6 +48,7 @@ function expectOnlyDebugMetadataInvalidated(invalidateQueries: ReturnType<typeof
   expect(invalidatedFamilies(invalidateQueries)).not.toContain("dashboard");
   expect(invalidatedFamilies(invalidateQueries)).not.toContain("wallets");
   expect(invalidatedFamilies(invalidateQueries)).not.toContain("prices");
+  expect(invalidatedFamilies(invalidateQueries)).not.toContain("transactions");
 }
 
 describe("useManualSyncMutation", () => {
