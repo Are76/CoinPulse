@@ -117,14 +117,15 @@ G7 is **complete for current hooks and mutation hooks** because this checklist d
 
 This status is intentionally limited to the hooks, mutation hooks, invalidation helpers, and production-used query keys present now. It does **not** claim future hooks are covered. Stable object/filter semantics for future filtered keys, including `transactions(...)`, remain a future-only note until such keys become production-used.
 
-Before creating an internal template folder or external data-fetching repository, CoinPulse still needs the remaining non-G7 blockers from `docs/data-fetching-template-readiness-audit.md` resolved, including release-cycle stability checkpoints, tracked-wallet stability, dashboard DTO stability, production-like operator-flow evidence, route-level contract-test closure, and CoinPulse-specific-vs-reusable workflow separation.
+Before creating an internal template folder or external data-fetching repository, CoinPulse still needs the remaining non-G7 blockers from `docs/data-fetching-template-readiness-audit.md` resolved, including release-cycle stability checkpoints, tracked-wallet stability, dashboard DTO stability, production-like operator-flow evidence, and CoinPulse-specific-vs-reusable workflow separation. PR #108 closed the previously listed G6 route-level gaps for current V1 routes, but future DTO/API routes still need route-contract coverage and index entries.
 
 ## 8. Recommended next blocker
 
-The next smallest safe blocker to address is **G6 route-level contract-test closure**:
+The next smallest safe blocker to address is the **G1 release-cycle stability checkpoint** for dashboard wallet selection and submitted dashboard query behavior:
 
-- add the six missing route-level tests identified in `docs/route-contract-coverage-index.md` for the debug health, manual sync, and rebuild route validation/not-found/internal-error branches;
-- keep the slice test-only unless an existing test exposes a real route behavior bug;
+- record whether the dashboard wallet-selection flow shipped through a full release cycle without selector, submitted-query, query-key, or DTO shape rework;
+- note that PR #108 closed the previously listed G6 route-level gaps for current V1 routes;
+- preserve the route-contract rule that future DTO/API routes still need success and applicable error coverage plus entries in `docs/route-contract-coverage-index.md`;
 - defer template folders, extraction, schema work, route shape changes, UI changes, pricing/PnL/accounting changes, RPC behavior changes, and chain-support changes.
 
-This is now smaller and safer than reopening G7 because PR #106 closed the current hook/mutation coverage gaps, while G6 still has exact current route-level test gaps documented.
+This is now smaller and safer than reopening G7 or G6 because PR #106 closed the current hook/mutation coverage gaps and PR #108 closed the current G6 route-level gaps.
