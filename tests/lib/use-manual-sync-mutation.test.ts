@@ -35,6 +35,21 @@ const MANUAL_SYNC_RESPONSE = {
   },
 };
 
+function invalidatedFamilies(invalidateQueries: ReturnType<typeof vi.fn>) {
+  return invalidateQueries.mock.calls.map(([filters]) =>
+    Array.isArray(filters?.queryKey) ? filters.queryKey[0] : undefined,
+  );
+}
+
+function expectOnlyDebugMetadataInvalidated(invalidateQueries: ReturnType<typeof vi.fn>) {
+  expect(invalidateQueries).toHaveBeenCalledTimes(2);
+  expect(invalidateQueries).toHaveBeenNthCalledWith(1, { queryKey: queryKeys.debug.status() });
+  expect(invalidateQueries).toHaveBeenNthCalledWith(2, { queryKey: queryKeys.debug.health() });
+  expect(invalidatedFamilies(invalidateQueries)).not.toContain("dashboard");
+  expect(invalidatedFamilies(invalidateQueries)).not.toContain("wallets");
+  expect(invalidatedFamilies(invalidateQueries)).not.toContain("prices");
+}
+
 describe("useManualSyncMutation", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -55,13 +70,7 @@ describe("useManualSyncMutation", () => {
 
     expect(debugClient.runManualSync).toHaveBeenCalledWith(MANUAL_SYNC_ARGS);
     expect(debugClient.runManualSync).toHaveBeenCalledTimes(1);
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.status() });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.health() });
-    expect(
-      invalidateQueries.mock.calls.some(([filters]) =>
-        Array.isArray(filters?.queryKey) && filters.queryKey[0] === "dashboard",
-      ),
-    ).toBe(false);
+    expectOnlyDebugMetadataInvalidated(invalidateQueries);
   });
 
   it("invalidates debug metadata and preserves backend errors on failure or conflict", async () => {
@@ -84,13 +93,7 @@ describe("useManualSyncMutation", () => {
     expect(result.current.error).toBe(backendError);
     expect((result.current.error as Error).message).toBe("Another operation is already running.");
     expect(debugClient.runManualSync).toHaveBeenCalledTimes(1);
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.status() });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.health() });
-    expect(
-      invalidateQueries.mock.calls.some(([filters]) =>
-        Array.isArray(filters?.queryKey) && filters.queryKey[0] === "dashboard",
-      ),
-    ).toBe(false);
+    expectOnlyDebugMetadataInvalidated(invalidateQueries);
   });
 
   it("does not block the mutation result on debug metadata invalidation promises", async () => {
