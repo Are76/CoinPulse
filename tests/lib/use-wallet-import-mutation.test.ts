@@ -33,6 +33,22 @@ const IMPORT_RESPONSE = {
   },
 };
 
+function invalidatedFamilies(invalidateQueries: ReturnType<typeof vi.fn>) {
+  return invalidateQueries.mock.calls.map(([filters]) =>
+    Array.isArray(filters?.queryKey) ? filters.queryKey[0] : undefined,
+  );
+}
+
+function expectOnlyWalletImportCachesInvalidated(invalidateQueries: ReturnType<typeof vi.fn>) {
+  expect(invalidateQueries).toHaveBeenCalledTimes(3);
+  expect(invalidateQueries).toHaveBeenNthCalledWith(1, { queryKey: queryKeys.debug.status() });
+  expect(invalidateQueries).toHaveBeenNthCalledWith(2, { queryKey: queryKeys.debug.health() });
+  expect(invalidateQueries).toHaveBeenNthCalledWith(3, { queryKey: queryKeys.wallets.tracked(369) });
+  expect(invalidatedFamilies(invalidateQueries)).not.toContain("dashboard");
+  expect(invalidatedFamilies(invalidateQueries)).not.toContain("prices");
+  expect(invalidatedFamilies(invalidateQueries)).not.toContain("transactions");
+}
+
 describe("useWalletImportMutation", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -51,14 +67,7 @@ describe("useWalletImportMutation", () => {
 
     expect(debugClient.importWallet).toHaveBeenCalledWith(IMPORT_ARGS);
     expect(debugClient.importWallet).toHaveBeenCalledTimes(1);
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.status() });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.health() });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.wallets.tracked(369) });
-    expect(
-      invalidateQueries.mock.calls.some(([filters]) =>
-        Array.isArray(filters?.queryKey) && filters.queryKey[0] === "dashboard",
-      ),
-    ).toBe(false);
+    expectOnlyWalletImportCachesInvalidated(invalidateQueries);
   });
 
   it("invalidates debug metadata and tracked wallets and preserves backend errors on failure or conflict", async () => {
@@ -81,14 +90,7 @@ describe("useWalletImportMutation", () => {
     expect(result.current.error).toBe(backendError);
     expect((result.current.error as Error).message).toBe("Wallet is already tracked.");
     expect(debugClient.importWallet).toHaveBeenCalledTimes(1);
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.status() });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.debug.health() });
-    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.wallets.tracked(369) });
-    expect(
-      invalidateQueries.mock.calls.some(([filters]) =>
-        Array.isArray(filters?.queryKey) && filters.queryKey[0] === "dashboard",
-      ),
-    ).toBe(false);
+    expectOnlyWalletImportCachesInvalidated(invalidateQueries);
   });
 
   it("does not invalidate dashboard queries", async () => {
@@ -102,11 +104,7 @@ describe("useWalletImportMutation", () => {
       await result.current.mutateAsync(IMPORT_ARGS);
     });
 
-    expect(
-      invalidateQueries.mock.calls.some(([filters]) =>
-        Array.isArray(filters?.queryKey) && filters.queryKey[0] === "dashboard",
-      ),
-    ).toBe(false);
+    expectOnlyWalletImportCachesInvalidated(invalidateQueries);
   });
 
   it("does not block the mutation result on debug metadata invalidation promises", async () => {

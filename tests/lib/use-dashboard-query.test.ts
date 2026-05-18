@@ -4,7 +4,12 @@ import React, { type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as dashboardClient from "@/lib/api/dashboard-client";
-import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
+import { queryKeys } from "@/lib/query/query-keys";
+import {
+  DASHBOARD_GC_TIME,
+  DASHBOARD_STALE_TIME,
+  useDashboardQuery,
+} from "@/lib/query/use-dashboard-query";
 
 function makeWrapper() {
   const queryClient = new QueryClient({
@@ -15,6 +20,20 @@ function makeWrapper() {
   return function Wrapper({ children }: { children: ReactNode }) {
     return React.createElement(QueryClientProvider, { client: queryClient }, children);
   };
+}
+
+function makeQueryClientWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
+
+  function Wrapper({ children }: { children: ReactNode }) {
+    return React.createElement(QueryClientProvider, { client: queryClient }, children);
+  }
+
+  return { queryClient, Wrapper };
 }
 
 function makeRetryingWrapper() {
@@ -90,6 +109,131 @@ const MOCK_DASHBOARD = {
 describe("useDashboardQuery", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("uses the exact shared dashboard query key and cache lifetimes", async () => {
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(MOCK_DASHBOARD);
+    const { queryClient, Wrapper } = makeQueryClientWrapper();
+    const expectedQueryKey = queryKeys.dashboard({
+      schemaVersion: "v1",
+      chainId: 369,
+      walletAddress: "  0xABCDEFabcdefABCDEFabcdefABCDEFabcdef1234  ",
+      quoteAsset: "fiat:usd",
+      asOf: "2026-02-02T00:00:00.000Z",
+    });
+
+    const { result } = renderHook(
+      () =>
+        useDashboardQuery({
+          walletAddress: "  0xABCDEFabcdefABCDEFabcdefABCDEFabcdef1234  ",
+          chainId: 369,
+          quoteAsset: "fiat:usd",
+          asOf: "2026-02-02T00:00:00.000Z",
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const matchingQueries = queryClient.getQueryCache().findAll({ queryKey: expectedQueryKey });
+    expect(matchingQueries).toHaveLength(1);
+    expect(matchingQueries[0].queryKey).toEqual(expectedQueryKey);
+    const cacheOptions = matchingQueries[0].options as { gcTime?: unknown; staleTime?: unknown };
+    expect(cacheOptions.staleTime).toBe(DASHBOARD_STALE_TIME);
+    expect(cacheOptions.gcTime).toBe(DASHBOARD_GC_TIME);
+    expect(queryClient.getQueryCache().getAll().map((query) => query.queryKey)).toEqual([
+      expectedQueryKey,
+    ]);
+    expect(dashboardClient.fetchPortfolioDashboard).toHaveBeenCalledWith({
+      walletAddress: "0xABCDEFabcdefABCDEFabcdefABCDEFabcdef1234",
+      chainId: 369,
+      quoteAsset: "fiat:usd",
+      asOf: "2026-02-02T00:00:00.000Z",
+    });
+  });
+
+  it("passes the backend DTO through without frontend computation or inference", async () => {
+    const dashboard = {
+      ...MOCK_DASHBOARD,
+      summary: {
+        totalValueQuote: "123.45",
+        valuationStatus: "partial" as const,
+        valuationCoverage: { totalPositions: 3, valuedPositions: 1, unvaluedPositions: 2 },
+        warnings: ["backend supplied warning"],
+      },
+      materialization: {
+        ...MOCK_DASHBOARD.materialization,
+        status: "FAILED" as const,
+        completedSuccessfully: false,
+        warningCount: 1,
+        warnings: [
+          { code: "generic_persisted_warning" as const, message: "materialization warning" },
+        ],
+        errorMessage: "backend supplied materialization error",
+      },
+      pnlCoverage: {
+        ...MOCK_DASHBOARD.pnlCoverage,
+        status: "partial" as const,
+        reasons: ["unpriced" as const],
+        affectedSections: ["tokens" as const],
+        pricedPositionsCount: 1,
+        unpricedPositionsCount: 2,
+      },
+      tokenPositions: [
+        {
+          assetId: "chain:369:erc20:0xtoken",
+          assetAddress: "0xtoken",
+          balanceQuantity: "5",
+          decimals: 18,
+          metadataProvenance: {
+            status: "unknown" as const,
+            source: "unknown" as const,
+            observedAt: null,
+            confidence: "low" as const,
+            conflictReason: "backend conflict",
+          },
+          updatedFromBlock: "10",
+          updatedToBlock: "20",
+          pricing: {
+            status: "stale_price" as const,
+            sourceType: "ORACLE" as const,
+            sourceId: "price-1",
+            confidence: "low" as const,
+            observedAt: "2026-01-01T00:00:00.000Z",
+            staleAfterSeconds: 60,
+            rejectedReasons: ["backend rejected reason"],
+          },
+          valuation: { status: "available" as const, valueQuote: "123.45" },
+          pnl: {
+            status: "incomplete_basis" as const,
+            holdingsQuantity: "5",
+            averageCost: null,
+            realizedPnl: "1",
+            unrealizedPnl: null,
+            markPrice: "24.69",
+            totalAcquiredQuantity: "5",
+            totalDisposedQuantity: "0",
+            warnings: [
+              { code: "INSUFFICIENT_COST_BASIS" as const, detail: "backend pnl warning" },
+            ],
+          },
+        },
+      ],
+    };
+    vi.spyOn(dashboardClient, "fetchPortfolioDashboard").mockResolvedValue(dashboard);
+
+    const { result } = renderHook(
+      () =>
+        useDashboardQuery({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+        }),
+      { wrapper: makeWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBe(dashboard);
+    expect(result.current.data).toEqual(dashboard);
   });
 
   it("fetches portfolio dashboard data when enabled with a non-empty wallet address", async () => {
