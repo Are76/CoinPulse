@@ -87,29 +87,49 @@ Opportunity deltas (swap outcome versus hold-original-asset outcome):
 - `opportunityDeltaPLS = currentReceivedValuePLS - originalPaidIfHeldValuePLS`
 - `opportunityDeltaUSD = currentReceivedValueUSD - originalPaidIfHeldValueUSD`
 
-Required break-even received-token prices:
+Required break-even received-token prices for **original-value recovery**:
 
-- `requiredBreakEvenReceivedPxPLS = originalPaidIfHeldValuePLS / receivedQty`
-- `requiredBreakEvenReceivedPxUSD = originalPaidIfHeldValueUSD / receivedQty`
+- `requiredBreakEvenReceivedPxForOriginalRecoveryPLS = executionPaidValuePLS / receivedQty`
+- `requiredBreakEvenReceivedPxForOriginalRecoveryUSD = executionPaidValueUSD / receivedQty`
 
-Tokens to sell to recover original value (at current observed prices):
+Optional, separately-labeled comparison scenario (not original-value recovery):
 
-- `tokensToSellForRecoveryPLS = originalPaidIfHeldValuePLS / receivedPxNowPLS`
-- `tokensToSellForRecoveryUSD = originalPaidIfHeldValueUSD / receivedPxNowUSD`
+- `requiredBreakEvenReceivedPxForHoldEquivalentPLS = originalPaidIfHeldValuePLS / receivedQty`
+- `requiredBreakEvenReceivedPxForHoldEquivalentUSD = originalPaidIfHeldValueUSD / receivedQty`
 
-Tokens remaining and retained percentage:
+Tokens to sell to recover **original execution value** (at current observed prices):
 
-- `tokensRemainingAfterRecoveryPLS = receivedQty - tokensToSellForRecoveryPLS`
-- `tokensRemainingAfterRecoveryUSD = receivedQty - tokensToSellForRecoveryUSD`
-- `retainedReceivedPctPLS = tokensRemainingAfterRecoveryPLS / receivedQty`
-- `retainedReceivedPctUSD = tokensRemainingAfterRecoveryUSD / receivedQty`
+- `tokensToSellForOriginalRecoveryPLS = executionPaidValuePLS / receivedPxNowPLS`
+- `tokensToSellForOriginalRecoveryUSD = executionPaidValueUSD / receivedPxNowUSD`
 
-Scenario inversion for target retained percentage:
+Feasibility guard before remaining/retention math:
+
+- If `tokensToSellForOriginalRecoveryPLS > receivedQty` or `tokensToSellForOriginalRecoveryUSD > receivedQty`, mark the scenario as `not_possible` (or `unavailable` / `partial` if missing required inputs).
+- In those cases, `tokensRemaining` and `retainedPct` must be `null` (never negative).
+- Warning text must explain insufficient current received value to recover the target from this position alone.
+
+Tokens remaining and retained percentage (only when feasible):
+
+- `tokensRemainingAfterOriginalRecoveryPLS = receivedQty - tokensToSellForOriginalRecoveryPLS`
+- `tokensRemainingAfterOriginalRecoveryUSD = receivedQty - tokensToSellForOriginalRecoveryUSD`
+- `retainedReceivedPctAfterOriginalRecoveryPLS = tokensRemainingAfterOriginalRecoveryPLS / receivedQty`
+- `retainedReceivedPctAfterOriginalRecoveryUSD = tokensRemainingAfterOriginalRecoveryUSD / receivedQty`
+
+Scenario inversion for target retained percentage under **original-value recovery**:
 
 - `targetRemainingTokens = receivedQty * targetRetainedPct`
 - `requiredSaleTokens = receivedQty - targetRemainingTokens`
-- `requiredReceivedPxForTargetPLS = originalPaidIfHeldValuePLS / requiredSaleTokens`
-- `requiredReceivedPxForTargetUSD = originalPaidIfHeldValueUSD / requiredSaleTokens`
+
+Guard before division:
+
+- If `targetRetainedPct >= 1.0` or `requiredSaleTokens <= 0`, scenario is `not_possible` from the same received-token position alone.
+- In that case, required price outputs must be `null` (never `Infinity`/`NaN`).
+- 100% retention requires external capital, yield, rewards, or another income source.
+
+When guard passes:
+
+- `requiredReceivedPxForTargetOriginalRecoveryPLS = executionPaidValuePLS / requiredSaleTokens`
+- `requiredReceivedPxForTargetOriginalRecoveryUSD = executionPaidValueUSD / requiredSaleTokens`
 
 Every computed value must include backend price observation status, confidence, timestamp, and provenance.
 
@@ -205,14 +225,26 @@ export interface MoneyValue {
   observation: PriceObservationMeta;
 }
 
+export interface ComputedScenarioValue<T = string> {
+  value: T | null;
+  status: BreakEvenScenarioStatus;
+  confidence: number; // 0..1
+  provenance: {
+    source: string;
+    inputObservationRefs: string[];
+  };
+  observedAt: string; // ISO8601
+  unavailableReason?: string;
+}
+
 export interface RecoveryScenarioItem {
   retainPct: number; // 0.10 .. 1.00
   status: BreakEvenScenarioStatus;
   requiredReceivedPricePLS?: MoneyValue;
   requiredReceivedPriceUSD?: MoneyValue;
-  tokensToSell?: string;
-  tokensRemaining?: string;
-  retainedPctActual?: number;
+  tokensToSell?: ComputedScenarioValue<string>;
+  tokensRemaining?: ComputedScenarioValue<string>;
+  retainedPctActual?: ComputedScenarioValue<number>;
   notes?: string[];
 }
 
