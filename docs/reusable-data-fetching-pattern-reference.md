@@ -97,6 +97,7 @@ Generic expectations:
 
 - one task = one branch = one PR
 - start from latest main/default branch
+- when using Codex GitHub integration, treat a missing local `origin` after bootstrap as expected and create/publish PRs through the integration flow
 - docs/planning before implementation when architecture is affected
 - contract tests before UI
 - small bounded changes
