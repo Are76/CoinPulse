@@ -105,9 +105,10 @@ Required evidence:
 - Conflict behavior can be tested safely.
 - Conflict/failure responses remain structured and operator-safe.
 
-Reference checklist:
+Reference checklists:
 
 - `docs/g4-manual-operator-run-checklist.md`
+- `docs/g4-g5-backend-evidence-template.md`
 
 This is the largest remaining backend readiness gate.
 
@@ -120,6 +121,10 @@ Current foundation:
 - `GET /api/prices/status` exists.
 - Route-contract coverage exists in `tests/api/prices-status-route-contract.test.ts`.
 - Current route coverage is tracked in `docs/route-contract-coverage-index.md`.
+
+Evidence template:
+
+- `docs/g4-g5-backend-evidence-template.md`
 
 Why it matters:
 
@@ -151,24 +156,20 @@ Recommended bounded PR:
 
 ### G7. Compatibility strategy for route normalization exists
 
-Status: documented as a compatibility requirement, not yet implemented as a route transition.
+Status: deferred for V1 per `docs/g6-g7-backend-readiness-decision.md`.
 
 Current state:
 
 - Current dashboard route is `GET /api/portfolio/dashboard`.
 - Long-term preferred route is `GET /api/dashboard`.
 - The compatibility requirements are documented: compatibility period, additive alias or versioned transition, no silent rename, and dual-route contract tests during the transition.
+- Route normalization is not required for V1 backend readiness.
 
-Remaining implementation work before route change:
+Deferred implementation work:
 
-- Decide whether the route transition is needed for V1 or should be explicitly deferred.
-- If implemented, add an alias/transition route without breaking `GET /api/portfolio/dashboard`.
+- If a future PR implements `GET /api/dashboard`, it must add an alias/transition route without breaking `GET /api/portfolio/dashboard`.
 - Add contract tests proving both old and new routes during the compatibility window.
 - Document deprecation timing before any old route removal.
-
-Recommended bounded PR:
-
-- Either explicitly defer the route normalization transition for V1, or implement an additive compatibility alias with contract tests.
 
 ## Backend platform completion assessment
 
@@ -181,22 +182,19 @@ What is ready:
 - Current pricing-status route and contract coverage exist.
 - DTO-first guardrails are explicit.
 - Environment validation is now clearer and less likely to be misdiagnosed.
-- Dashboard route-normalization compatibility requirements are documented.
+- Dashboard route-normalization compatibility requirements are documented and the route transition is deferred for V1.
 
 What still blocks declaring the backend platform complete:
 
 1. G4 production-like wallet import -> sync -> materialize -> rebuild evidence is not yet captured.
 2. G5 pricing-status production-like evidence is not yet captured.
-3. G6 canonical `GET /api/transactions` backend DTO is not implemented.
-4. G7 route-normalization transition is not implemented or explicitly deferred for V1.
+3. G6 canonical `GET /api/transactions` backend DTO is not implemented or explicitly deferred as post-V1.
 
 ## Recommended next bounded sequence
 
-1. Complete G4 evidence collection using `docs/g4-manual-operator-run-checklist.md`.
-2. Capture production-like `GET /api/prices/status` evidence for the target environment.
-3. Add canonical `GET /api/transactions` DTO and contract tests.
-4. Explicitly defer dashboard route normalization for V1 or implement an additive compatibility alias with tests.
-5. Re-run this readiness checklist and update status.
+1. Complete G4/G5 evidence collection using `docs/g4-g5-backend-evidence-template.md`.
+2. Add canonical `GET /api/transactions` DTO and contract tests if transaction history is required for V1, or explicitly defer it as post-V1.
+3. Re-run this readiness checklist and update status.
 
 ## Non-goals before backend platform completion
 
