@@ -47,11 +47,11 @@ describe("usePricingStatusQuery", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses queryKeys.prices.status(chainId) as the query key", async () => {
+  it("uses queryKeys.prices.status(369) as the query key", async () => {
     vi.spyOn(pricesClient, "fetchPricingStatus").mockResolvedValue(MOCK_PRICING_STATUS);
     const { queryClient, Wrapper } = makeWrapper();
 
-    const { result } = renderHook(() => usePricingStatusQuery({ chainId: 369 }), { wrapper: Wrapper });
+    const { result } = renderHook(() => usePricingStatusQuery(), { wrapper: Wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -152,5 +152,12 @@ describe("usePricingStatusQuery", () => {
   it("staleTime is 15_000 and gcTime is 5 minutes", () => {
     expect(PRICING_STATUS_STALE_TIME).toBe(15_000);
     expect(PRICING_STATUS_GC_TIME).toBe(5 * 60_000);
+  });
+
+  it("does not accept chainId in hook params", () => {
+    type Params = Parameters<typeof usePricingStatusQuery>[0];
+    // @ts-expect-error Pricing status hook is intentionally PulseChain-only for now.
+    const invalidParams: Params = { chainId: 1 };
+    expect(invalidParams).toBeDefined();
   });
 });

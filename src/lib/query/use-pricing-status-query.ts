@@ -7,7 +7,6 @@ export const PRICING_STATUS_STALE_TIME = 15_000;
 export const PRICING_STATUS_GC_TIME = 5 * 60_000;
 
 export type UsePricingStatusQueryParams = {
-  chainId?: number;
   enabled?: boolean;
 };
 
@@ -18,11 +17,11 @@ export type UsePricingStatusQueryParams = {
  * This hook is read-only and does not infer or compute pricing truth in the UI.
  */
 export function usePricingStatusQuery({
-  chainId = 369,
   enabled = true,
 }: UsePricingStatusQueryParams = {}) {
   return useQuery({
-    queryKey: queryKeys.prices.status(chainId),
+    // Pricing status is PulseChain-only until backend route/DTO accepts chain scope.
+    queryKey: queryKeys.prices.status(369),
     queryFn: fetchPricingStatus,
     enabled,
     retry: false,
