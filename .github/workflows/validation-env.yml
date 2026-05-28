@@ -17,7 +17,8 @@ jobs:
       PULSECHAIN_RPC_URL: https://rpc.pulsechainstats.com
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # actions/checkout v4 pinned for reproducibility.
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           persist-credentials: false
           fetch-depth: 1
