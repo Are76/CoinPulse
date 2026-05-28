@@ -139,20 +139,17 @@ Remaining evidence needed:
 
 ### G6. Canonical transaction DTO is surfaced
 
-Status: not complete.
+Status: deferred from V1 backend platform completion per `docs/g6-v1-transactions-scope-decision.md`.
 
-Current gap:
+Current state:
 
 - `GET /api/transactions` does not exist yet.
+- Transaction history is not required for the current V1 backend platform readiness phase.
+- Any transaction-history, allocation, analytics, LP-detail, stake-detail, export, or transaction-derived UI work must wait for a canonical backend transaction DTO.
 
-Why it matters:
+Future implementation trigger:
 
-- Future transaction history, analytics, allocation, DeFi detail, LP detail, and stake detail pages must be built from canonical backend DTOs.
-- The frontend must not reconstruct transaction meaning from raw logs.
-
-Recommended bounded PR:
-
-- Add canonical `GET /api/transactions` backend DTO from persisted ledger/action-group truth with contract tests.
+- Add canonical `GET /api/transactions` backend DTO from persisted ledger/action-group truth with contract tests before transaction-facing product surfaces begin.
 
 ### G7. Compatibility strategy for route normalization exists
 
@@ -182,19 +179,18 @@ What is ready:
 - Current pricing-status route and contract coverage exist.
 - DTO-first guardrails are explicit.
 - Environment validation is now clearer and less likely to be misdiagnosed.
+- G6 transaction-history route work is explicitly deferred from V1 readiness and guarded from accidental frontend reconstruction.
 - Dashboard route-normalization compatibility requirements are documented and the route transition is deferred for V1.
 
 What still blocks declaring the backend platform complete:
 
 1. G4 production-like wallet import -> sync -> materialize -> rebuild evidence is not yet captured.
 2. G5 pricing-status production-like evidence is not yet captured.
-3. G6 canonical `GET /api/transactions` backend DTO is not implemented or explicitly deferred as post-V1.
 
 ## Recommended next bounded sequence
 
 1. Complete G4/G5 evidence collection using `docs/g4-g5-backend-evidence-template.md`.
-2. Add canonical `GET /api/transactions` DTO and contract tests if transaction history is required for V1, or explicitly defer it as post-V1.
-3. Re-run this readiness checklist and update status.
+2. Re-run this readiness checklist and update status.
 
 ## Non-goals before backend platform completion
 
@@ -207,6 +203,7 @@ Do not start these until the gates above are closed or explicitly deferred:
 - frontend reconstruction of transactions from raw logs.
 - frontend pricing/PnL/accounting computation.
 - route renames without compatibility period.
+- transaction-facing UI before canonical transaction DTO implementation.
 
 ## Final rule
 
