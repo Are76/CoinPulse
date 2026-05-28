@@ -4,6 +4,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   validate-env:
     name: Validate required environment variables
@@ -15,15 +18,32 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
+          persist-credentials: false
+          fetch-depth: 1
 
       - name: Validate environment
-        run: npm run validate:env
+        shell: bash
+        run: |
+          missing=()
+
+          for variable_name in DATABASE_URL REDIS_URL PULSECHAIN_RPC_URL; do
+            if [ -z "${!variable_name}" ]; then
+              missing+=("$variable_name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "CoinPulse validation environment OK."
+            exit 0
+          fi
+
+          echo "Missing required validation environment variables:" >&2
+
+          for variable_name in "${missing[@]}"; do
+            echo "- $variable_name" >&2
+          done
+
+          echo "" >&2
+          echo "See docs/validation-env-requirements.md for validation setup guidance." >&2
+          exit 1
