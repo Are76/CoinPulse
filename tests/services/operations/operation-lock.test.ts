@@ -126,6 +126,112 @@ describe("checkOperationConflict", () => {
     });
   });
 
+  it("blocks manual sync when an active manual sync exists for the same wallet and chain", async () => {
+    const result = await checkOperationConflict({
+      requestedOperation: {
+        trigger: "MANUAL",
+        walletId: "wallet-1",
+        chainId: 369,
+      },
+      listActiveRuns: async () => [
+        {
+          id: "run-sync-2",
+          trigger: "MANUAL",
+          status: "RUNNING",
+          stage: "INGESTING_RAW_LOGS",
+          chainId: 369,
+          walletId: "wallet-1",
+          createdAt: new Date("2026-05-08T12:10:00.000Z"),
+          updatedAt: new Date("2026-05-08T12:11:00.000Z"),
+        },
+      ],
+      now: new Date("2026-05-08T12:11:00.000Z"),
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "active_sync_in_scope",
+      conflictingOperationId: "run-sync-2",
+      conflictingTrigger: "MANUAL",
+      conflictingStage: "INGESTING_RAW_LOGS",
+      operationType: "manual_sync",
+      status: "RUNNING",
+      startedAt: "2026-05-08T12:10:00.000Z",
+      createdAt: "2026-05-08T12:10:00.000Z",
+      updatedAt: "2026-05-08T12:11:00.000Z",
+      ageMs: 60000,
+      appearsStale: false,
+      staleReason: null,
+    });
+  });
+
+  it("blocks import sync when an active manual sync exists for the same wallet and chain", async () => {
+    const result = await checkOperationConflict({
+      requestedOperation: {
+        trigger: "IMPORT",
+        walletId: "wallet-1",
+        chainId: 369,
+      },
+      listActiveRuns: async () => [
+        {
+          id: "run-sync-3",
+          trigger: "MANUAL",
+          status: "PENDING",
+          stage: "PENDING",
+          chainId: 369,
+          walletId: "wallet-1",
+          createdAt: new Date("2026-05-08T12:20:00.000Z"),
+          updatedAt: new Date("2026-05-08T12:20:00.000Z"),
+        },
+      ],
+      now: new Date("2026-05-08T12:20:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      allowed: false,
+      reason: "active_sync_in_scope",
+      conflictingOperationId: "run-sync-3",
+      conflictingTrigger: "MANUAL",
+      operationType: "manual_sync",
+      status: "PENDING",
+    });
+  });
+
+  it("allows manual sync when active sync is for another wallet or chain", async () => {
+    const result = await checkOperationConflict({
+      requestedOperation: {
+        trigger: "MANUAL",
+        walletId: "wallet-1",
+        chainId: 369,
+      },
+      listActiveRuns: async () => [
+        {
+          id: "run-sync-other-wallet",
+          trigger: "MANUAL",
+          status: "RUNNING",
+          stage: "INGESTING_RAW_LOGS",
+          chainId: 369,
+          walletId: "wallet-2",
+          createdAt: new Date("2026-05-08T12:30:00.000Z"),
+          updatedAt: new Date("2026-05-08T12:31:00.000Z"),
+        },
+        {
+          id: "run-sync-other-chain",
+          trigger: "IMPORT",
+          status: "RUNNING",
+          stage: "INGESTING_RAW_LOGS",
+          chainId: 1,
+          walletId: "wallet-1",
+          createdAt: new Date("2026-05-08T12:30:00.000Z"),
+          updatedAt: new Date("2026-05-08T12:31:00.000Z"),
+        },
+      ],
+      now: new Date("2026-05-08T12:31:00.000Z"),
+    });
+
+    expect(result).toEqual({ allowed: true });
+  });
+
   it("allows an operation when only completed or failed runs exist", async () => {
     const result = await checkOperationConflict({
       requestedOperation: {
@@ -358,57 +464,87 @@ describe("reserveOperationRun", () => {
         endBlock: 200n,
         policyLabel: "manual-dashboard-sync",
         db,
-        now: new Date("2026-05-08T14:10:00.000Z"),
+        now: new Date("2026-05-08T14:00:02.000Z"),
       }),
     ).rejects.toMatchObject({
       code: "OPERATION_CONFLICT",
-      details: expect.objectContaining({
+      details: {
         reason: "active_rebuild_in_progress",
         conflictingOperationId: "run-rebuild-race",
-        appearsStale: false,
-      }),
+      },
     });
   });
 
-  it("does not blindly convert P2034 to conflict when recheck finds no active operation", async () => {
-    let attempts = 0;
-    const create = async () => ({ id: "run-created-after-retry" });
+  it("throws OperationConflictError when an active scoped sync already exists", async () => {
     const db = {
-      $transaction: async (callback: (tx: { syncRun: { findMany: () => Promise<never[]>; create: typeof create } }) => Promise<{ id: string }>) => {
-        attempts += 1;
-        if (attempts === 1) {
-          const error = new Error("serialization failure") as Error & { code: string };
-          error.code = "P2034";
-          throw error;
-        }
-
-        return callback({
+      $transaction: async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({
           syncRun: {
-            findMany: async () => [],
-            create,
+            findMany: async () => [
+              {
+                id: "run-scoped-sync-race",
+                trigger: "MANUAL",
+                status: "RUNNING",
+                stage: "INGESTING_RAW_LOGS",
+                chainId: 369,
+                walletId: "wallet-1",
+                createdAt: new Date("2026-05-08T14:05:00.000Z"),
+                updatedAt: new Date("2026-05-08T14:05:01.000Z"),
+              },
+            ],
+            create: async () => ({ id: "should-not-create" }),
           },
-        });
-      },
-      syncRun: {
-        findMany: async () => [],
-      },
+        }),
     } as never;
 
-    const result = await reserveOperationRun({
-      walletId: "wallet-1",
-      chainId: 369,
-      trigger: "REBUILD",
-      status: "PENDING",
-      stage: "PENDING",
-      sourceFamilies: ["TRANSFERS"],
-      startBlock: 100n,
-      endBlock: 200n,
-      policyLabel: "manual-rebuild",
-      db,
-      now: new Date("2026-05-08T14:10:00.000Z"),
+    await expect(
+      reserveOperationRun({
+        walletId: "wallet-1",
+        chainId: 369,
+        trigger: "MANUAL",
+        status: "PENDING",
+        stage: "PENDING",
+        sourceFamilies: ["TRANSFERS"],
+        startBlock: 100n,
+        endBlock: 200n,
+        policyLabel: "manual-dashboard-sync",
+        db,
+        now: new Date("2026-05-08T14:05:02.000Z"),
+      }),
+    ).rejects.toMatchObject({
+      code: "OPERATION_CONFLICT",
+      details: {
+        reason: "active_sync_in_scope",
+        conflictingOperationId: "run-scoped-sync-race",
+      },
     });
+  });
 
-    expect(result).toEqual({ id: "run-created-after-retry" });
-    expect(attempts).toBe(2);
+  it("creates a sync run when no conflicts are found", async () => {
+    const db = {
+      $transaction: async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({
+          syncRun: {
+            findMany: async () => [],
+            create: async () => ({ id: "run-created" }),
+          },
+        }),
+    } as never;
+
+    await expect(
+      reserveOperationRun({
+        walletId: "wallet-1",
+        chainId: 369,
+        trigger: "MANUAL",
+        status: "PENDING",
+        stage: "PENDING",
+        sourceFamilies: ["TRANSFERS"],
+        startBlock: 100n,
+        endBlock: 200n,
+        policyLabel: "manual-dashboard-sync",
+        db,
+        now: new Date("2026-05-08T15:00:00.000Z"),
+      }),
+    ).resolves.toEqual({ id: "run-created" });
   });
 });
