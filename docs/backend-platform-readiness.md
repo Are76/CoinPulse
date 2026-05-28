@@ -28,6 +28,7 @@ CoinPulse V1 backend platform readiness means:
 - Versioned backend DTOs remain the only UI consumption contract.
 - Operator routes return structured, safe envelopes for success, failure, and conflict cases.
 - Environment validation is explicit enough that validation failures are not mistaken for product regressions.
+- Operator API public-deployment protection is documented in `docs/operator-api-deployment-readiness.md`.
 - The remaining backend gaps are documented as bounded future PRs rather than hidden architectural uncertainty.
 
 ## Current completed foundation
@@ -43,6 +44,7 @@ The following foundation is already in place and should be preserved:
 - `POST /api/rebuild` exists as the rebuild route.
 - Dashboard/debug frontend data access is moving through the TanStack Query foundation without changing backend DTO truth.
 - Validation environment requirements are documented in `docs/validation-env-requirements.md`.
+- Operator API deployment-readiness policy is documented in `docs/operator-api-deployment-readiness.md`.
 - `npm run validate:env` exists as an explicit environment preflight helper.
 - GitHub Actions has a minimal validation environment preflight workflow.
 
@@ -86,11 +88,13 @@ Required evidence:
 - `GET /api/debug/health` remains available.
 - `GET /api/debug/status` remains available.
 - Operation state surfaces expose sync/rebuild status, blockers, warnings, and diagnostics as backend DTO fields.
+- Public deployment protection follows `docs/operator-api-deployment-readiness.md`.
 
 Remaining evidence needed:
 
 - Manual operator run showing status transitions during sync/rebuild.
 - Confirmation that failures remain operator-safe and do not leak internal exception details.
+- Confirmation that any public deployment protects operator/debug/admin API surfaces.
 
 ### G4. Wallet import -> sync -> materialize -> rebuild cycle is evidenced
 
@@ -104,6 +108,7 @@ Required evidence:
 - Debug/status reflects the operation state transitions.
 - Conflict behavior can be tested safely.
 - Conflict/failure responses remain structured and operator-safe.
+- Evidence identifies whether the environment is local, private/staging, protected deployment, or public deployment.
 
 Reference checklists:
 
@@ -168,6 +173,18 @@ Deferred implementation work:
 - Add contract tests proving both old and new routes during the compatibility window.
 - Document deprecation timing before any old route removal.
 
+## Public deployment gate
+
+Status: policy documented; implementation/protection evidence pending.
+
+Reference:
+
+- `docs/operator-api-deployment-readiness.md`
+
+CoinPulse must not be deployed as a publicly reachable production application with unauthenticated operator APIs. Public deployment requires either deployment-level protection or application-level operator authentication/authorization.
+
+This is a deployment-readiness gate. It does not block local/backend correctness work, but it must be resolved before public production exposure.
+
 ## Backend platform completion assessment
 
 Current assessment: partially ready, not fully complete.
@@ -179,6 +196,7 @@ What is ready:
 - Current pricing-status route and contract coverage exist.
 - DTO-first guardrails are explicit.
 - Environment validation is now clearer and less likely to be misdiagnosed.
+- Operator API public-deployment policy is documented.
 - G6 transaction-history route work is explicitly deferred from V1 readiness and guarded from accidental frontend reconstruction.
 - Dashboard route-normalization compatibility requirements are documented and the route transition is deferred for V1.
 
@@ -187,10 +205,15 @@ What still blocks declaring the backend platform complete:
 1. G4 production-like wallet import -> sync -> materialize -> rebuild evidence is not yet captured.
 2. G5 pricing-status production-like evidence is not yet captured.
 
+Deployment-readiness note:
+
+- Public deployment remains blocked until operator API protection is implemented or verified at deployment level per `docs/operator-api-deployment-readiness.md`.
+
 ## Recommended next bounded sequence
 
 1. Complete G4/G5 evidence collection using `docs/g4-g5-backend-evidence-template.md`.
 2. Re-run this readiness checklist and update status.
+3. Before any public production exposure, implement or verify operator API protection per `docs/operator-api-deployment-readiness.md`.
 
 ## Non-goals before backend platform completion
 
@@ -204,6 +227,7 @@ Do not start these until the gates above are closed or explicitly deferred:
 - frontend pricing/PnL/accounting computation.
 - route renames without compatibility period.
 - transaction-facing UI before canonical transaction DTO implementation.
+- public deployment with unauthenticated operator APIs.
 
 ## Final rule
 
