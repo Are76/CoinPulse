@@ -22,6 +22,7 @@ If neither protection exists, public deployment is blocked.
 The following routes are considered operator or debug/admin surfaces and require protection before public deployment:
 
 - `POST /api/wallets/import`
+- `GET /api/wallets/tracked`
 - `POST /api/sync/manual`
 - `POST /api/rebuild`
 - `GET /api/debug/health`
