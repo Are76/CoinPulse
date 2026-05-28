@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decideRpcRetryPolicy } from "@/services/rpc/rpc-retry-policy";
+import { DEFAULT_BASE_DELAY_MS, DEFAULT_MAX_DELAY_MS, decideRpcRetryPolicy } from "@/services/rpc/rpc-retry-policy";
 import type { RpcFailureTaxonomy } from "@/services/rpc/rpc-failure-taxonomy";
 
 function failure(code: RpcFailureTaxonomy["code"], retryable: boolean): RpcFailureTaxonomy {
@@ -136,6 +136,62 @@ describe("decideRpcRetryPolicy", () => {
     expect(result.reason).toBe("unknown_failure_not_retryable");
   });
 
+
+  it("sanitizes NaN attempt to finite nextAttempt and delay", () => {
+    const result = decideRpcRetryPolicy({
+      failure: failure("timeout", true),
+      attempt: Number.NaN,
+      maxAttempts: 3,
+      baseDelayMs: 100,
+      maxDelayMs: 1_000,
+    });
+
+    expect(result.action).toBe("retry");
+    expect(result.nextAttempt).toBe(1);
+    expect(result.delayMs).toBe(100);
+    expect(Number.isFinite(result.nextAttempt)).toBe(true);
+    expect(Number.isFinite(result.delayMs)).toBe(true);
+  });
+
+  it("sanitizes infinite attempt to finite nextAttempt and delay", () => {
+    const result = decideRpcRetryPolicy({
+      failure: failure("timeout", true),
+      attempt: Number.POSITIVE_INFINITY,
+      maxAttempts: 3,
+      baseDelayMs: 100,
+      maxDelayMs: 1_000,
+    });
+
+    expect(result.action).toBe("retry");
+    expect(result.nextAttempt).toBe(1);
+    expect(result.delayMs).toBe(100);
+    expect(Number.isFinite(result.nextAttempt)).toBe(true);
+    expect(Number.isFinite(result.delayMs)).toBe(true);
+  });
+
+  it("falls back to DEFAULT_BASE_DELAY_MS when baseDelayMs is NaN", () => {
+    const result = decideRpcRetryPolicy({
+      failure: failure("timeout", true),
+      attempt: 1,
+      maxAttempts: 3,
+      baseDelayMs: Number.NaN,
+      maxDelayMs: 2_000,
+    });
+
+    expect(result.delayMs).toBe(DEFAULT_BASE_DELAY_MS * 2);
+  });
+
+  it("falls back to DEFAULT_MAX_DELAY_MS when maxDelayMs is infinite", () => {
+    const result = decideRpcRetryPolicy({
+      failure: failure("timeout", true),
+      attempt: 10,
+      maxAttempts: 12,
+      baseDelayMs: 1_000,
+      maxDelayMs: Number.POSITIVE_INFINITY,
+    });
+
+    expect(result.delayMs).toBe(DEFAULT_MAX_DELAY_MS);
+  });
   it("never exceeds maxDelayMs", () => {
     const result = decideRpcRetryPolicy({
       failure: failure("timeout", true),

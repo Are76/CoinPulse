@@ -20,14 +20,22 @@ type DecideRpcRetryPolicyArgs = {
   maxDelayMs?: number;
 };
 
-const DEFAULT_BASE_DELAY_MS = 250;
-const DEFAULT_MAX_DELAY_MS = 4_000;
+export const DEFAULT_BASE_DELAY_MS = 250;
+export const DEFAULT_MAX_DELAY_MS = 4_000;
 
 export function decideRpcRetryPolicy(args: DecideRpcRetryPolicyArgs): RpcRetryPolicyDecision {
-  const attempt = Math.max(0, args.attempt);
-  const maxAttempts = Math.max(0, args.maxAttempts);
-  const baseDelayMs = Math.max(0, args.baseDelayMs ?? DEFAULT_BASE_DELAY_MS);
-  const maxDelayMs = Math.max(0, args.maxDelayMs ?? DEFAULT_MAX_DELAY_MS);
+  const attempt = Number.isFinite(args.attempt) ? Math.max(0, args.attempt) : 0;
+  const maxAttempts = Number.isFinite(args.maxAttempts) ? Math.max(0, args.maxAttempts) : 0;
+  const baseDelayMs = args.baseDelayMs === undefined
+    ? DEFAULT_BASE_DELAY_MS
+    : Number.isFinite(args.baseDelayMs)
+      ? Math.max(0, args.baseDelayMs)
+      : DEFAULT_BASE_DELAY_MS;
+  const maxDelayMs = args.maxDelayMs === undefined
+    ? DEFAULT_MAX_DELAY_MS
+    : Number.isFinite(args.maxDelayMs)
+      ? Math.max(0, args.maxDelayMs)
+      : DEFAULT_MAX_DELAY_MS;
   const canRetry = args.failure.retryable && attempt < maxAttempts;
 
   if (args.failure.code === "unknown") {
