@@ -105,9 +105,10 @@ Required evidence:
 - Conflict behavior can be tested safely.
 - Conflict/failure responses remain structured and operator-safe.
 
-Reference checklist:
+Reference checklists:
 
 - `docs/g4-manual-operator-run-checklist.md`
+- `docs/g4-g5-backend-evidence-template.md`
 
 This is the largest remaining backend readiness gate.
 
@@ -120,6 +121,10 @@ Current foundation:
 - `GET /api/prices/status` exists.
 - Route-contract coverage exists in `tests/api/prices-status-route-contract.test.ts`.
 - Current route coverage is tracked in `docs/route-contract-coverage-index.md`.
+
+Evidence template:
+
+- `docs/g4-g5-backend-evidence-template.md`
 
 Why it matters:
 
@@ -192,11 +197,10 @@ What still blocks declaring the backend platform complete:
 
 ## Recommended next bounded sequence
 
-1. Complete G4 evidence collection using `docs/g4-manual-operator-run-checklist.md`.
-2. Capture production-like `GET /api/prices/status` evidence for the target environment.
-3. Add canonical `GET /api/transactions` DTO and contract tests.
-4. Explicitly defer dashboard route normalization for V1 or implement an additive compatibility alias with tests.
-5. Re-run this readiness checklist and update status.
+1. Complete G4/G5 evidence collection using `docs/g4-g5-backend-evidence-template.md`.
+2. Add canonical `GET /api/transactions` DTO and contract tests if transaction history is required for V1.
+3. Explicitly defer dashboard route normalization for V1 or implement an additive compatibility alias with tests.
+4. Re-run this readiness checklist and update status.
 
 ## Non-goals before backend platform completion
 
