@@ -1,6 +1,6 @@
 import "server-only";
 
-import { z } from "zod";
+import { z, ZodError } from "zod";
 
 const SOURCE_FAMILY_VALUES = ["TRANSFERS", "DEX", "LP", "STAKING", "NATIVE"] as const;
 
@@ -84,7 +84,20 @@ export function parseSearchParams<T extends z.ZodType>(schema: T, request: Reque
 }
 
 export async function parseJsonBody<T extends z.ZodType>(schema: T, request: Request): Promise<z.infer<T>> {
-  const payload = await request.json();
+  let payload: unknown;
+
+  try {
+    payload = await request.json();
+  } catch {
+    throw new ZodError([
+      {
+        code: "custom",
+        path: [],
+        message: "Request body must be valid JSON.",
+      },
+    ]);
+  }
+
   return schema.parse(payload);
 }
 
