@@ -38,6 +38,7 @@ import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
 const DEFAULT_CHAIN_ID = "369";
 const DEFAULT_QUOTE_ASSET = "fiat:usd";
 const DASHBOARD_SCHEMA_VERSION = "v1" as const;
+const DISABLE_REFETCH_INTERVAL = false as const;
 
 export function DashboardScreen() {
   const queryClient = useQueryClient();
@@ -49,8 +50,8 @@ export function DashboardScreen() {
 
   const trackedWalletsQuery = useTrackedWalletsQuery();
 
-  const healthQuery = useDebugHealthQuery({ refetchInterval: false });
-  const statusQuery = useDebugStatusQuery({ refetchInterval: false });
+  const healthQuery = useDebugHealthQuery({ refetchInterval: DISABLE_REFETCH_INTERVAL });
+  const statusQuery = useDebugStatusQuery({ refetchInterval: DISABLE_REFETCH_INTERVAL });
 
   const dashboardQuery = useDashboardQuery({
     walletAddress: submittedParams?.walletAddress ?? "",
