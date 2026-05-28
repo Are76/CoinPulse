@@ -52,7 +52,7 @@ The server environment contract is parsed at module load. During `next build`, a
 
 This is expected behavior for the current runtime contract. A missing or empty env var should be treated as a validation environment issue unless the PR changed env validation or route imports.
 
-URL protocol and format checks for `REDIS_URL` are handled by `npm run validate:env`.
+A malformed but non-empty `REDIS_URL` may not fail `src/lib/server-env.ts`; URL protocol and format checks for `REDIS_URL` are handled by `npm run validate:env`, and live connectivity errors may only appear when Redis is actually instantiated.
 
 ## Why `PULSECHAIN_RPC_URL` is required
 
@@ -89,7 +89,7 @@ If `npx prisma generate` (run by `npm run build` and `npm run typecheck`) fails 
 
 ### Missing or malformed `REDIS_URL`
 
-If `npm run build` fails with a Zod error for `REDIS_URL`, export a non-empty `REDIS_URL` before diagnosing product code. URL format and protocol issues should be fixed through `npm run validate:env`.
+If `npm run build` fails with a Zod error for `REDIS_URL`, export a non-empty `REDIS_URL` before diagnosing product code. URL format and protocol issues should be fixed through `npm run validate:env`; Redis connection errors should be reported as connectivity failures, not env presence failures.
 
 ### Missing or malformed `PULSECHAIN_RPC_URL`
 
