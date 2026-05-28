@@ -32,7 +32,7 @@ describe("query keys", () => {
         quoteAsset: "fiat:usd",
         asOf: "2026-05-08T12:04:00.000Z",
       }),
-      queryKeys.prices.status(),
+      queryKeys.prices.status(369),
       queryKeys.wallets.tracked(369),
     ];
 
@@ -47,7 +47,7 @@ describe("query keys", () => {
         "fiat:usd",
         "2026-05-08T12:04:00.000Z",
       ],
-      ["prices", "status"],
+      ["prices", "status", { chainId: 369 }],
       ["wallets", "tracked", 369],
     ]);
 
@@ -58,7 +58,7 @@ describe("query keys", () => {
   });
 
   it("builds future chain-scoped and filtered keys", () => {
-    expect(queryKeys.prices.status()).toEqual(["prices", "status"]);
+    expect(queryKeys.prices.status(369)).toEqual(["prices", "status", { chainId: 369 }]);
     expect(queryKeys.wallets.tracked(369)).toEqual(["wallets", "tracked", 369]);
     expect(queryKeys.transactions("v1", { chainId: 369 })).toEqual([
       "transactions",

@@ -47,7 +47,7 @@ describe("usePricingStatusQuery", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses queryKeys.prices.status() as the query key", async () => {
+  it("uses queryKeys.prices.status(369) as the query key", async () => {
     vi.spyOn(pricesClient, "fetchPricingStatus").mockResolvedValue(MOCK_PRICING_STATUS);
     const { queryClient, Wrapper } = makeWrapper();
 
@@ -55,7 +55,7 @@ describe("usePricingStatusQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    const query = queryClient.getQueryCache().find({ queryKey: queryKeys.prices.status() });
+    const query = queryClient.getQueryCache().find({ queryKey: queryKeys.prices.status(369) });
     expect(query).toBeDefined();
     const queryOptions = query!.options as {
       queryKey?: unknown;
@@ -63,7 +63,7 @@ describe("usePricingStatusQuery", () => {
       gcTime?: unknown;
       retry?: unknown;
     };
-    expect(queryOptions.queryKey).toEqual(queryKeys.prices.status());
+    expect(queryOptions.queryKey).toEqual(queryKeys.prices.status(369));
     expect(queryOptions.staleTime).toBe(PRICING_STATUS_STALE_TIME);
     expect(queryOptions.gcTime).toBe(PRICING_STATUS_GC_TIME);
     expect(queryOptions.retry).toBe(false);
@@ -149,8 +149,15 @@ describe("usePricingStatusQuery", () => {
     expect(walletData).toEqual({ stub: true });
   });
 
-  it("staleTime is 30_000 and gcTime is 10 minutes", () => {
-    expect(PRICING_STATUS_STALE_TIME).toBe(30_000);
-    expect(PRICING_STATUS_GC_TIME).toBe(10 * 60_000);
+  it("staleTime is 15_000 and gcTime is 5 minutes", () => {
+    expect(PRICING_STATUS_STALE_TIME).toBe(15_000);
+    expect(PRICING_STATUS_GC_TIME).toBe(5 * 60_000);
+  });
+
+  it("does not accept chainId in hook params", () => {
+    type Params = Parameters<typeof usePricingStatusQuery>[0];
+    // @ts-expect-error Pricing status hook is intentionally PulseChain-only for now.
+    const invalidParams: Params = { chainId: 1 };
+    expect(invalidParams).toBeDefined();
   });
 });
