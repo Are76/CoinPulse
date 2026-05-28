@@ -1,0 +1,50 @@
+name: Validation environment preflight
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-env:
+    name: Validate required environment variables
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/coinpulse
+      REDIS_URL: redis://localhost:6379
+      PULSECHAIN_RPC_URL: https://rpc.pulsechainstats.com
+    steps:
+      - name: Checkout
+        # actions/checkout v4 pinned for reproducibility.
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Validate environment
+        shell: bash
+        run: |
+          missing=()
+
+          for variable_name in DATABASE_URL REDIS_URL PULSECHAIN_RPC_URL; do
+            if [ -z "${!variable_name}" ]; then
+              missing+=("$variable_name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "CoinPulse validation environment OK."
+            exit 0
+          fi
+
+          echo "Missing required validation environment variables:" >&2
+
+          for variable_name in "${missing[@]}"; do
+            echo "- $variable_name" >&2
+          done
+
+          echo "" >&2
+          echo "See docs/validation-env-requirements.md for validation setup guidance." >&2
+          exit 1
