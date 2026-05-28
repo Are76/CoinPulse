@@ -129,6 +129,13 @@ describe("decideRpcRetryPolicy", () => {
     expect(result.failureCode).toBe("unknown");
   });
 
+  it("fails closed for unknown even if retryable is true", () => {
+    const result = decideRpcRetryPolicy({ failure: failure("unknown", true), attempt: 0, maxAttempts: 3 });
+    expect(result.action).toBe("do_not_retry");
+    expect(result.failureCode).toBe("unknown");
+    expect(result.reason).toBe("unknown_failure_not_retryable");
+  });
+
   it("never exceeds maxDelayMs", () => {
     const result = decideRpcRetryPolicy({
       failure: failure("timeout", true),

@@ -30,6 +30,10 @@ export function decideRpcRetryPolicy(args: DecideRpcRetryPolicyArgs): RpcRetryPo
   const maxDelayMs = Math.max(0, args.maxDelayMs ?? DEFAULT_MAX_DELAY_MS);
   const canRetry = args.failure.retryable && attempt < maxAttempts;
 
+  if (args.failure.code === "unknown") {
+    return buildDecision(args.failure, "do_not_retry", 0, attempt + 1, "unknown_failure_not_retryable");
+  }
+
   if (!args.failure.retryable) {
     return buildDecision(args.failure, "do_not_retry", 0, attempt + 1, "failure_not_retryable");
   }
