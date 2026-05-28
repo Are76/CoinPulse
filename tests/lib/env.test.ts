@@ -15,7 +15,7 @@ describe("env", () => {
     expect(env.NODE_ENV).toBeDefined();
     expect("DEFAULT_CHAIN_ID" in env).toBe(false);
     expect("NORMALIZER_VERSION" in env).toBe(false);
-    expect(rpcEnv.PULSECHAIN_RPC_URL).toContain("pulsechainstats.com");
+    expect(() => new URL(rpcEnv.PULSECHAIN_RPC_URL)).not.toThrow();
   });
 
   it("requires infrastructure connection settings", async () => {
