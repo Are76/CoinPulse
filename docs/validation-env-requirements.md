@@ -39,7 +39,7 @@ npm run build      # prisma generate && next build
 npm run typecheck  # prisma generate && next typegen && tsc --noEmit
 ```
 
-Prisma must resolve `DATABASE_URL` before it can generate the Prisma Client. If `DATABASE_URL` is missing or malformed, validation can fail before the changed code is reached.
+Prisma must resolve `DATABASE_URL` before it can generate the Prisma Client. If `DATABASE_URL` is missing or malformed, `npx prisma generate` (run by `npm run build` and `npm run typecheck`) can fail before the changed code is reached.
 
 ## Why `REDIS_URL` is required
 
@@ -48,9 +48,11 @@ Prisma must resolve `DATABASE_URL` before it can generate the Prisma Client. If 
 - `DATABASE_URL`
 - `REDIS_URL`
 
-The server environment contract is parsed at module load. During `next build`, any server code that imports that contract can be evaluated or bundled, so a missing or malformed `REDIS_URL` can fail build-time validation even when a PR is frontend-only.
+The server environment contract is parsed at module load. During `next build`, any server code that imports that contract can be evaluated or bundled, so a missing or empty `REDIS_URL` can fail build-time validation even when a PR is frontend-only.
 
-This is expected behavior for the current runtime contract. A missing or malformed env var should be treated as a validation environment issue unless the PR changed env validation or route imports.
+This is expected behavior for the current runtime contract. A missing or empty env var should be treated as a validation environment issue unless the PR changed env validation or route imports.
+
+URL protocol and format checks for `REDIS_URL` are handled by `npm run validate:env`.
 
 ## Why `PULSECHAIN_RPC_URL` is required
 
@@ -83,11 +85,11 @@ Do not commit `.env` files or secrets.
 
 ### Missing or malformed `DATABASE_URL`
 
-If validation fails with a Prisma config error for `DATABASE_URL`, rerun with a valid `DATABASE_URL` exported before diagnosing product code.
+If `npx prisma generate` (run by `npm run build` and `npm run typecheck`) fails with a Prisma config error for `DATABASE_URL`, rerun with a valid `DATABASE_URL` exported before diagnosing product code.
 
 ### Missing or malformed `REDIS_URL`
 
-If `npm run build` fails with a Zod error for `REDIS_URL`, rerun with a valid `REDIS_URL` exported before diagnosing product code.
+If `npm run build` fails with a Zod error for `REDIS_URL`, export a non-empty `REDIS_URL` before diagnosing product code. URL format and protocol issues should be fixed through `npm run validate:env`.
 
 ### Missing or malformed `PULSECHAIN_RPC_URL`
 
