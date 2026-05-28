@@ -11,7 +11,7 @@ It is an audit/checklist only. It does not change runtime behavior, database sch
 Backend platform readiness is evaluated against the existing CoinPulse truth stack:
 
 ```text
-raw audit -> canonical ledger -> derived positions/state -> pricing observations -> backend-computed PnL/valuation output -> versioned DTOs -> API routes -> frontend
+raw audit -> deterministic normalization -> canonical ledger -> derived positions/state -> pricing observations -> backend-computed PnL/valuation output -> versioned DTOs -> API routes -> frontend
 ```
 
 Readiness does not mean the frontend can compute truth. It means the backend surfaces are stable enough that the frontend and operator flows can consume backend DTOs without reconstructing accounting, pricing, valuation, LP, stake, or PnL truth.
@@ -22,6 +22,7 @@ CoinPulse V1 backend platform readiness means:
 
 - PostgreSQL persisted state remains the source of truth.
 - RPC remains ingestion input only.
+- Deterministic normalization remains the only path from raw audit data into canonical ledger entries.
 - Canonical ledger entries remain accounting truth.
 - Derived portfolio state remains materialized from ledger truth.
 - Versioned backend DTOs remain the only UI consumption contract.
@@ -36,6 +37,7 @@ The following foundation is already in place and should be preserved:
 - `GET /api/portfolio/dashboard` exists as the current dashboard DTO route.
 - `GET /api/debug/health` exists as an operator/debug health surface.
 - `GET /api/debug/status` exists as an operator/debug status surface.
+- `GET /api/prices/status` exists as the current persisted-pricing observability route with route-contract coverage.
 - `POST /api/wallets/import` exists as a backend wallet import route.
 - `POST /api/sync/manual` exists as the manual sync route.
 - `POST /api/rebuild` exists as the rebuild route.
@@ -111,11 +113,13 @@ This is the largest remaining backend readiness gate.
 
 ### G5. Pricing observability is surfaced as a first-class backend DTO
 
-Status: not complete.
+Status: implemented for the current persisted-pricing observability route, pending production-like evidence.
 
-Current gap:
+Current foundation:
 
-- `GET /api/prices/status` does not exist yet.
+- `GET /api/prices/status` exists.
+- Route-contract coverage exists in `tests/api/prices-status-route-contract.test.ts`.
+- Current route coverage is tracked in `docs/route-contract-coverage-index.md`.
 
 Why it matters:
 
@@ -123,9 +127,10 @@ Why it matters:
 - Operators need a backend DTO surface for price freshness, coverage, confidence, rejected reasons, and stale/low-confidence status.
 - The frontend must not infer pricing status from symbols, token lists, or external APIs.
 
-Recommended bounded PR:
+Remaining evidence needed:
 
-- Add `GET /api/prices/status` as a backend DTO route with route-level contract tests.
+- Production-like validation that the route reflects persisted pricing status correctly for the target environment.
+- Confirmation that the frontend consumes pricing status only through backend DTO/query contracts when a pricing-status UI surface is used.
 
 ### G6. Canonical transaction DTO is surfaced
 
@@ -146,23 +151,24 @@ Recommended bounded PR:
 
 ### G7. Compatibility strategy for route normalization exists
 
-Status: not complete.
+Status: documented as a compatibility requirement, not yet implemented as a route transition.
 
 Current state:
 
 - Current dashboard route is `GET /api/portfolio/dashboard`.
 - Long-term preferred route is `GET /api/dashboard`.
+- The compatibility requirements are documented: compatibility period, additive alias or versioned transition, no silent rename, and dual-route contract tests during the transition.
 
-Required before route change:
+Remaining implementation work before route change:
 
-- A documented compatibility period.
-- Additive alias or versioned transition.
-- No silent rename.
-- Contract tests proving both old and new routes during the compatibility window.
+- Decide whether the route transition is needed for V1 or should be explicitly deferred.
+- If implemented, add an alias/transition route without breaking `GET /api/portfolio/dashboard`.
+- Add contract tests proving both old and new routes during the compatibility window.
+- Document deprecation timing before any old route removal.
 
 Recommended bounded PR:
 
-- Document route normalization compatibility strategy before implementing any alias.
+- Either explicitly defer the route normalization transition for V1, or implement an additive compatibility alias with contract tests.
 
 ## Backend platform completion assessment
 
@@ -170,24 +176,26 @@ Current assessment: partially ready, not fully complete.
 
 What is ready:
 
-- Core truth model is documented.
+- Core truth model is documented, including deterministic normalization.
 - Current dashboard/debug/wallet/sync/rebuild route surfaces exist.
+- Current pricing-status route and contract coverage exist.
 - DTO-first guardrails are explicit.
 - Environment validation is now clearer and less likely to be misdiagnosed.
+- Dashboard route-normalization compatibility requirements are documented.
 
 What still blocks declaring the backend platform complete:
 
 1. G4 production-like wallet import -> sync -> materialize -> rebuild evidence is not yet captured.
-2. G5 `GET /api/prices/status` backend DTO is not implemented.
+2. G5 pricing-status production-like evidence is not yet captured.
 3. G6 canonical `GET /api/transactions` backend DTO is not implemented.
-4. G7 route normalization compatibility strategy is not documented.
+4. G7 route-normalization transition is not implemented or explicitly deferred for V1.
 
 ## Recommended next bounded sequence
 
 1. Complete G4 evidence collection using `docs/g4-manual-operator-run-checklist.md`.
-2. Add `GET /api/prices/status` DTO and contract tests.
+2. Capture production-like `GET /api/prices/status` evidence for the target environment.
 3. Add canonical `GET /api/transactions` DTO and contract tests.
-4. Document dashboard route normalization compatibility strategy.
+4. Explicitly defer dashboard route normalization for V1 or implement an additive compatibility alias with tests.
 5. Re-run this readiness checklist and update status.
 
 ## Non-goals before backend platform completion
