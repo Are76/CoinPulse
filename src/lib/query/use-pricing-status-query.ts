@@ -3,10 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchPricingStatus } from "@/lib/api/prices-client";
 import { queryKeys } from "@/lib/query/query-keys";
 
-export const PRICING_STATUS_STALE_TIME = 30_000;
-export const PRICING_STATUS_GC_TIME = 10 * 60_000;
+export const PRICING_STATUS_STALE_TIME = 15_000;
+export const PRICING_STATUS_GC_TIME = 5 * 60_000;
 
 export type UsePricingStatusQueryParams = {
+  chainId?: number;
   enabled?: boolean;
 };
 
@@ -16,9 +17,12 @@ export type UsePricingStatusQueryParams = {
  * Calls the prices client fetcher and surfaces the backend DTO/error as-is.
  * This hook is read-only and does not infer or compute pricing truth in the UI.
  */
-export function usePricingStatusQuery({ enabled = true }: UsePricingStatusQueryParams = {}) {
+export function usePricingStatusQuery({
+  chainId = 369,
+  enabled = true,
+}: UsePricingStatusQueryParams = {}) {
   return useQuery({
-    queryKey: queryKeys.prices.status(),
+    queryKey: queryKeys.prices.status(chainId),
     queryFn: fetchPricingStatus,
     enabled,
     retry: false,

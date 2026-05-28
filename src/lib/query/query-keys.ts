@@ -29,7 +29,7 @@ export const queryKeys = {
       asOf ?? LATEST_AS_OF,
     ] as const,
   prices: {
-    status: () => ["prices", "status"] as const,
+    status: (chainId: number) => ["prices", "status", { chainId }] as const,
   },
   transactions: (schemaVersion: string, filters: Record<string, unknown>) =>
     ["transactions", schemaVersion, filters] as const,
