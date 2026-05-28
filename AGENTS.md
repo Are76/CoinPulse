@@ -53,6 +53,58 @@ test/dashboard-route-contract
 
 If GitHub Copilot auto-prefixes branch names, document the caveat in the PR body.
 
+## Codex Cloud bootstrap and publishing
+
+Codex Cloud may start on branch `work` and may not keep `origin` after bootstrap. This is expected for this environment and is not by itself a failure.
+
+Before changing files in Codex Cloud:
+
+1. Report:
+
+```bash
+pwd
+git rev-parse --abbrev-ref HEAD
+git rev-parse HEAD
+git status --short
+git remote -v
+```
+
+2. If `origin` is missing, temporarily add it:
+
+```bash
+git remote add origin https://github.com/Are76/CoinPulse.git
+```
+
+3. Fetch and verify `origin/main`:
+
+```bash
+git fetch origin main
+git rev-parse origin/main
+git merge-base --is-ancestor origin/main HEAD
+echo MERGE_BASE_EXIT:$?
+```
+
+4. If `git fetch origin main` fails, stop and report the exact error.
+5. If the working tree is dirty before changes, stop and report the exact files.
+6. Create the task branch from `origin/main` unless the task is explicitly a fix for an existing PR branch.
+
+Publishing rules:
+
+- Use terminal commands for code changes, tests, and validation.
+- Do not rely on terminal `git push` for publishing unless explicitly instructed.
+- Prefer Codex GitHub integration tools, GitHub UI, or compare-link fallback for publishing PRs.
+- If GitHub integration cannot create or update a PR, report the branch name, commit SHA, changed files, validation results, and a compare-link fallback.
+- Remove temporary `origin` only after fetch/compare/publishing work no longer needs it.
+
+Existing PR fixes:
+
+- For review comments on an open PR, fetch and check out the existing PR branch.
+- Do not create a new branch or new PR for review fixes unless explicitly requested.
+- Verify each finding against current code.
+- Fix only still-valid issues.
+- Keep changes minimal and scoped to the reviewed files when possible.
+- Validate with focused tests first, then lint and typecheck.
+
 ## Expected implementation flow
 
 1. Inspect existing architecture first.
