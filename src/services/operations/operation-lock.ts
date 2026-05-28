@@ -90,12 +90,7 @@ export async function checkOperationConflict(args: {
       );
     }
 
-    const activeScopedSync = activeRuns.find(
-      (run) =>
-        isSyncLikeTrigger(run.trigger) &&
-        run.walletId === args.requestedOperation.walletId &&
-        run.chainId === args.requestedOperation.chainId,
-    );
+    const activeScopedSync = findActiveScopedSync(activeRuns, args.requestedOperation);
     if (activeScopedSync) {
       return buildConflict(
         "active_sync_in_scope",
@@ -112,6 +107,16 @@ export async function checkOperationConflict(args: {
       return buildConflict(
         "active_rebuild_in_progress",
         activeRebuild,
+        now,
+        args.thresholds,
+      );
+    }
+
+    const activeScopedSync = findActiveScopedSync(activeRuns, args.requestedOperation);
+    if (activeScopedSync) {
+      return buildConflict(
+        "active_sync_in_scope",
+        activeScopedSync,
         now,
         args.thresholds,
       );
@@ -304,7 +309,14 @@ function buildConflictWhere(requestedOperation: RequestedOperation): Prisma.Sync
 
   return {
     status: { in: [...ACTIVE_SYNC_RUN_STATUSES] },
-    trigger: "REBUILD",
+    OR: [
+      { trigger: "REBUILD" },
+      {
+        trigger: { in: [...SYNC_LIKE_TRIGGERS] },
+        walletId: requestedOperation.walletId,
+        chainId: requestedOperation.chainId,
+      },
+    ],
   };
 }
 
@@ -365,6 +377,18 @@ function mapOperationType(
     default:
       return "unknown";
   }
+}
+
+function findActiveScopedSync(
+  activeRuns: ActiveSyncRunRecord[],
+  requestedOperation: RequestedOperation,
+) {
+  return activeRuns.find(
+    (run) =>
+      isSyncLikeTrigger(run.trigger) &&
+      run.walletId === requestedOperation.walletId &&
+      run.chainId === requestedOperation.chainId,
+  );
 }
 
 function isActiveStatus(status: SyncRunStatus | string): status is (typeof ACTIVE_SYNC_RUN_STATUSES)[number] {
