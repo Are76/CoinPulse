@@ -88,13 +88,24 @@ If any required item cannot be safely executed, mark G4 partial rather than comp
 
 `GET /api/prices/status` exists and has route-contract coverage. G5 remaining work is production-like evidence, not endpoint implementation.
 
+Current v1 response evidence is limited to fields exposed by the implemented DTO/report. The template must not require distinct fields that the current DTO does not expose.
+
+Directly evidenceable v1 status concepts:
+
+- top-level `status`: `ok`, `degraded`, or `unknown`.
+- per-source `status`: `ok`, `degraded`, `disabled`, or `unknown`.
+- `rejectedCount`, which can include stale and/or low-confidence rejected observations without distinguishing those reasons as separate status fields.
+- `reason`, when supplied by the backend report.
+
 ### G5 pass criteria
 
 G5 may be marked complete only when all of the following are true:
 
 - `GET /api/prices/status` returns a safe versioned envelope in the target environment.
 - the response reflects persisted pricing observation status rather than frontend inference.
-- stale, low-confidence, unavailable, disabled-source, and degraded states remain explicit when applicable.
+- top-level `ok`, `degraded`, or `unknown` status is visible and attributable to backend DTO output.
+- per-source `ok`, `degraded`, `disabled`, or `unknown` status is visible when sources are present.
+- rejected observation counts and backend-provided reasons are recorded without claiming a distinct low-confidence or stale status unless the DTO exposes one.
 - no secrets or internal exception details are leaked.
 - any frontend pricing-status surface consumes backend DTO/query contracts only.
 - no frontend symbol-based pricing inference is required.
@@ -106,10 +117,11 @@ If the environment lacks representative persisted pricing observations, mark G5 
 | Item | Command / route / page | Expected result | Actual result | Timestamp UTC | Artifact link / excerpt | Pass/Fail | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Pricing status baseline | `GET /api/prices/status` | Versioned safe envelope |  |  |  |  |  |
+| Top-level status evidence | `GET /api/prices/status` | Top-level `status` is `ok`, `degraded`, or `unknown` |  |  |  |  |  |
+| Per-source status evidence | `GET /api/prices/status` | Per-source `status` is `ok`, `degraded`, `disabled`, or `unknown` where sources are present |  |  |  |  |  |
 | Persisted observation evidence | Backend route response / redacted DB-derived status | Status reflects persisted pricing observations |  |  |  |  |  |
-| Freshness evidence | `GET /api/prices/status` | Fresh/stale fields or status visible where applicable |  |  |  |  |  |
-| Confidence evidence | `GET /api/prices/status` | Confidence/degraded/low-confidence details visible where applicable |  |  |  |  |  |
-| Disabled/unavailable evidence | Controlled environment condition or existing state | Disabled/unavailable state remains explicit where applicable |  |  |  |  |  |
+| Rejected observation evidence | `GET /api/prices/status` | `rejectedCount` is recorded where present; do not infer a distinct stale/low-confidence status |  |  |  |  |  |
+| Backend reason evidence | `GET /api/prices/status` | Backend-provided `reason` is recorded where present |  |  |  |  |  |
 | Safe error envelope evidence | Route error path if safely testable | No internal details leaked |  |  |  |  |  |
 | Frontend truth guard | Query/client review or UI artifact if present | Frontend does not infer pricing truth from symbols/external APIs |  |  |  |  |  |
 
