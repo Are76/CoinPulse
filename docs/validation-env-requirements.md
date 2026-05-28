@@ -38,12 +38,7 @@ Prisma must resolve `DATABASE_URL` before it can generate the Prisma Client. If 
 - `DATABASE_URL`
 - `REDIS_URL`
 
-During `next build`, Next.js can collect route/page data for server routes such as:
-
-- `/api/debug/health`
-- `/api/debug/status`
-
-If those server modules import the server environment contract, a missing `REDIS_URL` can fail build-time validation even when a PR is frontend-only.
+The server environment contract is parsed at module load. During `next build`, any server code that imports that contract can be evaluated or bundled, so a missing `REDIS_URL` can fail build-time validation even when a PR is frontend-only.
 
 This is expected behavior for the current runtime contract. A missing env var should be treated as a validation environment issue unless the PR changed env validation or route imports.
 
