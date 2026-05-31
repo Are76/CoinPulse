@@ -31,6 +31,8 @@ Expected services:
 - postgres
 - redis
 
+Both services should report healthy before continuing.
+
 ## Validation environment
 
 Example environment values:
@@ -40,6 +42,8 @@ export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/coinpulse"
 export REDIS_URL="redis://localhost:6379"
 export PULSECHAIN_RPC_URL="http://localhost:8545"
 ```
+
+Run these exports in every terminal that runs npm, Prisma, seed, or dev-server commands. Environment variables exported in one terminal are not automatically available in another terminal.
 
 Run validation:
 
@@ -56,13 +60,21 @@ Apply Prisma schema:
 npx prisma migrate deploy
 ```
 
+Seed required local reference data:
+
+```bash
+npm run db:seed
+```
+
+The seed step creates required local reference rows such as the supported PulseChain chain entry. Without it, wallet import can fail with a `Wallet_chainId_fkey` foreign-key error because chain `369` is missing from the local database.
+
 If local development requires a fresh database:
 
 ```bash
 npx prisma migrate reset
 ```
 
-Use caution because reset destroys local data.
+Use caution because reset destroys local data. After any reset, rerun the seed step before wallet import or sync evidence.
 
 ## Start application
 
@@ -74,11 +86,12 @@ npm run dev
 
 1. GET /api/debug/health
 2. GET /api/debug/status
-3. POST /api/wallets/import
+3. GET /api/prices/status
 4. GET /api/wallets/tracked
-5. POST /api/sync/manual
-6. POST /api/rebuild
-7. GET /api/prices/status
+5. POST /api/wallets/import
+6. GET /api/wallets/tracked
+7. POST /api/sync/manual
+8. POST /api/rebuild
 
 Record results in the G4/G5 evidence-run record.
 
