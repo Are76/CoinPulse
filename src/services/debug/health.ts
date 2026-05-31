@@ -62,10 +62,7 @@ export async function getHealthReport(dependencies: HealthDependencies = {}): Pr
     });
   const redisPing =
     dependencies.redisPing ??
-    (async () => {
-      const redis = getRedis();
-      await redis.ping();
-    });
+    pingRedis;
 
   const [databaseStatus, redisStatus] = await Promise.all([
     probe(databasePing),
@@ -110,6 +107,16 @@ export async function getDebugStatusReport(): Promise<DebugStatusReport> {
     operationState: await getOperationStateReport(),
     materializationDiagnostics: await getMaterializationDiagnosticsReport(),
   };
+}
+
+async function pingRedis() {
+  const redis = getRedis();
+
+  if (redis.status === "wait") {
+    await redis.connect();
+  }
+
+  await redis.ping();
 }
 
 async function probe(ping: () => Promise<void>): Promise<DependencyState> {
