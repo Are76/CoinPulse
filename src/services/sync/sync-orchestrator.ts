@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { SourceFamily, SyncTrigger } from "@prisma/client";
+import { Prisma, type SourceFamily, type SyncTrigger } from "@prisma/client";
 
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 import { reserveOperationRun } from "@/services/operations/operation-lock";
@@ -297,21 +297,28 @@ function classifySyncFailure(error: unknown) {
     return "non_error_throwable";
   }
 
-  if (error.name === "PrismaClientKnownRequestError") {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
     return "database_known_request_error";
   }
 
-  if (error.name === "PrismaClientValidationError") {
+  if (error instanceof Prisma.PrismaClientValidationError) {
     return "database_validation_error";
   }
 
-  const normalizedName = error.name.toLowerCase();
+  const fingerprint = `${error.name} ${error.message}`.toLowerCase();
 
-  if (normalizedName.includes("timeout")) {
+  if (fingerprint.includes("timeout") || fingerprint.includes("timed out")) {
     return "timeout_error";
   }
 
-  if (normalizedName.includes("network")) {
+  if (
+    fingerprint.includes("network") ||
+    fingerprint.includes("connect") ||
+    fingerprint.includes("connection") ||
+    fingerprint.includes("enotfound") ||
+    fingerprint.includes("econnrefused") ||
+    fingerprint.includes("econnreset")
+  ) {
     return "network_error";
   }
 
