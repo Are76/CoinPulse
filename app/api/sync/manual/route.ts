@@ -44,10 +44,35 @@ export async function POST(request: Request) {
     }
 
     console.error("Manual sync route failed", {
+      route: "POST /api/sync/manual",
       errorName: error instanceof Error ? error.name : typeof error,
-      errorMessage: error instanceof Error ? error.message : String(error),
+      errorCategory: classifyManualSyncError(error),
     });
 
     return buildInternalErrorResponse();
   }
+}
+
+function classifyManualSyncError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "non_error_throwable";
+  }
+
+  if (error.name === "PrismaClientKnownRequestError") {
+    return "database_known_request_error";
+  }
+
+  if (error.name === "PrismaClientValidationError") {
+    return "database_validation_error";
+  }
+
+  if (error.name.toLowerCase().includes("timeout")) {
+    return "timeout_error";
+  }
+
+  if (error.name.toLowerCase().includes("network")) {
+    return "network_error";
+  }
+
+  return "unexpected_error";
 }
