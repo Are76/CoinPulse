@@ -42,6 +42,12 @@ export async function POST(request: Request) {
     if (isOperationConflictError(error)) {
       return buildConflictResponse(error.code, error.message, error.details);
     }
+
+    console.error("Manual sync route failed", {
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+
     return buildInternalErrorResponse();
   }
 }
