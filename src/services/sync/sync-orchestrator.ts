@@ -286,9 +286,36 @@ function buildSyncFailureMessage(args: {
     args.sourceFamily && typeof args.fromBlock === "bigint" && typeof args.toBlock === "bigint"
       ? `${args.sourceFamily} ${args.fromBlock}-${args.toBlock}`
       : "unknown-range";
-  const message = args.error instanceof Error ? args.error.message : String(args.error);
+  const errorName = args.error instanceof Error ? args.error.name : typeof args.error;
+  const errorCategory = classifySyncFailure(args.error);
 
-  return `[${args.stage}] ${range}: ${message}`;
+  return `[${args.stage}] ${range}: ${errorName}/${errorCategory}`;
+}
+
+function classifySyncFailure(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "non_error_throwable";
+  }
+
+  if (error.name === "PrismaClientKnownRequestError") {
+    return "database_known_request_error";
+  }
+
+  if (error.name === "PrismaClientValidationError") {
+    return "database_validation_error";
+  }
+
+  const normalizedName = error.name.toLowerCase();
+
+  if (normalizedName.includes("timeout")) {
+    return "timeout_error";
+  }
+
+  if (normalizedName.includes("network")) {
+    return "network_error";
+  }
+
+  return "unexpected_error";
 }
 
 function minBlock(values: readonly bigint[]) {
