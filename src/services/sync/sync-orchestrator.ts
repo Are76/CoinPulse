@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { SourceFamily, SyncTrigger } from "@prisma/client";
+import { Prisma, type SourceFamily, type SyncTrigger } from "@prisma/client";
 
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 import { reserveOperationRun } from "@/services/operations/operation-lock";
@@ -286,9 +286,43 @@ function buildSyncFailureMessage(args: {
     args.sourceFamily && typeof args.fromBlock === "bigint" && typeof args.toBlock === "bigint"
       ? `${args.sourceFamily} ${args.fromBlock}-${args.toBlock}`
       : "unknown-range";
-  const message = args.error instanceof Error ? args.error.message : String(args.error);
+  const errorName = args.error instanceof Error ? args.error.name : typeof args.error;
+  const errorCategory = classifySyncFailure(args.error);
 
-  return `[${args.stage}] ${range}: ${message}`;
+  return `[${args.stage}] ${range}: ${errorName}/${errorCategory}`;
+}
+
+function classifySyncFailure(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "non_error_throwable";
+  }
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    return "database_known_request_error";
+  }
+
+  if (error instanceof Prisma.PrismaClientValidationError) {
+    return "database_validation_error";
+  }
+
+  const fingerprint = `${error.name} ${error.message}`.toLowerCase();
+
+  if (fingerprint.includes("timeout") || fingerprint.includes("timed out")) {
+    return "timeout_error";
+  }
+
+  if (
+    fingerprint.includes("network") ||
+    fingerprint.includes("connect") ||
+    fingerprint.includes("connection") ||
+    fingerprint.includes("enotfound") ||
+    fingerprint.includes("econnrefused") ||
+    fingerprint.includes("econnreset")
+  ) {
+    return "network_error";
+  }
+
+  return "unexpected_error";
 }
 
 function minBlock(values: readonly bigint[]) {
