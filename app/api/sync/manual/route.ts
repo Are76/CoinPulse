@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
 
 import { isOperationConflictError } from "@/services/operations/operation-lock";
@@ -13,9 +14,15 @@ import {
 } from "@/services/api/validation";
 import { resolveTrackedWalletByAddress } from "@/services/api/wallets";
 
+type ManualSyncRoutePhase = "parse_input" | "resolve_wallet" | "run_wallet_sync";
+
 export async function POST(request: Request) {
+  let phase: ManualSyncRoutePhase = "parse_input";
+
   try {
     const input = await parseJsonBody(manualSyncRequestSchema, request);
+
+    phase = "resolve_wallet";
     const wallet = await resolveTrackedWalletByAddress({
       walletAddress: input.walletAddress,
       chainId: input.chainId,
@@ -25,6 +32,7 @@ export async function POST(request: Request) {
       return buildNotFoundResponse("WALLET_NOT_FOUND", "Wallet not found for the requested chain.");
     }
 
+    phase = "run_wallet_sync";
     const result = await runWalletSync({
       wallet,
       sourceFamilies: input.sourceFamilies,
@@ -45,6 +53,7 @@ export async function POST(request: Request) {
 
     console.error("Manual sync route failed", {
       route: "POST /api/sync/manual",
+      phase,
       errorName: error instanceof Error ? error.name : typeof error,
       errorCategory: classifyManualSyncError(error),
     });
@@ -58,19 +67,28 @@ function classifyManualSyncError(error: unknown) {
     return "non_error_throwable";
   }
 
-  if (error.name === "PrismaClientKnownRequestError") {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
     return "database_known_request_error";
   }
 
-  if (error.name === "PrismaClientValidationError") {
+  if (error instanceof Prisma.PrismaClientValidationError) {
     return "database_validation_error";
   }
 
-  if (error.name.toLowerCase().includes("timeout")) {
+  const fingerprint = `${error.name} ${error.message}`.toLowerCase();
+
+  if (fingerprint.includes("timeout") || fingerprint.includes("timed out")) {
     return "timeout_error";
   }
 
-  if (error.name.toLowerCase().includes("network")) {
+  if (
+    fingerprint.includes("network") ||
+    fingerprint.includes("connect") ||
+    fingerprint.includes("connection") ||
+    fingerprint.includes("enotfound") ||
+    fingerprint.includes("econnrefused") ||
+    fingerprint.includes("econnreset")
+  ) {
     return "network_error";
   }
 
