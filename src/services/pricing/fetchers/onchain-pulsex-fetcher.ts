@@ -90,6 +90,12 @@ export type FetchOnchainPriceArgs = {
   quoteAsset: string;
   /** Block number recorded as the observation timestamp marker. */
   blockNumber: bigint;
+  /**
+   * Caller-supplied observation timestamp. Must be stable for the same block
+   * so that the persisted observation ID (which hashes observedAt) is
+   * deterministic across rebuilds and replays.
+   */
+  observedAt: Date;
 };
 
 export type FetchOnchainPriceResult =
@@ -177,8 +183,9 @@ async function tryFetchFromRouter(args: {
   tokenDecimals: number;
 }): Promise<RouterFetchResult> {
   try {
-    // 1 unit of the token in its smallest denomination
-    const amountIn = BigInt(10 ** args.tokenDecimals);
+    // 1 unit of the token in its smallest denomination — use pure bigint
+    // arithmetic to avoid float precision loss for large decimal counts
+    const amountIn = 10n ** BigInt(args.tokenDecimals);
 
     // WPLS itself is the entry to the pDAI market; everything else hops through WPLS first
     const routePath: readonly Address[] =
@@ -294,8 +301,16 @@ async function tryGetLiquidityUsd(args: {
     const liquidityUsd = tokenReserveNormalized.mul(args.priceUsd).mul(2);
 
     return { liquidityUsd, pairAddress };
-  } catch {
-    // Liquidity is non-critical — price fetch continues with unknown confidence
+  } catch (error) {
+    // Liquidity is non-critical — price fetch continues with unknown confidence.
+    // Log the failure so operators can distinguish expected "no pair" cases from
+    // RPC timeouts, reverts, or ABI mismatches that degrade confidence quality.
+    logInfo("Liquidity reserve fetch failed — confidence falls back to 0.50", {
+      factoryAddress: args.factoryAddress,
+      firstHopToken: args.firstHopToken,
+      secondHopToken: args.secondHopToken,
+      reason: error instanceof Error ? error.message : String(error),
+    });
     return { liquidityUsd: null, pairAddress: null };
   }
 }
@@ -311,12 +326,12 @@ export function confidenceFromLiquidityUsd(liquidityUsd: Decimal | null): Decima
     return new Decimal("0.50");
   }
 
-  const usd = liquidityUsd.toNumber();
-
-  if (usd >= 1_000_000) return new Decimal("0.95");
-  if (usd >= 100_000) return new Decimal("0.85");
-  if (usd >= 10_000) return new Decimal("0.70");
-  if (usd >= 1_000) return new Decimal("0.55");
+  // Use Decimal comparisons throughout to preserve the project's 40-digit
+  // precision — converting to Number first would drop precision near boundaries
+  if (liquidityUsd.gte("1000000")) return new Decimal("0.95");
+  if (liquidityUsd.gte("100000")) return new Decimal("0.85");
+  if (liquidityUsd.gte("10000")) return new Decimal("0.70");
+  if (liquidityUsd.gte("1000")) return new Decimal("0.55");
   return new Decimal("0.30");
 }
 
@@ -353,7 +368,7 @@ function buildDraft(
     },
     liquidityUsd: result.liquidityUsd?.toFixed(2) ?? null,
     confidence: confidence.toString(),
-    observedAt: new Date(),
+    observedAt: args.observedAt,
     blockNumber: args.blockNumber,
     staleAfterSeconds: STALE_AFTER_SECONDS,
   };

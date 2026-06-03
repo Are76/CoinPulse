@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PublicClient, Address } from "viem";
 
 import {
@@ -16,6 +16,7 @@ import { Decimal } from "@/lib/decimal";
 const CHAIN_ID = 369;
 const BLOCK_NUMBER = 21_000_000n;
 const QUOTE_ASSET = "fiat:usd";
+const OBSERVED_AT = new Date("2026-06-01T12:00:00.000Z");
 
 const PHEX_ADDRESS: Address = "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39";
 const PHEX_DECIMALS = 8;
@@ -113,6 +114,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -139,6 +141,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -159,6 +162,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -182,6 +186,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -201,6 +206,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -244,6 +250,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PLS_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -287,6 +294,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PLS_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -336,6 +344,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -382,6 +391,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -408,6 +418,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(false);
@@ -436,6 +447,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(false);
@@ -473,6 +485,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -510,6 +523,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -532,6 +546,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       // Should still succeed — reserve1 used instead of reserve0
@@ -554,6 +569,7 @@ describe("fetchOnchainPulseXPrice", () => {
         tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
       });
 
       expect(result.ok).toBe(true);
@@ -570,10 +586,74 @@ describe("fetchOnchainPulseXPrice", () => {
       expect(typeof draft.sourceId).toBe("string");
       expect(draft.blockNumber).toBe(BLOCK_NUMBER);
       expect(draft.staleAfterSeconds).toBeGreaterThan(0);
-      expect(draft.observedAt).toBeInstanceOf(Date);
+      // observedAt must equal the caller-supplied value (not wall-clock time)
+      expect(draft.observedAt).toBe(OBSERVED_AT);
       expect(typeof draft.confidence).toBe("string");
       expect(Number(draft.confidence)).toBeGreaterThan(0);
       expect(Number(draft.confidence)).toBeLessThanOrEqual(1);
+    });
+  });
+
+  describe("determinism — observedAt propagated from caller", () => {
+    it("sets observedAt to the caller-supplied timestamp, not wall-clock time", async () => {
+      const stableTimestamp = new Date("2026-01-15T08:30:00.000Z");
+      const client = buildHappyV1Client();
+
+      const result = await fetchOnchainPulseXPrice({
+        publicClient: client,
+        chainId: CHAIN_ID,
+        assetId: PHEX_ASSET_ID,
+        tokenAddress: PHEX_ADDRESS,
+        tokenDecimals: PHEX_DECIMALS,
+        quoteAsset: QUOTE_ASSET,
+        blockNumber: BLOCK_NUMBER,
+        observedAt: stableTimestamp,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      // The draft must carry back exactly the caller's Date instance.
+      // persistPriceObservations() hashes observedAt into the observation ID,
+      // so using the same block+timestamp on rebuild must produce the same ID.
+      expect(result.draft.observedAt).toBe(stableTimestamp);
+      expect(result.draft.observedAt.toISOString()).toBe(
+        "2026-01-15T08:30:00.000Z",
+      );
+    });
+
+    it("two calls with the same observedAt produce identical observation inputs", async () => {
+      const stableTimestamp = new Date("2026-01-15T08:30:00.000Z");
+
+      const args = {
+        chainId: CHAIN_ID,
+        assetId: PHEX_ASSET_ID,
+        tokenAddress: PHEX_ADDRESS,
+        tokenDecimals: PHEX_DECIMALS,
+        quoteAsset: QUOTE_ASSET,
+        blockNumber: BLOCK_NUMBER,
+        observedAt: stableTimestamp,
+      };
+
+      const r1 = await fetchOnchainPulseXPrice({
+        publicClient: buildHappyV1Client(),
+        ...args,
+      });
+      const r2 = await fetchOnchainPulseXPrice({
+        publicClient: buildHappyV1Client(),
+        ...args,
+      });
+
+      expect(r1.ok).toBe(true);
+      expect(r2.ok).toBe(true);
+      if (!r1.ok || !r2.ok) return;
+
+      // Same inputs → same observation ID inputs → idempotent persistence
+      expect(r1.draft.observedAt.toISOString()).toBe(
+        r2.draft.observedAt.toISOString(),
+      );
+      expect(r1.draft.price).toBe(r2.draft.price);
+      expect(r1.draft.sourceId).toBe(r2.draft.sourceId);
     });
   });
 });
