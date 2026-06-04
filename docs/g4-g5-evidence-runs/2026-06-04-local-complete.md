@@ -69,6 +69,6 @@ Security note: no secrets, private keys, seed phrases, database credentials beyo
 
 ## Final status
 
-**G4: Complete. G5: Complete.**
+**G4: Partial** (sync evidenced; rebuild/materialization pending). **G5: Complete.**
 
-Both backend platform readiness gates are satisfied from this run.
+G5 backend platform readiness gate is satisfied from this run. G4 requires rebuild/materialization evidence before it can be declared complete.
