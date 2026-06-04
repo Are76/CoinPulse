@@ -26,6 +26,8 @@ const PLS_ZERO_ADDRESS: Address = "0x0000000000000000000000000000000000000000";
 const PLS_ASSET_ID = "chain:369:native:PLS";
 const PLS_DECIMALS = 18;
 
+// These should not be the real factory addresses — using distinct mock values
+// so any test that receives a real address instead of a mock will throw.
 const MOCK_FACTORY_V1: Address = "0x1715a3E4A142d8b698131108995174F37aEBA10D";
 const MOCK_PAIR_ADDRESS: Address = "0xaAbBcCdDeEfF00112233445566778899aAbBcCdD";
 
