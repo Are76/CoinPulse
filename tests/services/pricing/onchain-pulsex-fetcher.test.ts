@@ -401,6 +401,64 @@ describe("fetchOnchainPulseXPrice", () => {
     });
   });
 
+  describe("input validation guards", () => {
+    it("returns ok: false for a non-PulseChain chain ID", async () => {
+      const result = await fetchOnchainPulseXPrice({
+        publicClient: buildHappyV1Client(),
+        chainId: 1, // Ethereum mainnet
+        assetId: PHEX_ASSET_ID,
+        tokenAddress: PHEX_ADDRESS,
+        tokenDecimals: PHEX_DECIMALS,
+        quoteAsset: QUOTE_ASSET,
+        blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toContain("unsupported_chain_id");
+    });
+
+    it("returns ok: false for a negative tokenDecimals value", async () => {
+      const client = buildMockClient(({ functionName }) => {
+        if (functionName === "getAmountsOut") throw new Error("should not be called");
+        throw new Error(`Unexpected: ${functionName}`);
+      });
+
+      const result = await fetchOnchainPulseXPrice({
+        publicClient: client,
+        chainId: CHAIN_ID,
+        assetId: PHEX_ASSET_ID,
+        tokenAddress: PHEX_ADDRESS,
+        tokenDecimals: -1,
+        quoteAsset: QUOTE_ASSET,
+        blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toContain("invalid_token_decimals");
+    });
+
+    it("returns ok: false for a non-integer tokenDecimals value", async () => {
+      const result = await fetchOnchainPulseXPrice({
+        publicClient: buildHappyV1Client(),
+        chainId: CHAIN_ID,
+        assetId: PHEX_ASSET_ID,
+        tokenAddress: PHEX_ADDRESS,
+        tokenDecimals: 8.5,
+        quoteAsset: QUOTE_ASSET,
+        blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toContain("invalid_token_decimals");
+    });
+  });
+
   describe("both V1 and V2 fail", () => {
     it("returns ok: false without writing any observation", async () => {
       const client = buildMockClient(({ functionName }) => {

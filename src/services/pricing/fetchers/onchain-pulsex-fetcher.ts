@@ -18,6 +18,7 @@ export const PULSEX_V2_ROUTER_ADDRESS: Address =
   "0x85bc865A1CD0862024EAC574A9996F89df51Eca8";
 
 const NULL_ADDRESS = "0x0000000000000000000000000000000000000000";
+const PULSECHAIN_CHAIN_ID = 369;
 
 // On-chain pool observations are considered fresh for 2 minutes
 const STALE_AFTER_SECONDS = 120;
@@ -114,6 +115,10 @@ export type FetchOnchainPriceResult =
 export async function fetchOnchainPulseXPrice(
   args: FetchOnchainPriceArgs,
 ): Promise<FetchOnchainPriceResult> {
+  if (args.chainId !== PULSECHAIN_CHAIN_ID) {
+    return { ok: false, reason: `unsupported_chain_id:${args.chainId}` };
+  }
+
   // Native PLS has no contract — route via WPLS instead
   const routingAddress: Address =
     args.tokenAddress.toLowerCase() === NULL_ADDRESS
@@ -175,6 +180,7 @@ type RouterFetchSuccess = {
 
 type RouterFetchResult = RouterFetchSuccess | { ok: false; reason: string };
 
+/** Attempts a price quote against a single PulseX router, returning the USD price and liquidity on success. */
 async function tryFetchFromRouter(args: {
   publicClient: PublicClient;
   routerAddress: Address;
@@ -183,8 +189,12 @@ async function tryFetchFromRouter(args: {
   tokenDecimals: number;
 }): Promise<RouterFetchResult> {
   try {
-    // 1 unit of the token in its smallest denomination — use pure bigint
-    // arithmetic to avoid float precision loss for large decimal counts
+    if (!Number.isInteger(args.tokenDecimals) || args.tokenDecimals < 0) {
+      return { ok: false, reason: "invalid_token_decimals" };
+    }
+
+    // 1 unit of the token in its smallest denomination — pure bigint
+    // arithmetic avoids float precision loss for large decimal counts
     const amountIn = 10n ** BigInt(args.tokenDecimals);
 
     // WPLS itself is the entry to the pDAI market; everything else hops through WPLS first
@@ -253,6 +263,12 @@ type LiquidityResult = {
   pairAddress: Address | null;
 };
 
+/**
+ * Looks up the first-hop pair on the factory, fetches its reserves, and returns
+ * the total pool liquidity in USD (token side × 2 for the balanced pool assumption).
+ * Returns `null` for both fields on any failure — liquidity is non-critical; the
+ * caller falls back to a 0.50 confidence score.
+ */
 async function tryGetLiquidityUsd(args: {
   publicClient: PublicClient;
   factoryAddress: Address;
@@ -335,10 +351,15 @@ export function confidenceFromLiquidityUsd(liquidityUsd: Decimal | null): Decima
   return new Decimal("0.30");
 }
 
+/** Serialises a Decimal price to a compact string, stripping trailing zeros. */
 function toObservationPrice(value: Decimal): string {
   return value.toFixed().replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
 }
 
+/**
+ * Assembles a `PriceObservationDraft` from a successful router result, attaching
+ * route metadata, liquidity, and a confidence score derived from pool depth.
+ */
 function buildDraft(
   args: FetchOnchainPriceArgs,
   result: RouterFetchSuccess,
