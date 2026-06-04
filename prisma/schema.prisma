@@ -283,9 +283,9 @@ model RawTransaction {
   transactionIndex  Int
   fromAddress       String
   toAddress         String?
-  valueRaw          Decimal         @db.Decimal(65, 0)
-  gasPriceRaw       Decimal?        @db.Decimal(65, 0)
-  gasUsedRaw        Decimal?        @db.Decimal(65, 0)
+  valueRaw          Decimal         @db.Decimal(78, 0)
+  gasPriceRaw       Decimal?        @db.Decimal(78, 0)
+  gasUsedRaw        Decimal?        @db.Decimal(78, 0)
   status            RawRecordStatus @default(ACTIVE)
   createdAt         DateTime        @default(now())
   chain             Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
@@ -331,7 +331,7 @@ model RawTokenTransfer {
   logIndex          Int
   fromAddress       String
   toAddress         String
-  amountRaw         Decimal         @db.Decimal(65, 0)
+  amountRaw         Decimal         @db.Decimal(78, 0)
   status            RawRecordStatus @default(ACTIVE)
   createdAt         DateTime        @default(now())
   chain             Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
@@ -356,14 +356,14 @@ model RawDexSwap {
   soldTokenAddress      String
   soldAssetIdSnapshot   String
   soldDecimalsSnapshot  Int
-  soldAmountRaw         Decimal         @db.Decimal(65, 0)
+  soldAmountRaw         Decimal         @db.Decimal(78, 0)
   boughtTokenAddress    String
   boughtAssetIdSnapshot String
   boughtDecimalsSnapshot Int
-  boughtAmountRaw       Decimal         @db.Decimal(65, 0)
+  boughtAmountRaw       Decimal         @db.Decimal(78, 0)
   feeAssetIdSnapshot    String
   feeDecimalsSnapshot   Int
-  feeAmountRaw          Decimal         @db.Decimal(65, 0)
+  feeAmountRaw          Decimal         @db.Decimal(78, 0)
   status                RawRecordStatus @default(ACTIVE)
   createdAt             DateTime        @default(now())
   chain                 Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
@@ -389,18 +389,18 @@ model RawLpAction {
   token0Address         String
   token0AssetIdSnapshot String
   token0DecimalsSnapshot Int
-  token0AmountRaw       Decimal         @db.Decimal(65, 0)
+  token0AmountRaw       Decimal         @db.Decimal(78, 0)
   token1Address         String
   token1AssetIdSnapshot String
   token1DecimalsSnapshot Int
-  token1AmountRaw       Decimal         @db.Decimal(65, 0)
+  token1AmountRaw       Decimal         @db.Decimal(78, 0)
   lpTokenAddress        String
   lpAssetIdSnapshot     String
   lpDecimalsSnapshot    Int
-  lpAmountRaw           Decimal         @db.Decimal(65, 0)
+  lpAmountRaw           Decimal         @db.Decimal(78, 0)
   feeAssetIdSnapshot    String
   feeDecimalsSnapshot   Int
-  feeAmountRaw          Decimal         @db.Decimal(65, 0)
+  feeAmountRaw          Decimal         @db.Decimal(78, 0)
   status                RawRecordStatus @default(ACTIVE)
   createdAt             DateTime        @default(now())
   chain                 Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
@@ -429,14 +429,14 @@ model RawStakeAction {
   tokenAddress          String
   assetIdSnapshot       String
   decimalsSnapshot      Int
-  principalLockedRaw    Decimal?        @db.Decimal(65, 0)
-  totalReturnedRaw      Decimal?        @db.Decimal(65, 0)
-  principalReturnedRaw  Decimal?        @db.Decimal(65, 0)
-  yieldRaw              Decimal?        @db.Decimal(65, 0)
-  penaltyRaw            Decimal?        @db.Decimal(65, 0)
+  principalLockedRaw    Decimal?        @db.Decimal(78, 0)
+  totalReturnedRaw      Decimal?        @db.Decimal(78, 0)
+  principalReturnedRaw  Decimal?        @db.Decimal(78, 0)
+  yieldRaw              Decimal?        @db.Decimal(78, 0)
+  penaltyRaw            Decimal?        @db.Decimal(78, 0)
   feeAssetIdSnapshot    String
   feeDecimalsSnapshot   Int
-  feeAmountRaw          Decimal         @db.Decimal(65, 0)
+  feeAmountRaw          Decimal         @db.Decimal(78, 0)
   status                RawRecordStatus @default(ACTIVE)
   createdAt             DateTime        @default(now())
   chain                 Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
