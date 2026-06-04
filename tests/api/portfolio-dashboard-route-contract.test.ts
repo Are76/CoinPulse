@@ -51,6 +51,22 @@ type TokenRecord = {
   metadataSources?: Array<{ sourceKind: "SEED" | "RPC" | "MANUAL" | string; observedAt: Date | null }>;
 };
 
+type LpPositionRecord = {
+  walletId: string;
+  chainId: number;
+  lpAssetId: string;
+  lpTokenAddress: string | null;
+  lpTokenQuantity: string;
+  token0AssetId: string | null;
+  token0Address: string | null;
+  token1AssetId: string | null;
+  token1Address: string | null;
+  token0NetQuantity: string | null;
+  token1NetQuantity: string | null;
+  updatedFromBlock: bigint | null;
+  updatedToBlock: bigint | null;
+};
+
 type MaterializationStateRecord = {
   walletId: string;
   chainId: number;
@@ -98,6 +114,7 @@ function createMemoryDb(overrides?: {
   materializationStates?: MaterializationStateRecord[];
   priceObservations?: PersistedPriceObservation[];
   tokens?: TokenRecord[];
+  lpPositions?: LpPositionRecord[];
 }) {
   const wallets = overrides?.wallets ?? [];
   const tokenBalances = overrides?.tokenBalances ?? [];
@@ -105,6 +122,7 @@ function createMemoryDb(overrides?: {
   const materializationStates = overrides?.materializationStates ?? [];
   const priceObservations = overrides?.priceObservations ?? [];
   const tokens = overrides?.tokens ?? [];
+  const lpPositions = overrides?.lpPositions ?? [];
 
   return new Proxy(
     {
@@ -129,8 +147,10 @@ function createMemoryDb(overrides?: {
         },
       },
       portfolioLpPosition: {
-        async findMany() {
-          return [];
+        async findMany(args: { where: { walletId: string; chainId: number } }) {
+          return lpPositions.filter(
+            (row) => row.walletId === args.where.walletId && row.chainId === args.where.chainId,
+          );
         },
       },
       portfolioStakePosition: {
@@ -1514,6 +1534,336 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           toBlock: "200",
         },
       },
+    });
+  });
+
+  it("pnlCoverage records stale_price when the only available observation is past its staleAfterSeconds window", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        priceObservations: [
+          createPriceObservation({
+            observedAt: new Date("2026-05-08T11:50:00.000Z"),
+            staleAfterSeconds: 120,
+          }),
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.tokenPositions[0].pricing.status).toBe("stale_price");
+    expect(body.data.tokenPositions[0].pricing.rejectedReasons).toContain("STALE");
+    expect(body.data.pnlCoverage).toMatchObject({
+      stalePricePositionsCount: 1,
+      reasons: expect.arrayContaining(["stale_price"]),
+      affectedSections: expect.arrayContaining(["tokens", "summary"]),
+    });
+  });
+
+  it("pnlCoverage records source_disabled when the only available observation is from a disabled source", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        priceObservations: [
+          createPriceObservation({
+            sourceType: "DEXSCREENER",
+            sourceId: "dexscreener:pulsechain:0xpair",
+            confidence: "0.99",
+          }),
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.tokenPositions[0].pricing.status).toBe("unavailable");
+    expect(body.data.tokenPositions[0].pricing.rejectedReasons).toContain("SOURCE_DISABLED");
+    expect(body.data.pnlCoverage).toMatchObject({
+      sourceDisabledPositionsCount: 1,
+      reasons: expect.arrayContaining(["source_disabled"]),
+      affectedSections: expect.arrayContaining(["tokens", "summary"]),
+    });
+  });
+
+  it("pnlCoverage records insufficient_cost_basis when a disposal exceeds tracked holdings", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        ledgerEntries: [
+          {
+            id: "sell-no-basis",
+            chainId: CHAIN_ID,
+            walletId: WALLET_ID,
+            assetId: TOKEN_ASSET,
+            entryType: "SWAP_OUT",
+            direction: "OUT",
+            quantity: "10",
+            occurredAt: new Date("2026-05-08T12:00:00.000Z"),
+            actionGroupId: "group-sell",
+            txHash: "0xtx-sell",
+            sourceLogKey: null,
+            actionGroup: { actionType: "SWAP" },
+          },
+        ],
+        priceObservations: [
+          createPriceObservation({
+            price: "2",
+            confidence: "0.91",
+          }),
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.tokenPositions[0].pnl.status).toBe("incomplete_basis");
+    expect(body.data.tokenPositions[0].pnl.warnings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "INSUFFICIENT_COST_BASIS" })]),
+    );
+    expect(body.data.pnlCoverage).toMatchObject({
+      incompleteBasisPositionsCount: 1,
+      reasons: expect.arrayContaining(["insufficient_cost_basis"]),
+      affectedSections: expect.arrayContaining(["tokens", "summary"]),
+    });
+  });
+
+  it("pnlCoverage records unsupported_position_type and status unsupported when only LP positions are present", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        lpPositions: [
+          {
+            walletId: WALLET_ID,
+            chainId: CHAIN_ID,
+            lpAssetId: "chain:369:erc20:0xlp",
+            lpTokenAddress: "0xlp",
+            lpTokenQuantity: "100",
+            token0AssetId: TOKEN_ASSET,
+            token0Address: TOKEN_ADDRESS,
+            token1AssetId: NATIVE_ASSET,
+            token1Address: null,
+            token0NetQuantity: "50",
+            token1NetQuantity: "200",
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.lpPositions[0].pnl.status).toBe("unsupported");
+    expect(body.data.pnlCoverage).toMatchObject({
+      status: "unsupported",
+      unsupportedPositionsCount: 1,
+      pricedPositionsCount: 0,
+      reasons: ["unsupported_position_type"],
+      affectedSections: expect.arrayContaining(["summary", "lpPositions"]),
+    });
+  });
+
+  it("token metadata provenance maps SEED source kind to derived with low confidence", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        priceObservations: [createPriceObservation()],
+        tokens: [
+          {
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            decimalsSource: "SEED",
+            metadataSources: [{ sourceKind: "SEED", observedAt: new Date("2026-05-08T11:00:00.000Z") }],
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.tokenPositions[0].metadataProvenance).toEqual({
+      status: "observed",
+      source: "derived",
+      observedAt: "2026-05-08T11:00:00.000Z",
+      confidence: "low",
+      conflictReason: null,
+    });
+  });
+
+  it("token metadata provenance maps MANUAL source kind to manual with medium confidence", async () => {
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        priceObservations: [createPriceObservation()],
+        tokens: [
+          {
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            decimalsSource: "MANUAL",
+            metadataSources: [{ sourceKind: "MANUAL", observedAt: new Date("2026-05-08T10:00:00.000Z") }],
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.tokenPositions[0].metadataProvenance).toEqual({
+      status: "observed",
+      source: "manual",
+      observedAt: "2026-05-08T10:00:00.000Z",
+      confidence: "medium",
+      conflictReason: null,
     });
   });
 });
