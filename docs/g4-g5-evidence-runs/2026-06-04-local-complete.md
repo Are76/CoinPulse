@@ -12,6 +12,8 @@ It is documentation only. It does not change runtime behavior, schema, DTO contr
 | --- | --- |
 | Evidence run ID | `2026-06-04-local-complete` |
 | Environment name | Local development |
+| Commit SHA under test | `5085711037f18400a10057033d0673c72fd9dd29` (post-#155 main) |
+| Branch/ref under test | `main` |
 | Operator | Are |
 | UTC start time | 2026-06-04 03:07 UTC |
 | UTC end time | 2026-06-04 04:10 UTC |
@@ -42,9 +44,9 @@ Security note: no secrets, private keys, seed phrases, database credentials beyo
 
 | Field | Value |
 | --- | --- |
-| G4 status | **Complete** |
-| Completion claim allowed? | Yes |
-| Summary | Real wallet sync ran and completed — `runId: cmpyz605o0000t45f9v79g35a`, block 26698000, TRANSFERS source family. Three bugs were fixed to reach this state. |
+| G4 status | **Partial** |
+| Completion claim allowed? | No — rebuild/materialization evidence not yet captured |
+| Summary | Real wallet sync ran and completed — `runId: cmpyz605o0000t45f9v79g35a`, block 26698000, TRANSFERS source family. Three bugs were fixed to reach this state. Rebuild and materialization steps were not executed in this run. |
 
 ## G5 evidence: persisted-pricing observability
 

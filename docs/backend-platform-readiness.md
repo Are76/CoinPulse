@@ -98,7 +98,7 @@ Remaining evidence needed:
 
 ### G4. Wallet import -> sync -> materialize -> rebuild cycle is evidenced
 
-Status: **complete** — evidence captured 2026-06-04 in `docs/g4-g5-evidence-runs/2026-06-04-local-complete.md`.
+Status: **partial** — sync completion evidenced 2026-06-04 (`docs/g4-g5-evidence-runs/2026-06-04-local-complete.md`); rebuild/materialization evidence still required.
 
 Required evidence:
 
@@ -187,7 +187,7 @@ This is a deployment-readiness gate. It does not block local/backend correctness
 
 ## Backend platform completion assessment
 
-Current assessment: **G4 and G5 complete as of 2026-06-04.**
+Current assessment: **G5 complete as of 2026-06-04. G4 partial — sync evidenced, rebuild/materialization pending.**
 
 What is complete:
 
@@ -199,7 +199,7 @@ What is complete:
 - Operator API public-deployment policy is documented.
 - G6 transaction-history route work is explicitly deferred from V1 readiness and guarded from accidental frontend reconstruction.
 - Dashboard route-normalization compatibility requirements are documented and the route transition is deferred for V1.
-- G4: Wallet import → sync → rebuild cycle evidenced on 2026-06-04 with real PulseChain RPC.
+- G4: Sync completion evidenced on 2026-06-04 (partial — rebuild/materialization pending).
 - G5: Pricing status `ONCHAIN_POOL: ok` and `ORACLE: ok` evidenced on 2026-06-04 from PulseX on-chain data.
 
 Remaining deployment gate:
