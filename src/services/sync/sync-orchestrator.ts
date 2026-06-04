@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Prisma, type SourceFamily, type SyncTrigger } from "@prisma/client";
+import { type SourceFamily, type SyncTrigger } from "@prisma/client";
 
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 import { reserveOperationRun } from "@/services/operations/operation-lock";
@@ -12,6 +12,7 @@ import {
   type SyncRunStore,
 } from "@/services/sync/sync-state-store";
 import { persistNormalizedLedger } from "@/services/sync/ledger-store";
+import { classifySyncError } from "@/services/sync/sync-error-classifier";
 import { createSyncDependencies } from "@/services/sync/transfer-sync";
 
 export type SyncWallet = {
@@ -287,47 +288,11 @@ function buildSyncFailureMessage(args: {
       ? `${args.sourceFamily} ${args.fromBlock}-${args.toBlock}`
       : "unknown-range";
   const errorName = args.error instanceof Error ? args.error.name : typeof args.error;
-  const errorCategory = classifySyncFailure(args.error);
+  const errorCategory = classifySyncError(args.error);
 
   return `[${args.stage}] ${range}: ${errorName}/${errorCategory}`;
 }
 
-function classifySyncFailure(error: unknown) {
-  if (!(error instanceof Error)) {
-    return "non_error_throwable";
-  }
-
-  if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    return "database_known_request_error";
-  }
-
-  if (error instanceof Prisma.PrismaClientValidationError) {
-    return "database_validation_error";
-  }
-
-  const fingerprint = `${error.name} ${error.message}`.toLowerCase();
-
-  if (fingerprint.includes("contractfunctionexecutionerror")) {
-    return "contract_function_execution_error";
-  }
-
-  if (fingerprint.includes("timeout") || fingerprint.includes("timed out")) {
-    return "timeout_error";
-  }
-
-  if (
-    fingerprint.includes("network") ||
-    fingerprint.includes("connect") ||
-    fingerprint.includes("connection") ||
-    fingerprint.includes("enotfound") ||
-    fingerprint.includes("econnrefused") ||
-    fingerprint.includes("econnreset")
-  ) {
-    return "network_error";
-  }
-
-  return "unexpected_error";
-}
 
 function minBlock(values: readonly bigint[]) {
   let smallest = values[0] ?? 0n;
