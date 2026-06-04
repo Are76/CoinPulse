@@ -71,22 +71,32 @@ function buildHappyV1Client(overrides?: {
   amountsOut?: readonly bigint[];
   reserves?: readonly [bigint, bigint, number | bigint];
   token0?: Address;
+  /** Expected [amountIn, path] for getAmountsOut. Defaults to pHEX values. */
+  expectedGetAmountsOutArgs?: readonly [bigint, readonly Address[]];
+  /** Expected [tokenA, tokenB] for getPair. Defaults to [PHEX, WPLS]. */
+  expectedGetPairArgs?: readonly [Address, Address];
 }): PublicClient {
   const amountsOut = overrides?.amountsOut ?? PHEX_AMOUNTS_OUT;
   const reserves = overrides?.reserves ?? HIGH_LIQUIDITY_RESERVES;
   const token0 = overrides?.token0 ?? PHEX_ADDRESS;
+  const expectedGetAmountsOutArgs = overrides?.expectedGetAmountsOutArgs ??
+    ([100_000_000n, [PHEX_ADDRESS, WPLS_ADDRESS, PDAI_ADDRESS]] as const);
+  const expectedGetPairArgs = overrides?.expectedGetPairArgs ??
+    ([PHEX_ADDRESS, WPLS_ADDRESS] as const);
 
-  return buildMockClient(({ address, functionName }) => {
+  return buildMockClient(({ address, functionName, args }) => {
     if (
       address === PULSEX_V1_ROUTER_ADDRESS &&
       functionName === "getAmountsOut"
     ) {
+      expect(args).toEqual(expectedGetAmountsOutArgs);
       return amountsOut;
     }
     if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "factory") {
       return MOCK_FACTORY_V1;
     }
     if (address === MOCK_FACTORY_V1 && functionName === "getPair") {
+      expect(args).toEqual(expectedGetPairArgs);
       return MOCK_PAIR_ADDRESS;
     }
     if (address === MOCK_PAIR_ADDRESS && functionName === "getReserves") {
@@ -94,6 +104,30 @@ function buildHappyV1Client(overrides?: {
     }
     if (address === MOCK_PAIR_ADDRESS && functionName === "token0") {
       return token0;
+    }
+    throw new Error(`Unexpected readContract call: ${address} ${functionName}`);
+  });
+}
+
+/** Happy-path mock for native PLS: routes WPLS → pDAI via V1. */
+function buildHappyV1PlsClient(): PublicClient {
+  return buildMockClient(({ address, functionName, args }) => {
+    if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "getAmountsOut") {
+      expect(args).toEqual([1_000_000_000_000_000_000n, [WPLS_ADDRESS, PDAI_ADDRESS]]);
+      return WPLS_AMOUNTS_OUT;
+    }
+    if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "factory") {
+      return MOCK_FACTORY_V1;
+    }
+    if (address === MOCK_FACTORY_V1 && functionName === "getPair") {
+      expect(args).toEqual([WPLS_ADDRESS, PDAI_ADDRESS]);
+      return MOCK_PAIR_ADDRESS;
+    }
+    if (address === MOCK_PAIR_ADDRESS && functionName === "getReserves") {
+      return HIGH_LIQUIDITY_RESERVES;
+    }
+    if (address === MOCK_PAIR_ADDRESS && functionName === "token0") {
+      return WPLS_ADDRESS;
     }
     throw new Error(`Unexpected readContract call: ${address} ${functionName}`);
   });
@@ -220,30 +254,8 @@ describe("fetchOnchainPulseXPrice", () => {
 
   describe("V1 happy path — native PLS (zero address)", () => {
     it("routes PLS through WPLS without a two-hop intermediary", async () => {
-      const client = buildMockClient(({ address, functionName }) => {
-        if (
-          address === PULSEX_V1_ROUTER_ADDRESS &&
-          functionName === "getAmountsOut"
-        ) {
-          return WPLS_AMOUNTS_OUT;
-        }
-        if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "factory") {
-          return MOCK_FACTORY_V1;
-        }
-        if (address === MOCK_FACTORY_V1 && functionName === "getPair") {
-          return MOCK_PAIR_ADDRESS;
-        }
-        if (address === MOCK_PAIR_ADDRESS && functionName === "getReserves") {
-          return HIGH_LIQUIDITY_RESERVES;
-        }
-        if (address === MOCK_PAIR_ADDRESS && functionName === "token0") {
-          return WPLS_ADDRESS;
-        }
-        throw new Error(`Unexpected: ${address} ${functionName}`);
-      });
-
       const result = await fetchOnchainPulseXPrice({
-        publicClient: client,
+        publicClient: buildHappyV1PlsClient(),
         chainId: CHAIN_ID,
         assetId: PLS_ASSET_ID,
         tokenAddress: PLS_ZERO_ADDRESS,
@@ -264,30 +276,8 @@ describe("fetchOnchainPulseXPrice", () => {
     });
 
     it("does not set assetAddress for native PLS", async () => {
-      const client = buildMockClient(({ address, functionName }) => {
-        if (
-          address === PULSEX_V1_ROUTER_ADDRESS &&
-          functionName === "getAmountsOut"
-        ) {
-          return WPLS_AMOUNTS_OUT;
-        }
-        if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "factory") {
-          return MOCK_FACTORY_V1;
-        }
-        if (address === MOCK_FACTORY_V1 && functionName === "getPair") {
-          return MOCK_PAIR_ADDRESS;
-        }
-        if (address === MOCK_PAIR_ADDRESS && functionName === "getReserves") {
-          return HIGH_LIQUIDITY_RESERVES;
-        }
-        if (address === MOCK_PAIR_ADDRESS && functionName === "token0") {
-          return WPLS_ADDRESS;
-        }
-        throw new Error(`Unexpected: ${address} ${functionName}`);
-      });
-
       const result = await fetchOnchainPulseXPrice({
-        publicClient: client,
+        publicClient: buildHappyV1PlsClient(),
         chainId: CHAIN_ID,
         assetId: PLS_ASSET_ID,
         tokenAddress: PLS_ZERO_ADDRESS,
@@ -306,12 +296,14 @@ describe("fetchOnchainPulseXPrice", () => {
 
   describe("V1 fails → V2 fallback", () => {
     it("falls back to V2 when V1 returns zero amountsOut", async () => {
-      const client = buildMockClient(({ address, functionName }) => {
+      const expectedPath = [PHEX_ADDRESS, WPLS_ADDRESS, PDAI_ADDRESS] as const;
+      const client = buildMockClient(({ address, functionName, args }) => {
         // V1: returns zero amounts — triggers fallback
         if (
           address === PULSEX_V1_ROUTER_ADDRESS &&
           functionName === "getAmountsOut"
         ) {
+          expect(args).toEqual([100_000_000n, expectedPath]);
           return [100_000_000n, 0n, 0n];
         }
         // V2: returns valid amounts
@@ -319,12 +311,14 @@ describe("fetchOnchainPulseXPrice", () => {
           address === PULSEX_V2_ROUTER_ADDRESS &&
           functionName === "getAmountsOut"
         ) {
+          expect(args).toEqual([100_000_000n, expectedPath]);
           return PHEX_AMOUNTS_OUT;
         }
         if (address === PULSEX_V2_ROUTER_ADDRESS && functionName === "factory") {
           return MOCK_FACTORY_V1;
         }
         if (address === MOCK_FACTORY_V1 && functionName === "getPair") {
+          expect(args).toEqual([PHEX_ADDRESS, WPLS_ADDRESS]);
           return MOCK_PAIR_ADDRESS;
         }
         if (address === MOCK_PAIR_ADDRESS && functionName === "getReserves") {
@@ -355,23 +349,27 @@ describe("fetchOnchainPulseXPrice", () => {
     });
 
     it("falls back to V2 when V1 readContract throws", async () => {
-      const client = buildMockClient(({ address, functionName }) => {
+      const expectedPath = [PHEX_ADDRESS, WPLS_ADDRESS, PDAI_ADDRESS] as const;
+      const client = buildMockClient(({ address, functionName, args }) => {
         if (
           address === PULSEX_V1_ROUTER_ADDRESS &&
           functionName === "getAmountsOut"
         ) {
+          expect(args).toEqual([100_000_000n, expectedPath]);
           throw new Error("execution reverted");
         }
         if (
           address === PULSEX_V2_ROUTER_ADDRESS &&
           functionName === "getAmountsOut"
         ) {
+          expect(args).toEqual([100_000_000n, expectedPath]);
           return PHEX_AMOUNTS_OUT;
         }
         if (address === PULSEX_V2_ROUTER_ADDRESS && functionName === "factory") {
           return MOCK_FACTORY_V1;
         }
         if (address === MOCK_FACTORY_V1 && functionName === "getPair") {
+          expect(args).toEqual([PHEX_ADDRESS, WPLS_ADDRESS]);
           return MOCK_PAIR_ADDRESS;
         }
         if (address === MOCK_PAIR_ADDRESS && functionName === "getReserves") {
@@ -518,11 +516,12 @@ describe("fetchOnchainPulseXPrice", () => {
 
   describe("getReserves failure is non-fatal", () => {
     it("returns ok: true with null liquidityUsd when getPair throws", async () => {
-      const client = buildMockClient(({ address, functionName }) => {
+      const client = buildMockClient(({ address, functionName, args }) => {
         if (
           address === PULSEX_V1_ROUTER_ADDRESS &&
           functionName === "getAmountsOut"
         ) {
+          expect(args).toEqual([100_000_000n, [PHEX_ADDRESS, WPLS_ADDRESS, PDAI_ADDRESS]]);
           return PHEX_AMOUNTS_OUT;
         }
         if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "factory") {
@@ -557,17 +556,19 @@ describe("fetchOnchainPulseXPrice", () => {
     it("returns ok: true when pair address is the null address", async () => {
       const NULL_PAIR: Address = "0x0000000000000000000000000000000000000000";
 
-      const client = buildMockClient(({ address, functionName }) => {
+      const client = buildMockClient(({ address, functionName, args }) => {
         if (
           address === PULSEX_V1_ROUTER_ADDRESS &&
           functionName === "getAmountsOut"
         ) {
+          expect(args).toEqual([100_000_000n, [PHEX_ADDRESS, WPLS_ADDRESS, PDAI_ADDRESS]]);
           return PHEX_AMOUNTS_OUT;
         }
         if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "factory") {
           return MOCK_FACTORY_V1;
         }
         if (address === MOCK_FACTORY_V1 && functionName === "getPair") {
+          expect(args).toEqual([PHEX_ADDRESS, WPLS_ADDRESS]);
           return NULL_PAIR;
         }
         throw new Error(`Unexpected: ${address} ${functionName}`);
@@ -789,8 +790,9 @@ describe("fetchOnchainPulseXPrice", () => {
 
   describe("factory() failure is non-fatal", () => {
     it("returns a valid price draft when factory() throws after a successful getAmountsOut", async () => {
-      const client = buildMockClient(({ address, functionName }) => {
+      const client = buildMockClient(({ address, functionName, args }) => {
         if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "getAmountsOut") {
+          expect(args).toEqual([100_000_000n, [PHEX_ADDRESS, WPLS_ADDRESS, PDAI_ADDRESS]]);
           return PHEX_AMOUNTS_OUT;
         }
         if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "factory") {
@@ -821,8 +823,9 @@ describe("fetchOnchainPulseXPrice", () => {
 
     it("does NOT fall back to V2 when only factory() fails — V2 is reserved for quote failure", async () => {
       let v2Calls = 0;
-      const client = buildMockClient(({ address, functionName }) => {
+      const client = buildMockClient(({ address, functionName, args }) => {
         if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "getAmountsOut") {
+          expect(args).toEqual([100_000_000n, [PHEX_ADDRESS, WPLS_ADDRESS, PDAI_ADDRESS]]);
           return PHEX_AMOUNTS_OUT;
         }
         if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "factory") {
