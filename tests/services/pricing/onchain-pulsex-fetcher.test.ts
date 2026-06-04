@@ -714,6 +714,142 @@ describe("fetchOnchainPulseXPrice", () => {
       expect(r1.draft.sourceId).toBe(r2.draft.sourceId);
     });
   });
+
+  describe("pDAI par observation", () => {
+    const PDAI_ASSET_ID = `chain:369:erc20:${PDAI_ADDRESS.toLowerCase()}`;
+
+    it("returns ok: true with price 1 without any RPC calls", async () => {
+      // Client that throws on any call — should never be invoked for pDAI
+      const client = buildMockClient(({ functionName }) => {
+        throw new Error(`Unexpected RPC call for pDAI: ${functionName}`);
+      });
+
+      const result = await fetchOnchainPulseXPrice({
+        publicClient: client,
+        chainId: CHAIN_ID,
+        assetId: PDAI_ASSET_ID,
+        tokenAddress: PDAI_ADDRESS,
+        tokenDecimals: 18,
+        quoteAsset: QUOTE_ASSET,
+        blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.draft.price).toBe("1");
+    });
+
+    it("uses ORACLE sourceType and pulsex:pdai:par sourceId", async () => {
+      const client = buildMockClient(() => {
+        throw new Error("should not be called");
+      });
+
+      const result = await fetchOnchainPulseXPrice({
+        publicClient: client,
+        chainId: CHAIN_ID,
+        assetId: PDAI_ASSET_ID,
+        tokenAddress: PDAI_ADDRESS,
+        tokenDecimals: 18,
+        quoteAsset: QUOTE_ASSET,
+        blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.draft.sourceType).toBe("ORACLE");
+      expect(result.draft.sourceId).toBe("pulsex:pdai:par");
+    });
+
+    it("sets assetAddress to PDAI_ADDRESS and preserves observedAt and blockNumber", async () => {
+      const client = buildMockClient(() => {
+        throw new Error("should not be called");
+      });
+
+      const result = await fetchOnchainPulseXPrice({
+        publicClient: client,
+        chainId: CHAIN_ID,
+        assetId: PDAI_ASSET_ID,
+        tokenAddress: PDAI_ADDRESS,
+        tokenDecimals: 18,
+        quoteAsset: QUOTE_ASSET,
+        blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.draft.assetAddress).toBe(PDAI_ADDRESS);
+      expect(result.draft.observedAt).toBe(OBSERVED_AT);
+      expect(result.draft.blockNumber).toBe(BLOCK_NUMBER);
+      expect(result.draft.confidence).toBe("1");
+    });
+  });
+
+  describe("factory() failure is non-fatal", () => {
+    it("returns a valid price draft when factory() throws after a successful getAmountsOut", async () => {
+      const client = buildMockClient(({ address, functionName }) => {
+        if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "getAmountsOut") {
+          return PHEX_AMOUNTS_OUT;
+        }
+        if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "factory") {
+          throw new Error("rpc: factory() timeout");
+        }
+        throw new Error(`Unexpected: ${address} ${functionName}`);
+      });
+
+      const result = await fetchOnchainPulseXPrice({
+        publicClient: client,
+        chainId: CHAIN_ID,
+        assetId: PHEX_ASSET_ID,
+        tokenAddress: PHEX_ADDRESS,
+        tokenDecimals: PHEX_DECIMALS,
+        quoteAsset: QUOTE_ASSET,
+        blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      // Price must still be correct
+      expect(result.draft.price).toBe("0.021");
+      // Liquidity degrades to null → confidence falls back to 0.50
+      expect(result.draft.liquidityUsd).toBeNull();
+      expect(result.draft.confidence).toBe("0.5");
+    });
+
+    it("does NOT fall back to V2 when only factory() fails — V2 is reserved for quote failure", async () => {
+      let v2Calls = 0;
+      const client = buildMockClient(({ address, functionName }) => {
+        if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "getAmountsOut") {
+          return PHEX_AMOUNTS_OUT;
+        }
+        if (address === PULSEX_V1_ROUTER_ADDRESS && functionName === "factory") {
+          throw new Error("factory timeout");
+        }
+        if (address === PULSEX_V2_ROUTER_ADDRESS) {
+          v2Calls++;
+          throw new Error("should not reach V2");
+        }
+        throw new Error(`Unexpected: ${address} ${functionName}`);
+      });
+
+      const result = await fetchOnchainPulseXPrice({
+        publicClient: client,
+        chainId: CHAIN_ID,
+        assetId: PHEX_ASSET_ID,
+        tokenAddress: PHEX_ADDRESS,
+        tokenDecimals: PHEX_DECIMALS,
+        quoteAsset: QUOTE_ASSET,
+        blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(v2Calls).toBe(0);
+    });
+  });
 });
 
 // ─── confidenceFromLiquidityUsd ───────────────────────────────────────────────

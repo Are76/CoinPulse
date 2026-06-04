@@ -109,6 +109,9 @@ export type FetchOnchainPriceResult =
  *
  * Route: tokenAddress → WPLS → pDAI  (or WPLS → pDAI for native PLS)
  *
+ * Special case: pDAI is the USD quote reference asset — its price is returned
+ * as a deterministic par observation (1 USD) without any pool routing.
+ *
  * The observation is persisted as ONCHAIN_POOL with a confidence score derived
  * from the first-hop pair's reserve size.
  */
@@ -117,6 +120,12 @@ export async function fetchOnchainPulseXPrice(
 ): Promise<FetchOnchainPriceResult> {
   if (args.chainId !== PULSECHAIN_CHAIN_ID) {
     return { ok: false, reason: `unsupported_chain_id:${args.chainId}` };
+  }
+
+  // pDAI is the USD reference asset — routing pDAI→WPLS→pDAI is circular.
+  // Return a deterministic par observation rather than a pool quote.
+  if (args.tokenAddress.toLowerCase() === PDAI_ADDRESS.toLowerCase()) {
+    return buildPdaiParDraft(args);
   }
 
   // Native PLS has no contract — route via WPLS instead
@@ -174,7 +183,7 @@ type RouterFetchSuccess = {
   priceUsd: Decimal;
   liquidityUsd: Decimal | null;
   routePath: readonly Address[];
-  factoryAddress: Address;
+  factoryAddress: Address | null;
   pairAddress: Address | null;
 };
 
@@ -225,21 +234,34 @@ async function tryFetchFromRouter(args: {
       return { ok: false, reason: "non_positive_price" };
     }
 
-    // Retrieve the factory address to look up pair reserves for confidence
-    const factoryAddress = await args.publicClient.readContract({
-      address: args.routerAddress,
-      abi: ROUTER_ABI,
-      functionName: "factory",
-    });
+    // Factory + liquidity lookup is non-critical: if it fails the valid price
+    // is still returned, with liquidityUsd/pairAddress/factoryAddress as null
+    // and confidence falling back to 0.50.
+    let factoryAddress: Address | null = null;
+    let liquidityResult: LiquidityResult = { liquidityUsd: null, pairAddress: null };
 
-    const liquidityResult = await tryGetLiquidityUsd({
-      publicClient: args.publicClient,
-      factoryAddress,
-      firstHopToken: routePath[0] as Address,
-      secondHopToken: routePath[1] as Address,
-      tokenDecimals: args.tokenDecimals,
-      priceUsd,
-    });
+    try {
+      factoryAddress = await args.publicClient.readContract({
+        address: args.routerAddress,
+        abi: ROUTER_ABI,
+        functionName: "factory",
+      });
+
+      liquidityResult = await tryGetLiquidityUsd({
+        publicClient: args.publicClient,
+        factoryAddress,
+        firstHopToken: routePath[0] as Address,
+        secondHopToken: routePath[1] as Address,
+        tokenDecimals: args.tokenDecimals,
+        priceUsd,
+      });
+    } catch (error) {
+      logInfo("Factory/liquidity lookup failed — confidence falls back to 0.50", {
+        routerAddress: args.routerAddress,
+        routerLabel: args.routerLabel,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     return {
       ok: true,
@@ -354,6 +376,32 @@ export function confidenceFromLiquidityUsd(liquidityUsd: Decimal | null): Decima
 /** Serialises a Decimal price to a compact string, stripping trailing zeros. */
 function toObservationPrice(value: Decimal): string {
   return value.toFixed().replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+}
+
+/**
+ * Returns a deterministic par observation for pDAI, the USD quote reference
+ * asset. pDAI→WPLS→pDAI routing is circular and meaningless; the price is 1
+ * by definition of the pricing unit.
+ */
+function buildPdaiParDraft(args: FetchOnchainPriceArgs): FetchOnchainPriceResult {
+  const draft: PriceObservationDraft = {
+    chainId: args.chainId,
+    assetId: args.assetId,
+    assetAddress: PDAI_ADDRESS,
+    quoteAsset: args.quoteAsset,
+    price: "1",
+    sourceType: "ORACLE",
+    sourceId: "pulsex:pdai:par",
+    routeMetadata: {
+      note: "pDAI is the USD quote reference asset; price 1 is deterministic",
+    },
+    liquidityUsd: null,
+    confidence: "1",
+    observedAt: args.observedAt,
+    blockNumber: args.blockNumber,
+    staleAfterSeconds: STALE_AFTER_SECONDS,
+  };
+  return { ok: true, draft };
 }
 
 /**
