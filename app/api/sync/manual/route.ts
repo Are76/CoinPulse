@@ -51,8 +51,6 @@ export async function POST(request: Request) {
       return buildConflictResponse(error.code, error.message, error.details);
     }
 
-    // DEBUG TEMP
-    console.error("DEBUG SYNC ERROR FULL:", error);
     console.error("Manual sync route failed", {
       route: "POST /api/sync/manual",
       phase,
