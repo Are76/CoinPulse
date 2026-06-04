@@ -77,6 +77,10 @@ function classifyManualSyncError(error: unknown) {
 
   const fingerprint = `${error.name} ${error.message}`.toLowerCase();
 
+  if (fingerprint.includes("contractfunctionexecutionerror")) {
+    return "contract_function_execution_error";
+  }
+
   if (fingerprint.includes("timeout") || fingerprint.includes("timed out")) {
     return "timeout_error";
   }
