@@ -86,7 +86,7 @@ export function createSyncDependencies(args?: {
       (createPublicClientForChain() as unknown as SyncPublicClient),
   });
   const normalizerVersion = args?.normalizerVersion ?? "v1";
-  const maxWindowSize = args?.maxWindowSize ?? 2_000n;
+  const maxWindowSize = args?.maxWindowSize ?? 2n;
 
   return {
     supportedSourceFamilies: [...SUPPORTED_CONCRETE_SOURCE_FAMILIES],
