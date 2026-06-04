@@ -311,17 +311,25 @@ export async function ingestWalletTransferArtifacts(args: {
       continue;
     }
 
-    const decoded = decodeTransferLog({
-      topic1: log.topics[1] ?? null,
-      topic2: log.topics[2] ?? null,
-      data: log.data,
-    });
-    const token = await resolveTokenMetadata({
-      db: args.db,
-      publicClient: args.publicClient,
-      chainId: args.wallet.chainId,
-      tokenAddress: log.address,
-    });
+    let decoded: ReturnType<typeof decodeTransferLog>;
+    let token: Awaited<ReturnType<typeof resolveTokenMetadata>>;
+
+    try {
+      decoded = decodeTransferLog({
+        topic1: log.topics[1] ?? null,
+        topic2: log.topics[2] ?? null,
+        data: log.data,
+      });
+      token = await resolveTokenMetadata({
+        db: args.db,
+        publicClient: args.publicClient,
+        chainId: args.wallet.chainId,
+        tokenAddress: log.address,
+      });
+    } catch {
+      warnings.push(`skipped non-ERC20 log at ${log.blockNumber}:${log.logIndex} for ${log.address}`);
+      continue;
+    }
 
     decodedTransfers.push({
       chainId: args.wallet.chainId,
