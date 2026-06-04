@@ -86,7 +86,12 @@ export function createSyncDependencies(args?: {
       (createPublicClientForChain() as unknown as SyncPublicClient),
   });
   const normalizerVersion = args?.normalizerVersion ?? "v1";
-  const maxWindowSize = args?.maxWindowSize ?? 2_000n;
+  // SYNC_MAX_WINDOW_SIZE env var allows per-deployment tuning:
+  // public RPC → 2, private RPC → 500+, local dev → 2000
+  const envWindowSize = process.env.SYNC_MAX_WINDOW_SIZE
+    ? BigInt(process.env.SYNC_MAX_WINDOW_SIZE)
+    : 2n;
+  const maxWindowSize = args?.maxWindowSize ?? envWindowSize;
 
   return {
     supportedSourceFamilies: [...SUPPORTED_CONCRETE_SOURCE_FAMILIES],
