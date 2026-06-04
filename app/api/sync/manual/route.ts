@@ -1,8 +1,8 @@
-import { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
 
 import { isOperationConflictError } from "@/services/operations/operation-lock";
 import { runWalletSync } from "@/services/sync";
+import { classifySyncError } from "@/services/sync/sync-error-classifier";
 import {
   buildConflictResponse,
   buildInternalErrorResponse,
@@ -55,42 +55,9 @@ export async function POST(request: Request) {
       route: "POST /api/sync/manual",
       phase,
       errorName: error instanceof Error ? error.name : typeof error,
-      errorCategory: classifyManualSyncError(error),
+      errorCategory: classifySyncError(error),
     });
 
     return buildInternalErrorResponse();
   }
-}
-
-function classifyManualSyncError(error: unknown) {
-  if (!(error instanceof Error)) {
-    return "non_error_throwable";
-  }
-
-  if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    return "database_known_request_error";
-  }
-
-  if (error instanceof Prisma.PrismaClientValidationError) {
-    return "database_validation_error";
-  }
-
-  const fingerprint = `${error.name} ${error.message}`.toLowerCase();
-
-  if (fingerprint.includes("timeout") || fingerprint.includes("timed out")) {
-    return "timeout_error";
-  }
-
-  if (
-    fingerprint.includes("network") ||
-    fingerprint.includes("connect") ||
-    fingerprint.includes("connection") ||
-    fingerprint.includes("enotfound") ||
-    fingerprint.includes("econnrefused") ||
-    fingerprint.includes("econnreset")
-  ) {
-    return "network_error";
-  }
-
-  return "unexpected_error";
 }
