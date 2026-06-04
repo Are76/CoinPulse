@@ -560,10 +560,17 @@ export function decodeTransferLog(log: {
     throw new Error("transfer log missing indexed addresses");
   }
 
+  const UINT256_MAX = 2n ** 256n - 1n;
+  const amount = BigInt(log.data);
+
+  if (amount < 0n || amount > UINT256_MAX) {
+    throw new Error(`transfer amount out of uint256 range: ${amount}`);
+  }
+
   return {
     fromAddress: `0x${fromTopic.slice(-40)}`.toLowerCase(),
     toAddress: `0x${toTopic.slice(-40)}`.toLowerCase(),
-    amountRaw: BigInt(log.data).toString(),
+    amountRaw: amount.toString(),
   };
 }
 
