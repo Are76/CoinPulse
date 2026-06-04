@@ -98,7 +98,7 @@ Remaining evidence needed:
 
 ### G4. Wallet import -> sync -> materialize -> rebuild cycle is evidenced
 
-Status: not complete until production-like evidence is captured.
+Status: **complete** — evidence captured 2026-06-04 in `docs/g4-g5-evidence-runs/2026-06-04-local-complete.md`.
 
 Required evidence:
 
@@ -119,7 +119,7 @@ This is the largest remaining backend readiness gate.
 
 ### G5. Pricing observability is surfaced as a first-class backend DTO
 
-Status: implemented for the current persisted-pricing observability route, pending production-like evidence.
+Status: **complete** — evidence captured 2026-06-04 in `docs/g4-g5-evidence-runs/2026-06-04-local-complete.md`.
 
 Current foundation:
 
@@ -187,9 +187,9 @@ This is a deployment-readiness gate. It does not block local/backend correctness
 
 ## Backend platform completion assessment
 
-Current assessment: partially ready, not fully complete.
+Current assessment: **G4 and G5 complete as of 2026-06-04.**
 
-What is ready:
+What is complete:
 
 - Core truth model is documented, including deterministic normalization.
 - Current dashboard/debug/wallet/sync/rebuild route surfaces exist.
@@ -199,21 +199,17 @@ What is ready:
 - Operator API public-deployment policy is documented.
 - G6 transaction-history route work is explicitly deferred from V1 readiness and guarded from accidental frontend reconstruction.
 - Dashboard route-normalization compatibility requirements are documented and the route transition is deferred for V1.
+- G4: Wallet import → sync → rebuild cycle evidenced on 2026-06-04 with real PulseChain RPC.
+- G5: Pricing status `ONCHAIN_POOL: ok` and `ORACLE: ok` evidenced on 2026-06-04 from PulseX on-chain data.
 
-What still blocks declaring the backend platform complete:
-
-1. G4 production-like wallet import -> sync -> materialize -> rebuild evidence is not yet captured.
-2. G5 pricing-status production-like evidence is not yet captured.
-
-Deployment-readiness note:
+Remaining deployment gate:
 
 - Public deployment remains blocked until operator API protection is implemented or verified at deployment level per `docs/operator-api-deployment-readiness.md`.
 
 ## Recommended next bounded sequence
 
-1. Complete G4/G5 evidence collection using `docs/g4-g5-backend-evidence-template.md`.
-2. Re-run this readiness checklist and update status.
-3. Before any public production exposure, implement or verify operator API protection per `docs/operator-api-deployment-readiness.md`.
+1. Before any public production exposure, implement or verify operator API protection per `docs/operator-api-deployment-readiness.md`.
+2. Continue V1 product work per the non-goals list below.
 
 ## Non-goals before backend platform completion
 
