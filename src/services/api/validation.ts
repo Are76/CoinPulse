@@ -72,10 +72,45 @@ export const walletImportRequestSchema = z.object({
   label: z.string().trim().min(1).max(120).optional(),
 });
 
+const tokenAddressSchema = z
+  .string()
+  .trim()
+  .regex(/^0x[a-fA-F0-9]{40}$/, "Token address must be a valid EVM address.")
+  .transform((value) => value.toLowerCase() as `0x${string}`);
+
+const tokenDecimalsSchema = z.coerce
+  .number()
+  .int()
+  .min(0, "Token decimals must be >= 0.")
+  .max(18, "Token decimals must be <= 18.");
+
+const observedAtSchema = z
+  .string()
+  .trim()
+  .datetime({ offset: true })
+  .transform((value) => new Date(value));
+
+export const priceIngestRequestSchema = z.object({
+  chainId: chainIdSchema,
+  blockNumber: blockNumberSchema,
+  observedAt: observedAtSchema,
+  assets: z
+    .array(
+      z.object({
+        assetId: z.string().trim().min(1).max(256),
+        tokenAddress: tokenAddressSchema,
+        tokenDecimals: tokenDecimalsSchema,
+        quoteAsset: quoteAssetSchema,
+      }),
+    )
+    .min(1, "At least one asset is required."),
+});
+
 export type DashboardRequestInput = z.infer<typeof dashboardRequestSchema>;
 export type ManualSyncRequestInput = z.infer<typeof manualSyncRequestSchema>;
 export type RebuildRequestInput = z.infer<typeof rebuildRequestSchema>;
 export type WalletImportRequestInput = z.infer<typeof walletImportRequestSchema>;
+export type PriceIngestRequestInput = z.infer<typeof priceIngestRequestSchema>;
 
 export function parseSearchParams<T extends z.ZodType>(schema: T, request: Request): z.infer<T> {
   const url = new URL(request.url);
