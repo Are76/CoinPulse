@@ -204,7 +204,7 @@ What is complete:
 - DTO-first guardrails are explicit.
 - Environment validation is now clearer and less likely to be misdiagnosed.
 - Operator API public-deployment policy is documented.
-- G6 transaction-history route work is explicitly deferred from V1 readiness and guarded from accidental frontend reconstruction.
+- G6 transaction-history route (`GET /api/transactions`) is implemented and complete as of PRs #168–#177.
 - Dashboard route-normalization compatibility requirements are documented and the route transition is deferred for V1.
 - G4: Sync completion evidenced on 2026-06-04 (partial — rebuild/materialization pending).
 - G5: Pricing status `ONCHAIN_POOL: ok` and `ORACLE: ok` evidenced on 2026-06-04 from PulseX on-chain data.

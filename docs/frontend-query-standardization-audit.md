@@ -1,5 +1,13 @@
 # CoinPulse Frontend Query Standardization Audit
 
+> **STATUS UPDATE (PRs #23–#177):** All five recommended sequence steps in this document are now
+> complete. `QueryClient`/`QueryClientProvider` are wired, `src/lib/query/` owns all query keys and
+> defaults, all page reads use `useQuery`, all operator mutations use `useMutation` with the shared
+> invalidation helper, and additive new pages (`/debug/wallets/import`, `/debug/wallets/tracked`,
+> `/debug/prices/status`, `/transactions`) have been added. The findings below remain accurate as a
+> historical record of the state at the time of audit (PR #22); they describe a gap that is now
+> closed.
+
 ## Purpose
 
 This document audits the current state of frontend data fetching in CoinPulse against the rules defined in `docs/data-fetching-architecture.md`, and proposes a bounded standardization plan for moving the frontend onto a single, DTO-first, TanStack Query–based data layer.

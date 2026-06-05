@@ -44,6 +44,30 @@ Rules:
     - `GET /api/debug/status`
     - `POST /api/sync/manual`
     - `POST /api/rebuild`
+- `/debug/wallets/import`
+  - Current page: operator wallet import page
+  - Frontend shell: `src/app/debug/wallets/import/page.tsx`
+  - Stateful screen: `src/components/debug/wallets/wallet-import-screen.tsx`
+  - Currently observed frontend mutation targets:
+    - `POST /api/wallets/import`
+- `/debug/wallets/tracked`
+  - Current page: operator tracked wallets page
+  - Frontend shell: `src/app/debug/wallets/tracked/page.tsx`
+  - Stateful screen: `src/components/debug/wallets/tracked-wallets-screen.tsx`
+  - Currently observed frontend fetch targets:
+    - `GET /api/wallets/tracked`
+- `/debug/prices/status`
+  - Current page: operator pricing status page
+  - Frontend shell: `src/app/debug/prices/status/page.tsx`
+  - Stateful screen: `src/components/debug/prices/pricing-status-screen.tsx`
+  - Currently observed frontend fetch targets:
+    - `GET /api/prices/status`
+- `/transactions`
+  - Current page: transaction history page
+  - Frontend shell: `src/app/transactions/page.tsx`
+  - Stateful screen: `src/components/transactions/transaction-history-screen.tsx`
+  - Currently observed frontend fetch targets:
+    - `GET /api/transactions`
 
 ### API route handlers verified in the current repo
 
@@ -52,27 +76,24 @@ The following handlers exist in `app/api`, verified from the repository:
 - `GET /api/portfolio/dashboard`
 - `GET /api/debug/health`
 - `GET /api/debug/status`
+- `GET /api/prices/status`
+- `GET /api/wallets/tracked`
+- `GET /api/transactions`
 - `POST /api/wallets/import`
 - `POST /api/sync/manual`
 - `POST /api/rebuild`
+- `POST /api/prices/ingest`
 
 ### Backend surface present, but no first-class page yet
 
-- Wallet import
-  - Implemented backend route: `POST /api/wallets/import`
-  - No dedicated frontend page is currently implemented.
 - Debug/status
   - Implemented backend DTO route: `GET /api/debug/status`
-  - No dedicated `/debug/status` page exists yet.
-- Prices/status
-  - No `GET /api/prices/status` route exists yet.
-  - No prices/status page exists yet.
+  - No dedicated `/debug/status` page exists yet (status surfaces are embedded in the dashboard and debug/sync pages).
 
 ## Future Page Map
 
 The following are explicitly out of V1 implementation scope for now. They are listed here only to keep the fetching architecture consistent across upcoming pages.
 
-- Transaction history
 - Wallet analyzer
 - Performance analytics
 - Allocation
@@ -407,9 +428,13 @@ Rule:
 - `GET /api/portfolio/dashboard`
 - `GET /api/debug/health`
 - `GET /api/debug/status`
+- `GET /api/prices/status`
+- `GET /api/wallets/tracked`
+- `GET /api/transactions`
 - `POST /api/wallets/import`
 - `POST /api/sync/manual`
 - `POST /api/rebuild`
+- `POST /api/prices/ingest`
 
 ### Preferred future normalized route map
 
@@ -420,9 +445,8 @@ The long-term frontend contract should standardize on these DTO-oriented reads:
 - `GET /api/debug/status`
 - `GET /api/debug/health`
 - `GET /api/prices/status`
-  - future
 - `GET /api/transactions`
-  - future canonical transaction history endpoint
+- `GET /api/wallets/tracked`
 - `POST /api/wallets/import`
 - `POST /api/sync/manual`
 - `POST /api/rebuild`
@@ -477,21 +501,22 @@ What should remain chain-specific behind the backend boundary:
 
 ## Recommended Implementation Sequence
 
-1. Standardize current frontend fetches on TanStack Query without changing DTO semantics.
-2. Introduce a shared frontend query-key module for dashboard/debug data.
-3. Add a dedicated wallet import page that consumes only backend validation and wallet-import DTOs.
-4. Add a dedicated debug/status page that renders existing backend debug/status DTOs.
-5. Add a backend `GET /api/prices/status` DTO for persisted pricing observability.
-6. Design and implement a canonical `GET /api/transactions` backend DTO from persisted ledger/action-group truth.
-7. Build one shared frontend transaction module on top of that DTO.
+Steps 1–7 are complete as of the current `main` (PRs through #177). Remaining work:
+
+1. ~~Standardize current frontend fetches on TanStack Query without changing DTO semantics.~~ ✓ Complete
+2. ~~Introduce a shared frontend query-key module for dashboard/debug data.~~ ✓ Complete
+3. ~~Add a dedicated wallet import page that consumes only backend validation and wallet-import DTOs.~~ ✓ Complete
+4. ~~Add a dedicated debug/status page that renders existing backend debug/status DTOs.~~ ✓ Complete (surfaces embedded in existing pages)
+5. ~~Add a backend `GET /api/prices/status` DTO for persisted pricing observability.~~ ✓ Complete
+6. ~~Design and implement a canonical `GET /api/transactions` backend DTO from persisted ledger/action-group truth.~~ ✓ Complete (PRs #168–#177)
+7. ~~Build one shared frontend transaction module on top of that DTO.~~ ✓ Complete
 8. Only after transaction and pricing truth is solid, expand into analytics/allocation/DeFi detail pages.
 
 ## Risks
 
-- Current dashboard and debug pages still use manual fetch state instead of React Query, so invalidation and polling behavior are not yet standardized.
 - Current dashboard route name is `GET /api/portfolio/dashboard`, while the preferred architecture wants `GET /api/dashboard`; this should be handled as a deliberate compatibility transition, not an implicit rename.
-- `GET /api/prices/status` and `GET /api/transactions` do not exist yet, so future page design must wait for DTO-first backend work.
 - Multi-family sync diagnostics already show that operational metadata can be nuanced; future DTOs must preserve uncertainty explicitly instead of simplifying it away.
+- `GET /api/transactions` V1 limitations: `status` is always `"complete"`, `blockNumber`/`sourceFamily`/`protocol` are always `null`, and `pageInfo.hasNextPage` is always `false`. Cursor-based pagination and full status/provenance fields are deferred.
 
 ## V1 Decision Summary
 
