@@ -19,7 +19,7 @@ export const QUERY_DEFAULTS = {
     staleTime: 15_000,
     gcTime: 5 * 60_000,
   },
-  // Reserved for future transactions route
+  // Canonical transaction page from GET /api/transactions.
   transactions: {
     staleTime: 30_000,
     gcTime: 10 * 60_000,
