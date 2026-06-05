@@ -7,6 +7,7 @@ import {
 } from "@/services/transactions/types";
 import type {
   ListTransactionsArgs,
+  TransactionLedgerCoverageDto,
   TransactionsPageDto,
 } from "@/services/transactions/types";
 
@@ -35,11 +36,16 @@ export function buildEmptyTransactionsPage(args: {
   walletAddress: string;
   chainId: number;
   limit: number;
+  ledgerCoverage?: TransactionLedgerCoverageDto;
 }): TransactionsPageDto {
   return {
     schemaVersion: TRANSACTIONS_SCHEMA_VERSION,
     walletAddress: args.walletAddress,
     chainId: args.chainId,
+    ledgerCoverage: args.ledgerCoverage ?? {
+      status: "unknown",
+      reason: "transaction-ledger-query-not-implemented",
+    },
     pageInfo: {
       hasNextPage: false,
       nextCursor: null,

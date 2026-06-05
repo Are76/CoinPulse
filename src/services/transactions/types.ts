@@ -76,10 +76,30 @@ export type TransactionPageInfoDto = {
   limit: number;
 };
 
+// ─── Ledger coverage ───────────────────────────────────────────────────────────
+
+/**
+ * Indicates how completely the returned transactions represent the canonical
+ * ledger for this wallet/chain.
+ * - "covered"  — the canonical ledger was queried and the response is complete.
+ * - "partial"  — only a subset of the ledger was consulted (e.g. partial block
+ *                range, missing source families).
+ * - "unknown"  — coverage cannot be determined (query not yet implemented, no
+ *                materialization record, or the ledger-query is a skeleton).
+ */
+export type TransactionLedgerCoverageStatus = "covered" | "partial" | "unknown";
+
+export type TransactionLedgerCoverageDto = {
+  status: TransactionLedgerCoverageStatus;
+  /** Human-readable reason when status is not "covered". Null when covered. */
+  reason: string | null;
+};
+
 // ─── Provenance ────────────────────────────────────────────────────────────────
 
 export type TransactionProvenanceDto = {
-  ledgerFresh: boolean;
+  /** Explicit ledger coverage semantics replacing the removed ledgerFresh boolean. */
+  ledgerCoverage: TransactionLedgerCoverageDto;
   materializationAsOf: string | null;
 };
 
@@ -154,6 +174,8 @@ export type TransactionsPageDto = {
   schemaVersion: typeof TRANSACTIONS_SCHEMA_VERSION;
   walletAddress: string;
   chainId: number;
+  /** Page-level ledger coverage: how completely this page reflects canonical ledger truth. */
+  ledgerCoverage: TransactionLedgerCoverageDto;
   pageInfo: TransactionPageInfoDto;
   transactions: TransactionDto[];
 };
