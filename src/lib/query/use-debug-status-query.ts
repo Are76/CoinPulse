@@ -1,10 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { fetchDebugStatus } from "@/lib/api/debug-client";
+import { QUERY_DEFAULTS } from "@/lib/query/query-defaults";
 import { queryKeys } from "@/lib/query/query-keys";
 
-export const DEBUG_STATUS_STALE_TIME = 10_000;
-export const DEBUG_STATUS_GC_TIME = 5 * 60_000;
 export const DEBUG_STATUS_REFETCH_INTERVAL = 10_000;
 
 export type UseDebugStatusQueryParams = {
@@ -12,12 +11,6 @@ export type UseDebugStatusQueryParams = {
   refetchInterval?: number | false;
 };
 
-/**
- * Shared TanStack Query hook for the debug status DTO.
- *
- * Calls the existing debug client fetcher and surfaces the backend DTO/error as-is.
- * This hook is read-only and does not infer or compute operational truth in the UI.
- */
 export function useDebugStatusQuery({
   enabled = true,
   refetchInterval = DEBUG_STATUS_REFETCH_INTERVAL,
@@ -27,8 +20,8 @@ export function useDebugStatusQuery({
     queryFn: fetchDebugStatus,
     enabled,
     retry: false,
-    staleTime: DEBUG_STATUS_STALE_TIME,
-    gcTime: DEBUG_STATUS_GC_TIME,
+    staleTime: QUERY_DEFAULTS.debugStatus.staleTime,
+    gcTime: QUERY_DEFAULTS.debugStatus.gcTime,
     refetchInterval,
   });
 }

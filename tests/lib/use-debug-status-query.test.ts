@@ -4,11 +4,10 @@ import React, { type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as debugClient from "@/lib/api/debug-client";
+import { QUERY_DEFAULTS } from "@/lib/query/query-defaults";
 import { queryKeys } from "@/lib/query/query-keys";
 import {
-  DEBUG_STATUS_GC_TIME,
   DEBUG_STATUS_REFETCH_INTERVAL,
-  DEBUG_STATUS_STALE_TIME,
   useDebugStatusQuery,
 } from "@/lib/query/use-debug-status-query";
 
@@ -69,8 +68,8 @@ describe("useDebugStatusQuery", () => {
       retry?: unknown;
     };
     expect(queryOptions.queryKey).toEqual(queryKeys.debug.status());
-    expect(queryOptions.staleTime).toBe(DEBUG_STATUS_STALE_TIME);
-    expect(queryOptions.gcTime).toBe(DEBUG_STATUS_GC_TIME);
+    expect(queryOptions.staleTime).toBe(QUERY_DEFAULTS.debugStatus.staleTime);
+    expect(queryOptions.gcTime).toBe(QUERY_DEFAULTS.debugStatus.gcTime);
     expect(queryOptions.refetchInterval).toBe(DEBUG_STATUS_REFETCH_INTERVAL);
     expect(queryOptions.retry).toBe(false);
   });

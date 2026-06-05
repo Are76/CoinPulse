@@ -4,12 +4,9 @@ import React, { type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as debugClient from "@/lib/api/debug-client";
+import { QUERY_DEFAULTS } from "@/lib/query/query-defaults";
 import { queryKeys } from "@/lib/query/query-keys";
-import {
-  TRACKED_WALLETS_GC_TIME,
-  TRACKED_WALLETS_STALE_TIME,
-  useTrackedWalletsQuery,
-} from "@/lib/query/use-tracked-wallets-query";
+import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
 
 function makeWrapper() {
   const queryClient = new QueryClient({
@@ -63,8 +60,8 @@ describe("useTrackedWalletsQuery", () => {
       retry?: unknown;
     };
     expect(queryOptions.queryKey).toEqual(queryKeys.wallets.tracked(369));
-    expect(queryOptions.staleTime).toBe(TRACKED_WALLETS_STALE_TIME);
-    expect(queryOptions.gcTime).toBe(TRACKED_WALLETS_GC_TIME);
+    expect(queryOptions.staleTime).toBe(QUERY_DEFAULTS.wallets.staleTime);
+    expect(queryOptions.gcTime).toBe(QUERY_DEFAULTS.wallets.gcTime);
     expect(queryOptions.retry).toBe(false);
   });
 
