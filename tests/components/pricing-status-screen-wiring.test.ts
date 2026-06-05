@@ -81,4 +81,47 @@ describe("pricing-status-screen wiring", () => {
     expect(source).not.toContain("rpc");
     expect(source).not.toContain("fetch(");
   });
+
+  it("does not use useEffect or setInterval for ad hoc polling", () => {
+    const source = readScreenSource();
+    expect(source).not.toContain("useEffect");
+    expect(source).not.toContain("setInterval");
+    expect(source).not.toContain("setTimeout");
+  });
+
+  it("renders rejected count and reason fields explicitly — does not hide or coerce them", () => {
+    const source = readScreenSource();
+    // Both fields must be rendered directly from the backend DTO
+    expect(source).toContain("source.rejectedCount");
+    expect(source).toContain("source.reason");
+    // Must not coerce null/missing values to zero or OK
+    expect(source).not.toMatch(/rejectedCount\s*(?:===|==)\s*0\s*\?\s*["']ok["']/);
+    expect(source).not.toMatch(/reason\s*\?\?\s*["']ok["']/);
+  });
+
+  it("does not compute prices, valuation, PnL, liquidity, or confidence in the screen", () => {
+    const source = readScreenSource();
+    expect(source).not.toContain("computePrice");
+    expect(source).not.toContain("computeBalance");
+    expect(source).not.toContain("pnl");
+    expect(source).not.toContain("liquidity");
+    expect(source).not.toContain("confidence");
+    expect(source).not.toMatch(/price\s*[+\-*/]/);
+    expect(source).not.toMatch(/balance\s*[+\-*/]/);
+  });
+
+  it("does not load or invalidate dashboard queries", () => {
+    const source = readScreenSource();
+    expect(source).not.toContain("useDashboard");
+    expect(source).not.toContain("useDashboardQuery");
+    expect(source).not.toContain('"dashboard"');
+    expect(source).not.toContain("invalidateQueries");
+  });
+
+  it("page does not import dashboard or wallet mutation hooks", () => {
+    const source = readPageSource();
+    expect(source).not.toContain("useDashboard");
+    expect(source).not.toContain("useWalletImport");
+    expect(source).not.toContain("invalidateQueries");
+  });
 });
