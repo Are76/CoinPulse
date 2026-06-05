@@ -286,6 +286,65 @@ describe("listCanonicalTransactions — chain filtering", () => {
   });
 });
 
+// ── 5a. Wallet address normalization ─────────────────────────────────────────
+
+describe("listCanonicalTransactions — walletAddress normalization", () => {
+  it("page envelope walletAddress is lowercase even when a mixed-case address is passed", async () => {
+    const mixedCase = "0xABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD";
+    const expectedLower = mixedCase.toLowerCase();
+    setupMocks(
+      { id: WALLET_ID, address: expectedLower, chainId: CHAIN_ID },
+      [],
+    );
+
+    const result = await listCanonicalTransactions({ walletAddress: mixedCase, chainId: CHAIN_ID });
+
+    expect(result.walletAddress).toBe(expectedLower);
+    expect(result.walletAddress).not.toBe(mixedCase);
+  });
+
+  it("each transaction DTO walletAddress matches the normalized page envelope walletAddress", async () => {
+    const mixedCase = "0xABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD";
+    const expectedLower = mixedCase.toLowerCase();
+    setupMocks(
+      { id: WALLET_ID, address: expectedLower, chainId: CHAIN_ID },
+      [makeActionGroup("ag-001")],
+    );
+
+    const result = await listCanonicalTransactions({ walletAddress: mixedCase, chainId: CHAIN_ID });
+
+    expect(result.walletAddress).toBe(expectedLower);
+    for (const tx of result.transactions) {
+      expect(tx.walletAddress).toBe(result.walletAddress);
+    }
+  });
+
+  it("walletAddress is consistent across page envelope and all transaction DTOs", async () => {
+    setupMocks(MOCK_WALLET, [
+      makeActionGroup("ag-001"),
+      makeActionGroup("ag-002"),
+    ]);
+
+    const result = await listCanonicalTransactions({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID });
+
+    expect(result.transactions).toHaveLength(2);
+    for (const tx of result.transactions) {
+      expect(tx.walletAddress).toBe(result.walletAddress);
+    }
+  });
+
+  it("unknown-coverage response also uses the normalized walletAddress", async () => {
+    const mixedCase = "0xABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD";
+    const expectedLower = mixedCase.toLowerCase();
+    const { mockFindMany } = setupMocks(null, []);
+
+    const result = await listCanonicalTransactions({ walletAddress: mixedCase, chainId: CHAIN_ID });
+
+    expect(result.walletAddress).toBe(expectedLower);
+    expect(mockFindMany).not.toHaveBeenCalled();
+  });
+});
+
 // ── 5. Limit behaviour ────────────────────────────────────────────────────────
 
 describe("listCanonicalTransactions — limit", () => {
@@ -343,6 +402,22 @@ describe("listCanonicalTransactions — ordering", () => {
     expect(mockFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
         orderBy: [{ occurredAt: "desc" }, { id: "asc" }],
+      }),
+    );
+  });
+
+  it("included entries are queried with deterministic orderBy (occurredAt asc, id asc)", async () => {
+    const { mockFindMany } = setupMocks(MOCK_WALLET, []);
+
+    await listCanonicalTransactions({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID });
+
+    expect(mockFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          entries: expect.objectContaining({
+            orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+          }),
+        }),
       }),
     );
   });
