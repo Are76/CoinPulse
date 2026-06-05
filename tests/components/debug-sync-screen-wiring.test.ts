@@ -71,3 +71,64 @@ describe("debug-sync-screen TanStack Query wiring", () => {
     expect(source).toContain('? "Rebuilding..."');
   });
 });
+
+describe("debug-sync-screen TanStack Query read migration", () => {
+  it("does not import any direct fetch functions from debug-client", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).not.toContain("fetchDebugHealth");
+    expect(source).not.toContain("fetchDebugStatus");
+    expect(source).not.toContain("fetchTrackedWallets");
+  });
+
+  it("does not contain any useEffect hooks (no ad-hoc polling loop)", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).not.toContain("useEffect");
+  });
+
+  it("derives metaState from query data and errors — no computed balances or prices", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).toContain("const metaState = getMetaState({");
+    expect(source).toContain("health: healthQuery.data,");
+    expect(source).toContain("healthError: healthQuery.error,");
+    expect(source).toContain("status: statusQuery.data,");
+    expect(source).toContain("statusError: statusQuery.error,");
+    expect(source).not.toContain("computeBalance");
+    expect(source).not.toContain("computePrice");
+    expect(source).not.toContain("calculatePnl");
+    expect(source).not.toContain("calculateValuation");
+  });
+
+  it("represents loading state via metaState.kind === 'loading' sourced from query isPending", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).toContain("return { kind: \"loading\" };");
+    expect(source).toContain("metaState.kind === \"loading\"");
+  });
+
+  it("represents error state via metaState.kind === 'error' with backend message", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).toContain("return { kind: \"error\"");
+    expect(source).toContain("metaState.kind === \"error\"");
+    expect(source).toContain('title="Backend debug metadata failed"');
+  });
+
+  it("POST submit handlers remain operation-state driven and do not call fetch directly", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).toContain("manualSyncMutation.mutateAsync(");
+    expect(source).toContain("rebuildMutation.mutateAsync(");
+    expect(source).not.toContain("fetch(");
+    expect(source).not.toContain("axios");
+  });
+
+  it("does not use token symbol or ticker as identity", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).not.toMatch(/symbol\s*===|===\s*symbol/);
+    expect(source).not.toContain("ticker");
+  });
+});
