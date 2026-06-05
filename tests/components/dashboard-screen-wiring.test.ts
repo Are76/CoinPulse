@@ -366,3 +366,82 @@ describe("dashboard-screen wiring", () => {
   });
 
 });
+
+describe("dashboard-screen TanStack Query read migration", () => {
+  it("screen imports useDashboardQuery from the shared hook, not ad-hoc fetch state", () => {
+    const source = readScreen();
+    expect(source).toContain(
+      'import { useDashboardQuery } from "@/lib/query/use-dashboard-query"',
+    );
+    expect(source).not.toContain("fetchPortfolioDashboard");
+  });
+
+  it("screen imports useDebugHealthQuery from the shared hook", () => {
+    const source = readScreen();
+    expect(source).toContain(
+      'import { useDebugHealthQuery } from "@/lib/query/use-debug-health-query"',
+    );
+    expect(source).not.toContain("fetchDebugHealth");
+  });
+
+  it("screen imports useDebugStatusQuery from the shared hook", () => {
+    const source = readScreen();
+    expect(source).toContain(
+      'import { useDebugStatusQuery } from "@/lib/query/use-debug-status-query"',
+    );
+    expect(source).not.toContain("fetchDebugStatus");
+  });
+
+  it("dashboard query is enabled only when submittedParams is non-null", () => {
+    const source = readScreen();
+    // The hook must be called with enabled: submittedParams !== null
+    expect(source).toContain("enabled: submittedParams !== null");
+  });
+
+  it("dashboard query is disabled before explicit submit (submittedParams starts null)", () => {
+    const source = readScreen();
+    // Initial state: submittedParams = null means enabled is false until Load dashboard
+    expect(source).toContain("useState<SubmittedParams | null>(null)");
+    expect(source).toContain("enabled: submittedParams !== null");
+  });
+
+  it("handleSubmit sets submittedParams to enable the dashboard query", () => {
+    const source = readScreen();
+    expect(source).toContain("setSubmittedParams(params)");
+    // Selecting a wallet must NOT call setSubmittedParams
+    const handlerMatch = source.match(
+      /function handleSelectTrackedWallet\([^)]*\)\s*\{([^}]*)\}/,
+    );
+    expect(handlerMatch).not.toBeNull();
+    expect(handlerMatch?.[1]).not.toContain("setSubmittedParams");
+  });
+
+  it("screen does not call fetch() directly for any dashboard reads", () => {
+    const source = readScreen();
+    expect(source).not.toContain("fetch(");
+    expect(source).not.toContain("useEffect");
+  });
+
+  it("screen does not introduce balance, price, or PnL computation", () => {
+    const source = readScreen();
+    expect(source).not.toContain("parseFloat");
+    expect(source).not.toContain("toFixed");
+    expect(source).not.toContain(".reduce(");
+    expect(source).not.toContain("balance *");
+    expect(source).not.toContain("price *");
+    expect(source).not.toContain("pnl =");
+  });
+
+  it("dashboard query key does not use ad-hoc inline key — routes through queryKeys.dashboard", () => {
+    const source = readScreen();
+    expect(source).toContain('import { queryKeys } from "@/lib/query/query-keys"');
+    expect(source).toContain("queryKeys.dashboard(");
+  });
+
+  it("debug health and status refetch intervals are disabled on the dashboard (no polling)", () => {
+    const source = readScreen();
+    // Dashboard shows health/status as supporting metadata without active polling
+    expect(source).toContain("DISABLE_REFETCH_INTERVAL");
+    expect(source).toContain("refetchInterval: DISABLE_REFETCH_INTERVAL");
+  });
+});
