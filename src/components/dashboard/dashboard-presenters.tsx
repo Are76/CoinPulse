@@ -58,6 +58,14 @@ export function DashboardHero(args: {
             Valuation, pricing confidence, and PnL uncertainty remain visibly
             labeled instead of inferred in the browser.
           </p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Link
+              href="/transactions"
+              className="text-sm font-medium text-[color:var(--color-accent-2)] hover:underline"
+            >
+              Transaction history →
+            </Link>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <LabelBadge
