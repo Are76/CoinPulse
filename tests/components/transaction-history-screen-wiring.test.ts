@@ -68,9 +68,9 @@ describe("TransactionHistoryScreen — submit enables query with correct params"
     expect(source).toContain("Load transactions");
   });
 
-  it("button label shows 'Loading...' while fetching", () => {
+  it("button label shows 'Loading…' while fetching", () => {
     const source = readScreen();
-    expect(source).toContain("Loading...");
+    expect(source).toContain("Loading…");
   });
 });
 
