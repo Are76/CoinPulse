@@ -425,16 +425,7 @@ Rule:
 
 ### API route handlers implemented today
 
-- `GET /api/portfolio/dashboard`
-- `GET /api/debug/health`
-- `GET /api/debug/status`
-- `GET /api/prices/status`
-- `GET /api/wallets/tracked`
-- `GET /api/transactions`
-- `POST /api/wallets/import`
-- `POST /api/sync/manual`
-- `POST /api/rebuild`
-- `POST /api/prices/ingest`
+The implemented route list is intentionally maintained in the Current Page Map section above under "API route handlers verified in the current repo"; this section does not duplicate it to avoid route-map drift.
 
 ### Preferred future normalized route map
 
