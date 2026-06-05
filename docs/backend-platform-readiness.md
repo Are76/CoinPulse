@@ -144,17 +144,24 @@ Remaining evidence needed:
 
 ### G6. Canonical transaction DTO is surfaced
 
-Status: deferred from V1 backend platform completion per `docs/g6-v1-transactions-scope-decision.md`.
+Status: **complete** — implemented through PRs #168–#177.
 
 Current state:
 
-- `GET /api/transactions` does not exist yet.
-- Transaction history is not required for the current V1 backend platform readiness phase.
-- Any transaction-history, allocation, analytics, LP-detail, stake-detail, export, or transaction-derived UI work must wait for a canonical backend transaction DTO.
+- `GET /api/transactions` exists at `app/api/transactions/route.ts`.
+- Backend reads from persisted `LedgerActionGroup`/`LedgerEntry` canonical tables only. No raw-log or RPC reconstruction.
+- Versioned DTO (`schemaVersion: "v1"`) with `ledgerCoverage`, `pageInfo`, and `transactions[]`.
+- Route-contract coverage: `tests/api/transactions-route-contract.test.ts` (22 tests — success envelope, empty result, validation errors, limit enforcement, date filters, 500/no-stack-leakage, no raw-log fields, chain-aware assetId).
+- Service-layer and read-model coverage: `tests/services/transactions/` (86 tests — wallet-not-tracked, empty/covered ledger, entry mapping, chain filtering, limit, ordering, no raw-log access, no RPC access, error propagation, route-contract compatibility).
+- Frontend `TransactionHistoryScreen` at `/transactions` consumes only `useTransactionsQuery`. No local pricing, valuation, or PnL computation.
+- Navigation link from `DashboardHero` to `/transactions`.
 
-Future implementation trigger:
+Known V1 limitations (not blockers — documented in code):
 
-- Add canonical `GET /api/transactions` backend DTO from persisted ledger/action-group truth with contract tests before transaction-facing product surfaces begin.
+- `status` is always `"complete"` per transaction — no incomplete/unsupported/unknown states materialized yet (no `status` column on `LedgerActionGroup`).
+- `blockNumber`, `sourceFamily`, `protocol` are always `null` — not yet persisted in `LedgerActionGroup`.
+- `pageInfo.hasNextPage` is always `false` — cursor-based pagination skeleton is present but not implemented; result sets are bounded by `limit` (default 50, max 100).
+- Authentication/authorization decision deferred — the route is currently unauthenticated; deploy behind a reverse-proxy or add auth before public exposure.
 
 ### G7. Compatibility strategy for route normalization exists
 
