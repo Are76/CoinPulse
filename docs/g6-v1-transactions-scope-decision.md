@@ -1,14 +1,19 @@
 # G6 Transactions V1 Scope Decision
 
+> **STATUS UPDATE (PRs #168–#177):** The deferral recorded in this document has been superseded.
+> `GET /api/transactions` is now implemented and on `main`. See `docs/backend-platform-readiness.md`
+> G6 section and `docs/route-contract-coverage-index.md` for current state. The implementation
+> guardrails below remain authoritative for any future extension work.
+
 ## Purpose
 
-This document records the CoinPulse V1 scope decision for G6 canonical transaction DTO work.
+This document records the original CoinPulse V1 scope decision for G6 canonical transaction DTO work, and the guardrails that governed the eventual implementation.
 
 It is documentation only. It does not add `GET /api/transactions`, change runtime behavior, modify Prisma schema, change DTO contracts, change pricing/PnL/accounting logic, change sync/rebuild behavior, add workers, or change frontend rendering.
 
-## Decision
+## Original Decision (now superseded)
 
-`GET /api/transactions` is deferred from V1 backend platform completion.
+`GET /api/transactions` was deferred from V1 backend platform completion.
 
 CoinPulse V1 backend platform completion does not require a transaction-history API route as long as V1 remains focused on dashboard/backend-readiness surfaces and does not ship transaction history, allocation drilldowns, LP detail pages, stake detail pages, or analytics pages that need canonical transaction lists.
 
