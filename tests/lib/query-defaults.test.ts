@@ -30,4 +30,14 @@ describe("query defaults", () => {
     expect(QUERY_DEFAULTS.dashboard.staleTime).toBe(30_000);
     expect(QUERY_DEFAULTS.dashboard.gcTime).toBe(10 * 60_000);
   });
+
+  it("has correct pricesStatus reserved defaults", () => {
+    expect(QUERY_DEFAULTS.pricesStatus.staleTime).toBe(15_000);
+    expect(QUERY_DEFAULTS.pricesStatus.gcTime).toBe(5 * 60_000);
+  });
+
+  it("has correct transactions reserved defaults", () => {
+    expect(QUERY_DEFAULTS.transactions.staleTime).toBe(30_000);
+    expect(QUERY_DEFAULTS.transactions.gcTime).toBe(10 * 60_000);
+  });
 });
