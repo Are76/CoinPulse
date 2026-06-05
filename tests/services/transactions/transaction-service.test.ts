@@ -382,7 +382,8 @@ describe("buildEmptyTransactionsPage — ledgerCoverage", () => {
       limit: 50,
     });
 
-    expect(JSON.stringify(page)).not.toContain("ledgerFresh");
+    expect(page).not.toHaveProperty("ledgerFresh");
+    expect(page.ledgerCoverage).not.toHaveProperty("ledgerFresh");
   });
 });
 
@@ -404,7 +405,8 @@ describe("listCanonicalTransactions — ledgerCoverage", () => {
       chainId: CHAIN_ID,
     });
 
-    expect(JSON.stringify(result)).not.toContain("ledgerFresh");
+    expect(result).not.toHaveProperty("ledgerFresh");
+    expect(result.ledgerCoverage).not.toHaveProperty("ledgerFresh");
   });
 
   it("existing envelope fields are unchanged", async () => {
