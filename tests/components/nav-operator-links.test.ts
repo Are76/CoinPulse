@@ -81,6 +81,35 @@ describe("OperatorToolsNav", () => {
     expect(source).not.toContain("rpc");
     expect(source).not.toContain("fetch(");
   });
+
+  it("does not import query hooks or API clients", () => {
+    const source = readSource(OPERATOR_TOOLS_NAV_PATH);
+    expect(source).not.toContain("useQuery");
+    expect(source).not.toContain("useMutation");
+    expect(source).not.toContain("useQueryClient");
+    expect(source).not.toContain("lib/api/");
+    expect(source).not.toContain("lib/query/");
+  });
+
+  it("does not import dashboard, pricing, transaction, PnL, or backend service modules", () => {
+    const source = readSource(OPERATOR_TOOLS_NAV_PATH);
+    expect(source).not.toContain("dashboard");
+    expect(source).not.toContain("prices-client");
+    expect(source).not.toContain("debug-client");
+    expect(source).not.toContain("transaction");
+    expect(source).not.toContain("pnl");
+    expect(source).not.toContain("services/");
+    expect(source).not.toContain("prisma");
+  });
+
+  it("uses only next/link and UI primitives — no data behaviour", () => {
+    const source = readSource(OPERATOR_TOOLS_NAV_PATH);
+    expect(source).toContain('import Link from "next/link"');
+    // No useState, useEffect, or other React hooks
+    expect(source).not.toContain("useState");
+    expect(source).not.toContain("useEffect");
+    expect(source).not.toContain("useRef");
+  });
 });
 
 describe.each(SCREEN_PATHS)("$name operator nav wiring", ({ filePath }) => {
