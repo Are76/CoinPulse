@@ -1,5 +1,7 @@
 import "server-only";
 
+import { getDb } from "@/lib/db";
+import { resolveTrackedWalletByAddress } from "@/services/api/wallets";
 import {
   TRANSACTIONS_DEFAULT_LIMIT,
   TRANSACTIONS_MAX_LIMIT,
@@ -7,6 +9,8 @@ import {
 } from "@/services/transactions/types";
 import type {
   ListTransactionsArgs,
+  TransactionDto,
+  TransactionEntryDto,
   TransactionLedgerCoverageDto,
   TransactionPageInfoDto,
   TransactionsPageDto,
@@ -61,7 +65,7 @@ export function buildTransactionPageInfo(args: {
 
 /**
  * Build the stable empty page envelope for wallet/chain.
- * Used by the skeleton and by the real implementation when no records exist.
+ * Used when no records exist or the wallet is not yet tracked.
  */
 export function buildEmptyTransactionsPage(args: {
   walletAddress: string;
@@ -83,20 +87,112 @@ export function buildEmptyTransactionsPage(args: {
 }
 
 /**
+ * Map a single LedgerEntry (with optional token join) to a TransactionEntryDto.
+ * valueUsd drives pricingStatus/valuationStatus: priced/valued when present,
+ * unavailable otherwise. No raw-log fields are included.
+ */
+function mapEntry(entry: {
+  id: string;
+  assetId: string;
+  entryType: string;
+  direction: string;
+  quantity: { toString(): string };
+  valueUsd: { toString(): string } | null;
+  token: { address: string; decimals: number } | null;
+}): TransactionEntryDto {
+  const valued = entry.valueUsd != null;
+  return {
+    entryId: entry.id,
+    assetId: entry.assetId,
+    assetAddress: entry.token?.address ?? null,
+    entryType: entry.entryType,
+    direction: entry.direction as "IN" | "OUT" | "INTERNAL",
+    quantity: entry.quantity.toString(),
+    decimals: entry.token?.decimals ?? null,
+    pricingStatus: valued ? "priced" : "unavailable",
+    pricingProvenance: null,
+    valuationStatus: valued ? "valued" : "unavailable",
+    valueQuote: entry.valueUsd?.toString() ?? null,
+    quoteAsset: valued ? "USD" : null,
+    pnlImpact: null,
+    warnings: [],
+    rejectedReason: null,
+  };
+}
+
+/**
  * List canonical transactions for a wallet/chain from persisted ledger truth.
  *
- * This skeleton returns a stable empty envelope. Real implementation will
- * query the canonical ledger and action-group tables. It must never query
- * raw logs or reconstruct transaction meaning in the service layer.
+ * Reads LedgerActionGroup rows for the resolved wallet, ordered by occurredAt
+ * descending, and maps each group with its entries to a TransactionDto.
+ * Raw logs, RPC, and frontend reconstruction are never used.
  */
 export async function listCanonicalTransactions(
   args: ListTransactionsArgs,
 ): Promise<TransactionsPageDto> {
   const limit = resolveTransactionLimit(args.limit);
+  // Normalise once; args.walletAddress is already lowercased by schema transform,
+  // but we use this single variable throughout to avoid mixing sources.
+  const walletAddress = args.walletAddress.toLowerCase();
 
-  return buildEmptyTransactionsPage({
-    walletAddress: args.walletAddress,
+  const wallet = await resolveTrackedWalletByAddress({
+    walletAddress,
     chainId: args.chainId,
-    limit,
   });
+
+  if (!wallet) {
+    return buildEmptyTransactionsPage({
+      walletAddress,
+      chainId: args.chainId,
+      limit,
+      ledgerCoverage: { status: "unknown", reason: "wallet-not-tracked" },
+    });
+  }
+
+  const db = getDb();
+  const actionGroups = await db.ledgerActionGroup.findMany({
+    where: { walletId: wallet.id, chainId: args.chainId },
+    orderBy: [{ occurredAt: "desc" }, { id: "asc" }],
+    take: limit,
+    include: {
+      entries: {
+        orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+        include: {
+          token: { select: { address: true, decimals: true } },
+        },
+      },
+    },
+  });
+
+  const txCoverage: TransactionLedgerCoverageDto = { status: "covered", reason: null };
+
+  const transactions: TransactionDto[] = actionGroups.map((ag) => ({
+    transactionId: ag.id,
+    txHash: ag.txHash,
+    chainId: ag.chainId,
+    walletId: ag.walletId,
+    walletAddress,
+    occurredAt: ag.occurredAt.toISOString(),
+    blockNumber: null,
+    actionGroupId: ag.id,
+    actionType: ag.actionType,
+    sourceFamily: null,
+    protocol: null,
+    status: "complete" as const,
+    warnings: [],
+    provenance: {
+      ledgerCoverage: txCoverage,
+      materializationAsOf: null,
+    },
+    entries: ag.entries.map(mapEntry),
+  }));
+
+  return {
+    schemaVersion: TRANSACTIONS_SCHEMA_VERSION,
+    walletAddress,
+    chainId: args.chainId,
+    ledgerCoverage: txCoverage,
+    pageInfo: buildTransactionPageInfo({ limit }),
+    transactions,
+  };
 }

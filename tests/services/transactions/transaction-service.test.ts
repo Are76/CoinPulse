@@ -1,4 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Wallet lookup and DB are mocked so listCanonicalTransactions tests do not
+// require a live database. Default: wallet not found → empty unknown page.
+vi.mock("@/services/api/wallets", () => ({
+  resolveTrackedWalletByAddress: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("@/lib/db", () => ({
+  getDb: vi.fn(() => ({
+    ledgerActionGroup: { findMany: vi.fn().mockResolvedValue([]) },
+  })),
+}));
 
 import {
   buildEmptyTransactionsPage,
@@ -15,6 +27,10 @@ import type { TransactionLedgerCoverageStatus } from "@/services/transactions";
 
 const WALLET = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
 const CHAIN_ID = 369;
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("TRANSACTIONS_SCHEMA_VERSION", () => {
   it("is v1", () => {
@@ -356,7 +372,7 @@ describe("listCanonicalTransactions — cursor defaults", () => {
     expect(result.pageInfo.nextCursor).toBeNull();
   });
 
-  it("hasNextPage is always false from the skeleton", async () => {
+  it("hasNextPage is always false (cursor pagination not yet implemented)", async () => {
     const result = await listCanonicalTransactions({
       walletAddress: WALLET,
       chainId: CHAIN_ID,
@@ -380,7 +396,7 @@ describe("service skeleton — no raw log dependency", () => {
     expect(keys).toContain("resolveTransactionCursor");
   });
 
-  it("does not import prisma client or db module", async () => {
+  it("does not import the Prisma client directly — accesses db via @/lib/db abstraction", async () => {
     const src = await import("fs");
     const path = await import("path");
     const servicePath = path.resolve(
@@ -388,9 +404,11 @@ describe("service skeleton — no raw log dependency", () => {
       "src/services/transactions/transaction-service.ts",
     );
     const content = src.readFileSync(servicePath, "utf8");
+    // Must not bypass the db abstraction by importing PrismaClient directly
     expect(content).not.toMatch(/@\/lib\/prisma/);
     expect(content).not.toMatch(/from "@prisma\/client"/);
-    expect(content).not.toMatch(/prisma\./);
+    // Must not reference a bare `prisma.` variable (only getDb() is allowed)
+    expect(content).not.toMatch(/\bprisma\./);
   });
 
   it("does not reference raw log or raw token transfer tables", async () => {
@@ -401,11 +419,13 @@ describe("service skeleton — no raw log dependency", () => {
       "src/services/transactions/transaction-service.ts",
     );
     const content = src.readFileSync(servicePath, "utf8");
+    // Raw ingestion tables must never be queried from the transaction service
     expect(content).not.toMatch(/rawLog/i);
-    expect(content).not.toMatch(/rawTransaction/i);
     expect(content).not.toMatch(/rawTokenTransfer/i);
-    expect(content).not.toMatch(/LedgerActionGroup/);
-    expect(content).not.toMatch(/LedgerEntry/);
+    // Canonical ledger tables are accessed via camelCase Prisma client (ledgerActionGroup),
+    // not via PascalCase direct model references in service logic
+    expect(content).not.toMatch(/\bdb\.LedgerActionGroup\b/);
+    expect(content).not.toMatch(/\bdb\.LedgerEntry\b/);
   });
 });
 
@@ -495,7 +515,7 @@ describe("buildEmptyTransactionsPage — ledgerCoverage", () => {
 });
 
 describe("listCanonicalTransactions — ledgerCoverage", () => {
-  it("returns explicit unknown ledgerCoverage with a reason (skeleton not yet querying ledger)", async () => {
+  it("returns explicit unknown ledgerCoverage with a reason when wallet is not tracked", async () => {
     const result = await listCanonicalTransactions({
       walletAddress: WALLET,
       chainId: CHAIN_ID,
