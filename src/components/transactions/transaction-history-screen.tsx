@@ -417,7 +417,7 @@ function TransactionRow({ tx, chainId }: { tx: TransactionDto; chainId: number }
       </td>
       <td className="px-4 py-3 align-top">
         {tx.entries.length > 0 ? (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2" role="list" aria-label="Transaction entries">
             {tx.entries.map((entry) => (
               <EntryRow key={entry.entryId} entry={entry} />
             ))}

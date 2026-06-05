@@ -233,11 +233,10 @@ describe("TransactionHistoryScreen — coverage rendering", () => {
 
   function renderWithData(page: TransactionsPageDto) {
     vi.mocked(useTransactionsQuery).mockReturnValue(makeSuccessQuery(page) as never);
-    const input_ref: { input: HTMLElement | null } = { input: null };
     const { getByLabelText } = render(<TransactionHistoryScreen />, { wrapper: makeWrapper() });
-    input_ref.input = getByLabelText("Wallet address");
-    fireEvent.change(input_ref.input, { target: { value: VALID_ADDRESS } });
-    fireEvent.submit(input_ref.input.closest("form")!);
+    const input = getByLabelText("Wallet address");
+    fireEvent.change(input, { target: { value: VALID_ADDRESS } });
+    fireEvent.submit(input.closest("form")!);
   }
 
   it("shows 'Covered' badge for covered ledger coverage", () => {
