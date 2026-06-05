@@ -28,6 +28,8 @@ The following routes are considered operator or debug/admin surfaces and require
 - `GET /api/debug/health`
 - `GET /api/debug/status`
 - `GET /api/prices/status`
+- `POST /api/prices/ingest` (internal ingestion route — triggers on-chain RPC price fetching and persists observations)
+- `GET /api/transactions` (wallet-scoped transaction history — exposes ledger entries for a specific wallet and chain)
 
 Future operator/admin/debug routes inherit this requirement by default.
 

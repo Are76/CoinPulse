@@ -1,5 +1,10 @@
 # G6/G7 Backend Readiness Decision
 
+> **STATUS UPDATE (PRs #168–#177):** The G6 deferral recorded in this document has been superseded.
+> `GET /api/transactions` is now implemented and on `main`. See `docs/backend-platform-readiness.md`
+> G6 section, `docs/route-contract-coverage-index.md`, and `docs/g6-v1-transactions-scope-decision.md`
+> for current state. The G7 section below and its compatibility guardrails remain authoritative for V1.
+
 ## Purpose
 
 This document records the CoinPulse V1 backend readiness decision for the G6 and G7 gates.
