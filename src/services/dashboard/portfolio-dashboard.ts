@@ -7,6 +7,7 @@ import { calculateAverageCostPnl } from "@/services/pnl/average-cost";
 import type { PnLEntry, PnLWarning } from "@/services/pnl/types";
 import { resolveBestPriceFromStore } from "@/services/pricing/price-resolver";
 import type { ResolveBestPriceResult } from "@/services/pricing/types";
+import { computeTokenMetadataStatus } from "@/services/dashboard/token-metadata-status";
 import type {
   DashboardDbClient,
   DashboardLedgerCoverageDto,
@@ -121,9 +122,8 @@ export async function assemblePortfolioDashboard(args: {
           assetId: true,
           decimalsSource: true,
           metadataSources: {
-            select: { sourceKind: true, observedAt: true },
+            select: { sourceKind: true, observedAt: true, decimals: true },
             orderBy: [{ observedAt: "desc" }],
-            take: 1,
           },
         },
       });
@@ -198,7 +198,7 @@ export async function assemblePortfolioDashboard(args: {
         assetAddress: row.assetAddress,
         balanceQuantity: toStringValue(row.balanceQuantity),
         decimals: row.decimals,
-        metadataProvenance: toTokenMetadataProvenanceDto(tokenMetadataByAssetId.get(row.assetId) ?? null),
+        metadataProvenance: toTokenMetadataProvenanceDto(tokenMetadataByAssetId.get(row.assetId) ?? null, args.asOf),
         updatedFromBlock: bigintToString(row.updatedFromBlock),
         updatedToBlock: bigintToString(row.updatedToBlock),
         pricing,
@@ -295,8 +295,9 @@ export async function assemblePortfolioDashboard(args: {
 function toTokenMetadataProvenanceDto(
   token: {
     decimalsSource: string | null;
-    metadataSources?: Array<{ sourceKind: string; observedAt: Date | null }>;
+    metadataSources?: Array<{ sourceKind: string; observedAt: Date | null; decimals?: number | null }>;
   } | null,
+  asOf: Date,
 ): DashboardTokenMetadataProvenanceDto {
   if (!token) {
     return UNKNOWN_METADATA_PROVENANCE;
@@ -313,12 +314,19 @@ function toTokenMetadataProvenanceDto(
     return UNKNOWN_METADATA_PROVENANCE;
   }
 
+  const { status, conflictReason } = computeTokenMetadataStatus({
+    source,
+    latestObservedAt: latestSource?.observedAt ?? null,
+    asOf,
+    allSources: token.metadataSources ?? [],
+  });
+
   return {
-    status: "observed",
+    status,
     source,
     observedAt: latestSource?.observedAt?.toISOString() ?? null,
     confidence: mapTokenMetadataConfidence(sourceEvidence),
-    conflictReason: null,
+    conflictReason,
   };
 }
 

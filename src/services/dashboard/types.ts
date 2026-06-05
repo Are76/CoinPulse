@@ -321,16 +321,19 @@ export type DashboardDbClient = {
         assetId: true;
         decimalsSource: true;
         metadataSources: {
-          select: { sourceKind: true; observedAt: true };
+          select: { sourceKind: true; observedAt: true; decimals: true };
           orderBy: Array<{ observedAt: "desc" }>;
-          take: number;
         };
       };
     }): Promise<
       Array<{
         assetId: string;
         decimalsSource: string | null;
-        metadataSources?: Array<{ sourceKind: "SEED" | "RPC" | "MANUAL" | string; observedAt: Date | null }>;
+        metadataSources?: Array<{
+          sourceKind: "SEED" | "RPC" | "MANUAL" | string;
+          observedAt: Date | null;
+          decimals?: number | null;
+        }>;
       }>
     >;
   };

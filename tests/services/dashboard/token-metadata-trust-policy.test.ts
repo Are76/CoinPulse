@@ -85,7 +85,7 @@ type TokenRecord = {
   chainId: number;
   assetId: string;
   decimalsSource: string | null;
-  metadataSources?: Array<{ sourceKind: string; observedAt: Date | null }>;
+  metadataSources?: Array<{ sourceKind: string; observedAt: Date | null; decimals?: number | null }>;
 };
 
 function createDb(token: TokenRecord | null) {
@@ -324,20 +324,20 @@ describe("token metadata trust policy — conflictReason invariant", () => {
     expect(provenance?.conflictReason).toBeNull();
   });
 
-  it("conflictReason is null even with multiple sources of different kinds (multi-source not yet conflict-detected)", async () => {
-    // Current behavior: uses latest source (index 0), does NOT detect conflict.
-    // Status is "observed", not "conflicting". This test documents the limitation.
+  it("conflictReason is null when multiple sources have different kinds but agree on decimals", async () => {
+    // Different source kinds (RPC vs SEED) do not constitute a conflict.
+    // Conflict detection is based on persisted decimals values disagreeing across sources.
+    // When decimals are null in both sources, no conflict is detected.
     const provenance = await getProvenance({
       chainId: CHAIN_ID,
       assetId: TOKEN_ASSET,
       decimalsSource: "RPC",
       metadataSources: [
-        { sourceKind: "RPC", observedAt: new Date("2026-06-04T11:00:00.000Z") },
-        { sourceKind: "SEED", observedAt: new Date("2026-06-03T10:00:00.000Z") },
+        { sourceKind: "RPC", observedAt: new Date("2026-06-04T11:00:00.000Z"), decimals: null },
+        { sourceKind: "SEED", observedAt: new Date("2026-06-03T10:00:00.000Z"), decimals: null },
       ],
     });
 
-    // Latest source wins; conflict is not computed in V1
     expect(provenance?.source).toBe("chain");
     expect(provenance?.status).toBe("observed");
     expect(provenance?.conflictReason).toBeNull();
@@ -402,5 +402,158 @@ describe("token metadata trust policy — symbol-not-identity guardrail", () => 
     expect(provenance).not.toHaveProperty("valuation");
     expect(provenance).not.toHaveProperty("sourceType");
     expect(provenance).not.toHaveProperty("liquidityUsd");
+  });
+});
+
+// ─── Stale metadata status ─────────────────────────────────────────────────────
+
+// AS_OF is 2026-06-04T12:00:00.000Z (30+ days after the stale threshold boundary).
+// STALE_OBSERVED_AT is 60 days before AS_OF.
+const STALE_OBSERVED_AT = new Date("2026-04-05T12:00:00.000Z"); // 60 days before AS_OF
+
+describe("token metadata trust policy — stale status computation", () => {
+  it("returns stale status when RPC observation is older than threshold", async () => {
+    const provenance = await getProvenance({
+      chainId: CHAIN_ID,
+      assetId: TOKEN_ASSET,
+      decimalsSource: "RPC",
+      metadataSources: [{ sourceKind: "RPC", observedAt: STALE_OBSERVED_AT }],
+    });
+
+    expect(provenance?.status).toBe("stale");
+    expect(provenance?.source).toBe("chain");
+    expect(provenance?.confidence).toBe("medium");
+    expect(provenance?.conflictReason).toBeNull();
+    // observedAt is still exposed so operators can see when metadata was last observed
+    expect(provenance?.observedAt).toBe(STALE_OBSERVED_AT.toISOString());
+  });
+
+  it("returns stale status when SEED observation is older than threshold", async () => {
+    const provenance = await getProvenance({
+      chainId: CHAIN_ID,
+      assetId: TOKEN_ASSET,
+      decimalsSource: "SEED",
+      metadataSources: [{ sourceKind: "SEED", observedAt: STALE_OBSERVED_AT }],
+    });
+
+    expect(provenance?.status).toBe("stale");
+    expect(provenance?.source).toBe("derived");
+    expect(provenance?.confidence).toBe("low");
+  });
+
+  it("returns observed (not stale) for a recent observation", async () => {
+    const recentObservedAt = new Date("2026-06-04T11:00:00.000Z"); // 1 hour before AS_OF
+    const provenance = await getProvenance({
+      chainId: CHAIN_ID,
+      assetId: TOKEN_ASSET,
+      decimalsSource: "RPC",
+      metadataSources: [{ sourceKind: "RPC", observedAt: recentObservedAt }],
+    });
+
+    expect(provenance?.status).toBe("observed");
+  });
+
+  it("returns observed (not stale) when observedAt is null — null means no evidence, not stale", async () => {
+    const provenance = await getProvenance({
+      chainId: CHAIN_ID,
+      assetId: TOKEN_ASSET,
+      decimalsSource: "RPC",
+      metadataSources: [{ sourceKind: "RPC", observedAt: null }],
+    });
+
+    expect(provenance?.status).toBe("observed");
+  });
+});
+
+// ─── Conflicting metadata status ───────────────────────────────────────────────
+
+describe("token metadata trust policy — conflicting status computation", () => {
+  it("returns conflicting status when two sources have different decimals", async () => {
+    const provenance = await getProvenance({
+      chainId: CHAIN_ID,
+      assetId: TOKEN_ASSET,
+      decimalsSource: "RPC",
+      metadataSources: [
+        { sourceKind: "RPC", observedAt: new Date("2026-06-04T11:00:00.000Z"), decimals: 18 },
+        { sourceKind: "SEED", observedAt: new Date("2026-06-03T10:00:00.000Z"), decimals: 8 },
+      ],
+    });
+
+    expect(provenance?.status).toBe("conflicting");
+    expect(provenance?.conflictReason).toBe("decimals-mismatch");
+    // source is still populated from the latest source for operator observability
+    expect(provenance?.source).toBe("chain");
+  });
+
+  it("returns observed when two sources agree on the same decimals", async () => {
+    const provenance = await getProvenance({
+      chainId: CHAIN_ID,
+      assetId: TOKEN_ASSET,
+      decimalsSource: "RPC",
+      metadataSources: [
+        { sourceKind: "RPC", observedAt: new Date("2026-06-04T11:00:00.000Z"), decimals: 18 },
+        { sourceKind: "SEED", observedAt: new Date("2026-06-03T10:00:00.000Z"), decimals: 18 },
+      ],
+    });
+
+    expect(provenance?.status).toBe("observed");
+    expect(provenance?.conflictReason).toBeNull();
+  });
+
+  it("conflict takes priority over stale — conflicting returned even when observation is old", async () => {
+    const provenance = await getProvenance({
+      chainId: CHAIN_ID,
+      assetId: TOKEN_ASSET,
+      decimalsSource: "RPC",
+      metadataSources: [
+        { sourceKind: "RPC", observedAt: STALE_OBSERVED_AT, decimals: 18 },
+        { sourceKind: "SEED", observedAt: new Date("2026-04-01T00:00:00.000Z"), decimals: 8 },
+      ],
+    });
+
+    expect(provenance?.status).toBe("conflicting");
+    expect(provenance?.conflictReason).toBe("decimals-mismatch");
+  });
+
+  it("returns observed when sources have no persisted decimals — absence is not a conflict", async () => {
+    const provenance = await getProvenance({
+      chainId: CHAIN_ID,
+      assetId: TOKEN_ASSET,
+      decimalsSource: "RPC",
+      metadataSources: [
+        { sourceKind: "RPC", observedAt: new Date("2026-06-04T11:00:00.000Z"), decimals: null },
+        { sourceKind: "SEED", observedAt: new Date("2026-06-03T10:00:00.000Z"), decimals: null },
+      ],
+    });
+
+    expect(provenance?.status).toBe("observed");
+    expect(provenance?.conflictReason).toBeNull();
+  });
+
+  it("metadataProvenance status does not affect token balanceQuantity or decimals fields", async () => {
+    // Conflicting metadata status is advisory/observability only — it must not change
+    // the token position's decimals or balanceQuantity fields.
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: AS_OF,
+      db: createDb({
+        chainId: CHAIN_ID,
+        assetId: TOKEN_ASSET,
+        decimalsSource: "RPC",
+        metadataSources: [
+          { sourceKind: "RPC", observedAt: new Date("2026-06-04T11:00:00.000Z"), decimals: 18 },
+          { sourceKind: "SEED", observedAt: new Date("2026-06-03T10:00:00.000Z"), decimals: 8 },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () => createPnlResult(),
+    });
+
+    const position = result.tokenPositions[0];
+    expect(position?.metadataProvenance.status).toBe("conflicting");
+    // Token decimals and balance come from the canonical ledger, not from metadata sources
+    expect(position?.decimals).toBe(18); // from portfolioTokenBalance fixture
+    expect(position?.balanceQuantity).toBe("1");
   });
 });
