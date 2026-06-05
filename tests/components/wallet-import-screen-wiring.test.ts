@@ -58,4 +58,54 @@ describe("wallet-import-screen wiring", () => {
     expect(source).toContain('"Importing..."');
     expect(source).toContain('"Import wallet"');
   });
+
+  it("defaults chainId to 369", () => {
+    const source = readSource();
+
+    expect(source).toContain('DEFAULT_CHAIN_ID = "369"');
+  });
+
+  it("passes walletAddress and chainId to the mutation", () => {
+    const source = readSource();
+
+    expect(source).toContain("walletAddress: walletAddress.trim()");
+    expect(source).toContain("chainId: parsedChainId.value");
+  });
+
+  it("renders success state with backend payload", () => {
+    const source = readSource();
+
+    expect(source).toContain('kind: "success"');
+    expect(source).toContain("payload: response.data");
+    expect(source).toContain("JSON.stringify(state.payload, null, 2)");
+  });
+
+  it("renders error state with backend error message", () => {
+    const source = readSource();
+
+    expect(source).toContain('kind: "error"');
+    expect(source).toContain("getErrorMessage(error)");
+    expect(source).toContain("getErrorDetails(error)");
+    expect(source).toContain("instanceof ApiClientError");
+  });
+
+  it("does not compute balances, prices, PnL, or accounting values", () => {
+    const source = readSource();
+
+    expect(source).not.toMatch(/balance\s*[+\-*/]/);
+    expect(source).not.toContain("computeBalance");
+    expect(source).not.toContain("computePrice");
+    expect(source).not.toContain("pnl");
+    expect(source).not.toContain("DexScreener");
+    expect(source).not.toContain("eth_call");
+    expect(source).not.toContain("eth_getBalance");
+  });
+
+  it("does not load or invalidate dashboard after import", () => {
+    const source = readSource();
+
+    expect(source).not.toContain("useDashboard");
+    expect(source).not.toContain('"dashboard"');
+    expect(source).not.toContain("dashboard");
+  });
 });
