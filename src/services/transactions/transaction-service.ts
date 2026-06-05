@@ -131,15 +131,18 @@ export async function listCanonicalTransactions(
   args: ListTransactionsArgs,
 ): Promise<TransactionsPageDto> {
   const limit = resolveTransactionLimit(args.limit);
+  // Normalise once; args.walletAddress is already lowercased by schema transform,
+  // but we use this single variable throughout to avoid mixing sources.
+  const walletAddress = args.walletAddress.toLowerCase();
 
   const wallet = await resolveTrackedWalletByAddress({
-    walletAddress: args.walletAddress,
+    walletAddress,
     chainId: args.chainId,
   });
 
   if (!wallet) {
     return buildEmptyTransactionsPage({
-      walletAddress: args.walletAddress,
+      walletAddress,
       chainId: args.chainId,
       limit,
       ledgerCoverage: { status: "unknown", reason: "wallet-not-tracked" },
@@ -153,6 +156,7 @@ export async function listCanonicalTransactions(
     take: limit,
     include: {
       entries: {
+        orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
         include: {
           token: { select: { address: true, decimals: true } },
         },
@@ -167,7 +171,7 @@ export async function listCanonicalTransactions(
     txHash: ag.txHash,
     chainId: ag.chainId,
     walletId: ag.walletId,
-    walletAddress: wallet.address,
+    walletAddress,
     occurredAt: ag.occurredAt.toISOString(),
     blockNumber: null,
     actionGroupId: ag.id,
@@ -185,7 +189,7 @@ export async function listCanonicalTransactions(
 
   return {
     schemaVersion: TRANSACTIONS_SCHEMA_VERSION,
-    walletAddress: args.walletAddress,
+    walletAddress,
     chainId: args.chainId,
     ledgerCoverage: txCoverage,
     pageInfo: buildTransactionPageInfo({ limit }),
