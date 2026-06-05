@@ -152,7 +152,7 @@ export function TransactionHistoryScreen() {
         <LoadingState blocks={3} className="grid gap-4 md:grid-cols-3" />
       ) : null}
 
-      {transactionsQuery.data !== undefined ? (
+      {transactionsQuery.data !== undefined && errorMessage === null ? (
         <TransactionResultView page={transactionsQuery.data} />
       ) : null}
     </PageContainer>

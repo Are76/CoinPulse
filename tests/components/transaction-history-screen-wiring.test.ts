@@ -233,6 +233,16 @@ describe("TransactionHistoryScreen — ledger coverage status visible", () => {
   });
 });
 
+// ── Stale results hidden during error ────────────────────────────────────────
+
+describe("TransactionHistoryScreen — stale results not shown during error", () => {
+  it("TransactionResultView render condition requires errorMessage === null", () => {
+    const source = readScreen();
+    // Guard: results must not render when there is an active error message
+    expect(source).toContain("transactionsQuery.data !== undefined && errorMessage === null");
+  });
+});
+
 // ── Errors are visible ───────────────────────────────────────────────────────
 
 describe("TransactionHistoryScreen — errors are visible", () => {
