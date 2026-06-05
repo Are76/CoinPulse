@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildEmptyTransactionsPage,
+  buildTransactionPageInfo,
   listCanonicalTransactions,
   listTransactionsArgsSchema,
+  resolveTransactionCursor,
   resolveTransactionLimit,
   TRANSACTIONS_DEFAULT_LIMIT,
   TRANSACTIONS_MAX_LIMIT,
@@ -289,8 +291,83 @@ describe("DTO type shape — design-time checks", () => {
   });
 });
 
+describe("resolveTransactionCursor", () => {
+  it("returns null for undefined", () => {
+    expect(resolveTransactionCursor(undefined)).toBeNull();
+  });
+
+  it("returns null for empty string", () => {
+    expect(resolveTransactionCursor("")).toBeNull();
+  });
+
+  it("returns null for whitespace-only string", () => {
+    expect(resolveTransactionCursor("   ")).toBeNull();
+  });
+
+  it("returns trimmed cursor for a valid opaque value", () => {
+    expect(resolveTransactionCursor("  cursor-abc-123  ")).toBe("cursor-abc-123");
+  });
+
+  it("returns the cursor unchanged when already trimmed", () => {
+    expect(resolveTransactionCursor("cursor-abc-123")).toBe("cursor-abc-123");
+  });
+});
+
+describe("buildTransactionPageInfo", () => {
+  it("defaults to hasNextPage=false and nextCursor=null", () => {
+    const info = buildTransactionPageInfo({ limit: 50 });
+    expect(info.hasNextPage).toBe(false);
+    expect(info.nextCursor).toBeNull();
+    expect(info.limit).toBe(50);
+  });
+
+  it("reflects explicit hasNextPage=true and a non-null cursor", () => {
+    const info = buildTransactionPageInfo({
+      limit: 25,
+      hasNextPage: true,
+      nextCursor: "next-page-token",
+    });
+    expect(info.hasNextPage).toBe(true);
+    expect(info.nextCursor).toBe("next-page-token");
+    expect(info.limit).toBe(25);
+  });
+
+  it("nextCursor is null when hasNextPage is false and no cursor supplied", () => {
+    const info = buildTransactionPageInfo({ limit: 50, hasNextPage: false });
+    expect(info.nextCursor).toBeNull();
+  });
+});
+
+describe("listCanonicalTransactions — cursor defaults", () => {
+  it("nextCursor is null by default (no cursor arg)", async () => {
+    const result = await listCanonicalTransactions({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+    });
+    expect(result.pageInfo.nextCursor).toBeNull();
+  });
+
+  it("nextCursor remains null when an empty cursor is passed", async () => {
+    const result = await listCanonicalTransactions({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      cursor: "",
+    });
+    expect(result.pageInfo.nextCursor).toBeNull();
+  });
+
+  it("hasNextPage is always false from the skeleton", async () => {
+    const result = await listCanonicalTransactions({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      cursor: "some-cursor",
+    });
+    expect(result.pageInfo.hasNextPage).toBe(false);
+  });
+});
+
 describe("service skeleton — no raw log dependency", () => {
-  it("exports the three expected functions only", async () => {
+  it("exports the five expected functions", async () => {
     const mod = await import(
       "@/services/transactions/transaction-service"
     );
@@ -298,7 +375,37 @@ describe("service skeleton — no raw log dependency", () => {
     const keys = Object.keys(mod);
     expect(keys).toContain("listCanonicalTransactions");
     expect(keys).toContain("buildEmptyTransactionsPage");
+    expect(keys).toContain("buildTransactionPageInfo");
     expect(keys).toContain("resolveTransactionLimit");
+    expect(keys).toContain("resolveTransactionCursor");
+  });
+
+  it("does not import prisma client or db module", async () => {
+    const src = await import("fs");
+    const path = await import("path");
+    const servicePath = path.resolve(
+      process.cwd(),
+      "src/services/transactions/transaction-service.ts",
+    );
+    const content = src.readFileSync(servicePath, "utf8");
+    expect(content).not.toMatch(/@\/lib\/prisma/);
+    expect(content).not.toMatch(/from "@prisma\/client"/);
+    expect(content).not.toMatch(/prisma\./);
+  });
+
+  it("does not reference raw log or raw token transfer tables", async () => {
+    const src = await import("fs");
+    const path = await import("path");
+    const servicePath = path.resolve(
+      process.cwd(),
+      "src/services/transactions/transaction-service.ts",
+    );
+    const content = src.readFileSync(servicePath, "utf8");
+    expect(content).not.toMatch(/rawLog/i);
+    expect(content).not.toMatch(/rawTransaction/i);
+    expect(content).not.toMatch(/rawTokenTransfer/i);
+    expect(content).not.toMatch(/LedgerActionGroup/);
+    expect(content).not.toMatch(/LedgerEntry/);
   });
 });
 
