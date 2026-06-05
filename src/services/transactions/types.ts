@@ -89,11 +89,14 @@ export type TransactionPageInfoDto = {
  */
 export type TransactionLedgerCoverageStatus = "covered" | "partial" | "unknown";
 
-export type TransactionLedgerCoverageDto = {
-  status: TransactionLedgerCoverageStatus;
-  /** Human-readable reason when status is not "covered". Null when covered. */
-  reason: string | null;
-};
+/**
+ * Discriminated union: "covered" always carries reason: null; non-covered
+ * variants require a non-null reason so clients always have an explanation.
+ */
+export type TransactionLedgerCoverageDto =
+  | { status: "covered"; reason: null }
+  | { status: "partial"; reason: string }
+  | { status: "unknown"; reason: string };
 
 // ─── Provenance ────────────────────────────────────────────────────────────────
 
