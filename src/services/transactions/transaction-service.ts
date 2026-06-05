@@ -8,6 +8,7 @@ import {
 import type {
   ListTransactionsArgs,
   TransactionLedgerCoverageDto,
+  TransactionPageInfoDto,
   TransactionsPageDto,
 } from "@/services/transactions/types";
 
@@ -29,6 +30,36 @@ export function resolveTransactionLimit(requested: number | undefined): number {
 }
 
 /**
+ * Normalise an opaque pagination cursor from caller input.
+ * Returns null when no cursor is present or the value is blank, signalling
+ * a first-page request. Non-null values are passed through trimmed; the
+ * real implementation will validate/decode the cursor against storage.
+ */
+export function resolveTransactionCursor(
+  cursor: string | undefined,
+): string | null {
+  if (cursor === undefined || cursor.trim() === "") return null;
+  return cursor.trim();
+}
+
+/**
+ * Build the pageInfo block for a transactions page response.
+ * Defaults to no-next-page / null-cursor so callers only need to override
+ * when real pagination data is available.
+ */
+export function buildTransactionPageInfo(args: {
+  limit: number;
+  hasNextPage?: boolean;
+  nextCursor?: string | null;
+}): TransactionPageInfoDto {
+  return {
+    hasNextPage: args.hasNextPage ?? false,
+    nextCursor: args.nextCursor ?? null,
+    limit: args.limit,
+  };
+}
+
+/**
  * Build the stable empty page envelope for wallet/chain.
  * Used by the skeleton and by the real implementation when no records exist.
  */
@@ -46,11 +77,7 @@ export function buildEmptyTransactionsPage(args: {
       status: "unknown",
       reason: "transaction-ledger-query-not-implemented",
     },
-    pageInfo: {
-      hasNextPage: false,
-      nextCursor: null,
-      limit: args.limit,
-    },
+    pageInfo: buildTransactionPageInfo({ limit: args.limit }),
     transactions: [],
   };
 }
