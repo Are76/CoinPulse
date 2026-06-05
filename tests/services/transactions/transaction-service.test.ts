@@ -9,6 +9,7 @@ import {
   TRANSACTIONS_MAX_LIMIT,
   TRANSACTIONS_SCHEMA_VERSION,
 } from "@/services/transactions";
+import type { TransactionLedgerCoverageStatus } from "@/services/transactions";
 
 const WALLET = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
 const CHAIN_ID = 369;
@@ -232,13 +233,24 @@ describe("DTO type shape — design-time checks", () => {
       protocol: null,
       status: "complete" as const,
       warnings: [],
-      provenance: { ledgerFresh: true, materializationAsOf: null },
+      provenance: {
+        ledgerCoverage: { status: "covered" as TransactionLedgerCoverageStatus, reason: null },
+        materializationAsOf: null,
+      },
       entries: [],
     };
 
     // blockNumber and sourceFamily are null when not sourced from canonical ledger
     expect(tx.blockNumber).toBeNull();
     expect(tx.sourceFamily).toBeNull();
+  });
+
+  it("provenance does not have ledgerFresh boolean", () => {
+    const provenance = {
+      ledgerCoverage: { status: "unknown" as TransactionLedgerCoverageStatus, reason: "test" },
+      materializationAsOf: null,
+    };
+    expect(provenance).not.toHaveProperty("ledgerFresh");
   });
 
   it("direction uses INTERNAL not NEUTRAL — aligned with PnLDirection", () => {
@@ -287,5 +299,127 @@ describe("service skeleton — no raw log dependency", () => {
     expect(keys).toContain("listCanonicalTransactions");
     expect(keys).toContain("buildEmptyTransactionsPage");
     expect(keys).toContain("resolveTransactionLimit");
+  });
+});
+
+describe("TransactionLedgerCoverageStatus — named union", () => {
+  it("supports covered, partial, and unknown", () => {
+    const statuses: TransactionLedgerCoverageStatus[] = [
+      "covered",
+      "partial",
+      "unknown",
+    ];
+    expect(statuses).toContain("covered");
+    expect(statuses).toContain("partial");
+    expect(statuses).toContain("unknown");
+    expect(statuses).toHaveLength(3);
+  });
+});
+
+describe("buildEmptyTransactionsPage — ledgerCoverage", () => {
+  it("defaults to unknown coverage with non-null reason when no ledgerCoverage supplied", () => {
+    const page = buildEmptyTransactionsPage({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      limit: 50,
+    });
+
+    expect(page.ledgerCoverage.status).toBe("unknown");
+    expect(typeof page.ledgerCoverage.reason).toBe("string");
+    expect(page.ledgerCoverage.reason).not.toBeNull();
+    expect((page.ledgerCoverage.reason as string).length).toBeGreaterThan(0);
+  });
+
+  it("does not claim covered ledger truth in the skeleton", () => {
+    const page = buildEmptyTransactionsPage({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      limit: 50,
+    });
+
+    expect(page.ledgerCoverage.status).not.toBe("covered");
+  });
+
+  it("accepts an explicit covered ledgerCoverage when provided", () => {
+    const page = buildEmptyTransactionsPage({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      limit: 50,
+      ledgerCoverage: { status: "covered", reason: null },
+    });
+
+    expect(page.ledgerCoverage.status).toBe("covered");
+    expect(page.ledgerCoverage.reason).toBeNull();
+  });
+
+  it("accepts an explicit partial ledgerCoverage with a reason", () => {
+    const page = buildEmptyTransactionsPage({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      limit: 50,
+      ledgerCoverage: { status: "partial", reason: "only-transfer-family-queried" },
+    });
+
+    expect(page.ledgerCoverage.status).toBe("partial");
+    expect(page.ledgerCoverage.reason).toBe("only-transfer-family-queried");
+  });
+
+  it("reason is null when status is covered", () => {
+    const page = buildEmptyTransactionsPage({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      limit: 50,
+      ledgerCoverage: { status: "covered", reason: null },
+    });
+
+    expect(page.ledgerCoverage.reason).toBeNull();
+  });
+
+  it("does not have a ledgerFresh field anywhere in the page", () => {
+    const page = buildEmptyTransactionsPage({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      limit: 50,
+    });
+
+    expect(page).not.toHaveProperty("ledgerFresh");
+    expect(page.ledgerCoverage).not.toHaveProperty("ledgerFresh");
+  });
+});
+
+describe("listCanonicalTransactions — ledgerCoverage", () => {
+  it("returns explicit unknown ledgerCoverage with a reason (skeleton not yet querying ledger)", async () => {
+    const result = await listCanonicalTransactions({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+    });
+
+    expect(result.ledgerCoverage).toBeDefined();
+    expect(result.ledgerCoverage.status).toBe("unknown");
+    expect(result.ledgerCoverage.reason).not.toBeNull();
+  });
+
+  it("does not expose ledgerFresh in the response", async () => {
+    const result = await listCanonicalTransactions({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+    });
+
+    expect(result).not.toHaveProperty("ledgerFresh");
+    expect(result.ledgerCoverage).not.toHaveProperty("ledgerFresh");
+  });
+
+  it("existing envelope fields are unchanged", async () => {
+    const result = await listCanonicalTransactions({
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+    });
+
+    expect(result.schemaVersion).toBe("v1");
+    expect(result.walletAddress).toBe(WALLET);
+    expect(result.chainId).toBe(CHAIN_ID);
+    expect(result.transactions).toEqual([]);
+    expect(result.pageInfo.hasNextPage).toBe(false);
+    expect(result.pageInfo.nextCursor).toBeNull();
   });
 });
