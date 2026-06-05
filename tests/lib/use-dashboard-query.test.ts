@@ -4,12 +4,9 @@ import React, { type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as dashboardClient from "@/lib/api/dashboard-client";
+import { QUERY_DEFAULTS } from "@/lib/query/query-defaults";
 import { queryKeys } from "@/lib/query/query-keys";
-import {
-  DASHBOARD_GC_TIME,
-  DASHBOARD_STALE_TIME,
-  useDashboardQuery,
-} from "@/lib/query/use-dashboard-query";
+import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
 
 function makeWrapper() {
   const queryClient = new QueryClient({
@@ -139,8 +136,8 @@ describe("useDashboardQuery", () => {
     expect(matchingQueries).toHaveLength(1);
     expect(matchingQueries[0].queryKey).toEqual(expectedQueryKey);
     const cacheOptions = matchingQueries[0].options as { gcTime?: unknown; staleTime?: unknown };
-    expect(cacheOptions.staleTime).toBe(DASHBOARD_STALE_TIME);
-    expect(cacheOptions.gcTime).toBe(DASHBOARD_GC_TIME);
+    expect(cacheOptions.staleTime).toBe(QUERY_DEFAULTS.dashboard.staleTime);
+    expect(cacheOptions.gcTime).toBe(QUERY_DEFAULTS.dashboard.gcTime);
     expect(queryClient.getQueryCache().getAll().map((query) => query.queryKey)).toEqual([
       expectedQueryKey,
     ]);

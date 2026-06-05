@@ -40,4 +40,9 @@ describe("query defaults", () => {
     expect(QUERY_DEFAULTS.transactions.staleTime).toBe(30_000);
     expect(QUERY_DEFAULTS.transactions.gcTime).toBe(10 * 60_000);
   });
+
+  it("has correct wallets defaults", () => {
+    expect(QUERY_DEFAULTS.wallets.staleTime).toBe(30_000);
+    expect(QUERY_DEFAULTS.wallets.gcTime).toBe(10 * 60_000);
+  });
 });

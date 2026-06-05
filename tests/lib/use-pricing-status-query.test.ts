@@ -4,12 +4,9 @@ import React, { type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as pricesClient from "@/lib/api/prices-client";
+import { QUERY_DEFAULTS } from "@/lib/query/query-defaults";
 import { queryKeys } from "@/lib/query/query-keys";
-import {
-  PRICING_STATUS_GC_TIME,
-  PRICING_STATUS_STALE_TIME,
-  usePricingStatusQuery,
-} from "@/lib/query/use-pricing-status-query";
+import { usePricingStatusQuery } from "@/lib/query/use-pricing-status-query";
 
 function makeWrapper() {
   const queryClient = new QueryClient({
@@ -64,8 +61,8 @@ describe("usePricingStatusQuery", () => {
       retry?: unknown;
     };
     expect(queryOptions.queryKey).toEqual(queryKeys.prices.status(369));
-    expect(queryOptions.staleTime).toBe(PRICING_STATUS_STALE_TIME);
-    expect(queryOptions.gcTime).toBe(PRICING_STATUS_GC_TIME);
+    expect(queryOptions.staleTime).toBe(QUERY_DEFAULTS.pricesStatus.staleTime);
+    expect(queryOptions.gcTime).toBe(QUERY_DEFAULTS.pricesStatus.gcTime);
     expect(queryOptions.retry).toBe(false);
   });
 
@@ -150,8 +147,8 @@ describe("usePricingStatusQuery", () => {
   });
 
   it("staleTime is 15_000 and gcTime is 5 minutes", () => {
-    expect(PRICING_STATUS_STALE_TIME).toBe(15_000);
-    expect(PRICING_STATUS_GC_TIME).toBe(5 * 60_000);
+    expect(QUERY_DEFAULTS.pricesStatus.staleTime).toBe(15_000);
+    expect(QUERY_DEFAULTS.pricesStatus.gcTime).toBe(5 * 60_000);
   });
 
   it("does not accept chainId in hook params", () => {
