@@ -15,7 +15,12 @@ import type {
  * Server enforces TRANSACTIONS_MAX_LIMIT; callers may not request unbounded sets.
  */
 export function resolveTransactionLimit(requested: number | undefined): number {
-  if (requested === undefined || requested <= 0) {
+  if (
+    requested === undefined ||
+    !Number.isFinite(requested) ||
+    !Number.isInteger(requested) ||
+    requested <= 0
+  ) {
     return TRANSACTIONS_DEFAULT_LIMIT;
   }
 

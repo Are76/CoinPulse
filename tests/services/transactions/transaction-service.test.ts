@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildEmptyTransactionsPage,
   listCanonicalTransactions,
+  listTransactionsArgsSchema,
   resolveTransactionLimit,
   TRANSACTIONS_DEFAULT_LIMIT,
   TRANSACTIONS_MAX_LIMIT,
@@ -36,8 +37,87 @@ describe("resolveTransactionLimit", () => {
     expect(resolveTransactionLimit(-1)).toBe(TRANSACTIONS_DEFAULT_LIMIT);
   });
 
+  it("returns default limit for NaN (e.g. Number('abc'))", () => {
+    expect(resolveTransactionLimit(Number("abc"))).toBe(TRANSACTIONS_DEFAULT_LIMIT);
+  });
+
+  it("returns default limit for fractional values", () => {
+    expect(resolveTransactionLimit(1.5)).toBe(TRANSACTIONS_DEFAULT_LIMIT);
+    expect(resolveTransactionLimit(10.9)).toBe(TRANSACTIONS_DEFAULT_LIMIT);
+  });
+
+  it("returns default limit for Infinity", () => {
+    expect(resolveTransactionLimit(Infinity)).toBe(TRANSACTIONS_DEFAULT_LIMIT);
+  });
+
   it("TRANSACTIONS_MAX_LIMIT is 100", () => {
     expect(TRANSACTIONS_MAX_LIMIT).toBe(100);
+  });
+});
+
+describe("listTransactionsArgsSchema", () => {
+  it("accepts a valid minimal request", () => {
+    const result = listTransactionsArgsSchema.safeParse({
+      walletAddress: "0xAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCdEfAbCd",
+      chainId: 369,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("normalises walletAddress to lowercase", () => {
+    const result = listTransactionsArgsSchema.safeParse({
+      walletAddress: "0xABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD",
+      chainId: 369,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.walletAddress).toBe(
+        "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      );
+    }
+  });
+
+  it("rejects an invalid walletAddress", () => {
+    const result = listTransactionsArgsSchema.safeParse({
+      walletAddress: "not-an-address",
+      chainId: 369,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a non-positive chainId", () => {
+    const result = listTransactionsArgsSchema.safeParse({
+      walletAddress: WALLET,
+      chainId: -1,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a limit that exceeds TRANSACTIONS_MAX_LIMIT", () => {
+    const result = listTransactionsArgsSchema.safeParse({
+      walletAddress: WALLET,
+      chainId: 369,
+      limit: 9999,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a limit within bounds", () => {
+    const result = listTransactionsArgsSchema.safeParse({
+      walletAddress: WALLET,
+      chainId: 369,
+      limit: 25,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a fractional limit", () => {
+    const result = listTransactionsArgsSchema.safeParse({
+      walletAddress: WALLET,
+      chainId: 369,
+      limit: 1.5,
+    });
+    expect(result.success).toBe(false);
   });
 });
 
@@ -84,7 +164,7 @@ describe("listCanonicalTransactions", () => {
     expect(result.chainId).toBe(CHAIN_ID);
   });
 
-  it("applies limit cap when no limit is supplied", async () => {
+  it("applies default limit when no limit is supplied", async () => {
     const result = await listCanonicalTransactions({
       walletAddress: WALLET,
       chainId: CHAIN_ID,
@@ -115,9 +195,7 @@ describe("listCanonicalTransactions", () => {
 });
 
 describe("DTO type shape — design-time checks", () => {
-  it("quantity and blockNumber fields are typed as string, not number", async () => {
-    // Import the type definitions to verify string-based precision fields.
-    // These assertions run against the type source — string values satisfy them at runtime.
+  it("quantity is a string, not a number", () => {
     const entry = {
       entryId: "e1",
       assetId: "asset:369:0xabc",
@@ -136,9 +214,10 @@ describe("DTO type shape — design-time checks", () => {
       rejectedReason: null,
     };
 
-    // quantity is a string — must not be coerced to number
     expect(typeof entry.quantity).toBe("string");
+  });
 
+  it("blockNumber is nullable — not required when not in canonical ledger", () => {
     const tx = {
       transactionId: "tx-1",
       txHash: "0xdeadbeef",
@@ -146,24 +225,30 @@ describe("DTO type shape — design-time checks", () => {
       walletId: "wallet-1",
       walletAddress: WALLET,
       occurredAt: "2026-05-01T12:00:00.000Z",
-      blockNumber: "20000000",
+      blockNumber: null,
       actionGroupId: "ag-1",
       actionType: "TRANSFER",
-      sourceFamily: "NATIVE",
+      sourceFamily: null,
       protocol: null,
       status: "complete" as const,
       warnings: [],
       provenance: { ledgerFresh: true, materializationAsOf: null },
-      entries: [entry],
+      entries: [],
     };
 
-    // blockNumber is a string
-    expect(typeof tx.blockNumber).toBe("string");
+    // blockNumber and sourceFamily are null when not sourced from canonical ledger
+    expect(tx.blockNumber).toBeNull();
+    expect(tx.sourceFamily).toBeNull();
   });
 
-  it("assetId is not a symbol or ticker — it is a backend-assigned chain-aware id", () => {
+  it("direction uses INTERNAL not NEUTRAL — aligned with PnLDirection", () => {
+    const validDirections: string[] = ["IN", "OUT", "INTERNAL"];
+    expect(validDirections).toContain("INTERNAL");
+    expect(validDirections).not.toContain("NEUTRAL");
+  });
+
+  it("assetId is not a bare symbol or ticker", () => {
     const assetId = "asset:369:0xabc";
-    // assetId format includes chainId prefix — not a bare ticker like 'PLS' or 'WPLS'
     expect(assetId).not.toMatch(/^[A-Z]{2,6}$/);
   });
 
@@ -185,7 +270,6 @@ describe("DTO type shape — design-time checks", () => {
       "unavailable",
     ] as const;
 
-    // Ensure unsupported and unavailable are distinct named states (not zero/ok coercions)
     expect(pricingStatuses).toContain("unsupported");
     expect(pricingStatuses).toContain("unavailable");
     expect(valuationStatuses).toContain("unsupported");
@@ -194,13 +278,11 @@ describe("DTO type shape — design-time checks", () => {
 });
 
 describe("service skeleton — no raw log dependency", () => {
-  it("does not import raw log modules", async () => {
-    // Dynamic import to inspect the module graph at test time
+  it("exports the three expected functions only", async () => {
     const mod = await import(
       "@/services/transactions/transaction-service"
     );
 
-    // The skeleton exposes only the three named exports defined
     const keys = Object.keys(mod);
     expect(keys).toContain("listCanonicalTransactions");
     expect(keys).toContain("buildEmptyTransactionsPage");

@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export const TRANSACTIONS_SCHEMA_VERSION = "v1" as const;
 
 export const TRANSACTIONS_MAX_LIMIT = 100;
@@ -11,7 +13,11 @@ export type TransactionStatus =
   | "unsupported"
   | "unknown";
 
-export type TransactionEntryDirection = "IN" | "OUT" | "NEUTRAL";
+/**
+ * Aligned with PnLDirection in src/services/pnl/types.ts.
+ * "INTERNAL" represents intra-wallet movements with no net external flow.
+ */
+export type TransactionEntryDirection = "IN" | "OUT" | "INTERNAL";
 
 export type TransactionPricingStatus =
   | "priced"
@@ -35,21 +41,32 @@ export type TransactionPnlStatus =
   | "incomplete"
   | "unavailable";
 
-// ─── Request ───────────────────────────────────────────────────────────────────
+// ─── Request schema + type ─────────────────────────────────────────────────────
 
-export type ListTransactionsArgs = {
-  walletAddress: string;
-  chainId: number;
-  limit?: number;
-  cursor?: string;
-  assetId?: string;
-  actionType?: string;
-  sourceFamily?: string;
-  protocol?: string;
-  fromDate?: string;
-  toDate?: string;
-  quoteAsset?: string;
-};
+export const listTransactionsArgsSchema = z.object({
+  walletAddress: z
+    .string()
+    .trim()
+    .regex(/^0x[a-fA-F0-9]{40}$/, "walletAddress must be a valid EVM address.")
+    .transform((v) => v.toLowerCase()),
+  chainId: z.number().int().positive("chainId must be a positive integer."),
+  limit: z
+    .number()
+    .int("limit must be an integer.")
+    .positive("limit must be positive.")
+    .max(TRANSACTIONS_MAX_LIMIT, `limit may not exceed ${TRANSACTIONS_MAX_LIMIT}.`)
+    .optional(),
+  cursor: z.string().trim().min(1).optional(),
+  assetId: z.string().trim().min(1).optional(),
+  actionType: z.string().trim().min(1).optional(),
+  sourceFamily: z.string().trim().min(1).optional(),
+  protocol: z.string().trim().min(1).optional(),
+  fromDate: z.string().datetime({ offset: true }).optional(),
+  toDate: z.string().datetime({ offset: true }).optional(),
+  quoteAsset: z.string().trim().min(1).optional(),
+});
+
+export type ListTransactionsArgs = z.input<typeof listTransactionsArgsSchema>;
 
 // ─── Page info ─────────────────────────────────────────────────────────────────
 
@@ -104,11 +121,26 @@ export type TransactionDto = {
   walletId: string;
   walletAddress: string;
   occurredAt: string;
-  /** String to avoid BigInt serialization issues at the DTO boundary. */
-  blockNumber: string;
+  /**
+   * Block number as a string to avoid BigInt serialization issues.
+   * Null when not available from canonical ledger truth without joining
+   * raw ingestion tables. Route implementation must not populate this
+   * from raw ingestion tables; expose as null until a persisted ledger
+   * column is available.
+   */
+  blockNumber: string | null;
   actionGroupId: string;
   actionType: string;
-  sourceFamily: string;
+  /**
+   * Source family is not persisted on LedgerActionGroup in the current
+   * schema. Null until a canonical ledger column is available. Route
+   * implementation must not back-fill from raw ingestion tables.
+   */
+  sourceFamily: string | null;
+  /**
+   * Protocol slug. Not persisted on LedgerActionGroup in the current
+   * schema. Null until a canonical ledger column is available.
+   */
   protocol: string | null;
   status: TransactionStatus;
   warnings: string[];
