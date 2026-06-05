@@ -14,7 +14,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/coinpulse
       REDIS_URL: redis://localhost:6379
-      PULSECHAIN_RPC_URL: https://rpc.pulsechainstats.com
+      PULSECHAIN_RPC_URL: http://localhost:8545
     steps:
       - name: Checkout
         # actions/checkout v4 pinned for reproducibility.
