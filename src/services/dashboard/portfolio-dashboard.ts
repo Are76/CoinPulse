@@ -292,6 +292,24 @@ export async function assemblePortfolioDashboard(args: {
   };
 }
 
+/**
+ * Deterministically selects the latest metadata source from an unsorted array.
+ * Null/undefined observedAt is treated as oldest (epoch 0).
+ * Equal timestamps are tie-broken alphabetically by sourceKind for stability.
+ */
+function selectLatestMetadataSource(
+  sources: Array<{ sourceKind: string; observedAt: Date | null; decimals?: number | null }>,
+): { sourceKind: string; observedAt: Date | null; decimals?: number | null } | null {
+  if (sources.length === 0) return null;
+  return sources.reduce((best, candidate) => {
+    const bestMs = best.observedAt?.getTime() ?? 0;
+    const candidateMs = candidate.observedAt?.getTime() ?? 0;
+    if (candidateMs > bestMs) return candidate;
+    if (candidateMs < bestMs) return best;
+    return candidate.sourceKind < best.sourceKind ? candidate : best;
+  });
+}
+
 function toTokenMetadataProvenanceDto(
   token: {
     decimalsSource: string | null;
@@ -303,7 +321,7 @@ function toTokenMetadataProvenanceDto(
     return UNKNOWN_METADATA_PROVENANCE;
   }
 
-  const latestSource = token.metadataSources?.[0] ?? null;
+  const latestSource = selectLatestMetadataSource(token.metadataSources ?? []);
   const sourceEvidence = latestSource?.sourceKind ?? token.decimalsSource ?? null;
   if (!sourceEvidence) {
     return UNKNOWN_METADATA_PROVENANCE;

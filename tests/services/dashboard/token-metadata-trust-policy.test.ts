@@ -463,6 +463,25 @@ describe("token metadata trust policy — stale status computation", () => {
 
     expect(provenance?.status).toBe("observed");
   });
+
+  it("null observedAt does not win over stale observedAt when selecting latest source", async () => {
+    // Regression: null observedAt must be treated as oldest (epoch 0), not newest.
+    // The stale source has a real timestamp and must be selected as latest,
+    // making the status "stale" rather than "observed".
+    const provenance = await getProvenance({
+      chainId: CHAIN_ID,
+      assetId: TOKEN_ASSET,
+      decimalsSource: "RPC",
+      metadataSources: [
+        { sourceKind: "RPC", observedAt: null },
+        { sourceKind: "RPC", observedAt: STALE_OBSERVED_AT },
+      ],
+    });
+
+    expect(provenance?.status).toBe("stale");
+    expect(provenance?.source).toBe("chain");
+    expect(provenance?.confidence).toBe("medium");
+  });
 });
 
 // ─── Conflicting metadata status ───────────────────────────────────────────────
