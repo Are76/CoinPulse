@@ -289,6 +289,8 @@ describe("readNativeHexStakes", () => {
     });
     expect(typeof result.stakes[0].stakeShares).toBe("string");
     expect(result.stakes[0].stakeShares).toBe("4722366482869645213695");
+    // 4722366482869645213695 / 1e12 = 4722366482.869645213695 → 6dp ROUND_HALF_UP
+    expect(result.stakes[0].tShares).toBe("4722366482.869645");
   });
 
   // ── 12. Unsupported sentinels ─────────────────────────────────────────────
@@ -365,6 +367,8 @@ describe("readNativeHexStakes", () => {
     // Stakes are still read despite block number failure
     expect(result.stakes).toHaveLength(1);
     expect(result.isComplete).toBe(true);
+    // Per-stake provenance uses "unknown" sentinel (type requires string, not null)
+    expect(result.stakes[0].provenance.observedAtBlock).toBe("unknown");
   });
 
   // ── 15. Multiple stakes in stakeIndex order ───────────────────────────────

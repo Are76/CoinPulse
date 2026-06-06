@@ -168,7 +168,7 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
           stakeId: stakeId.toString(),
           stakeIndex: i,
           stakeSource: "native",
-          observedAtBlock: observedAtBlock ?? "",
+          observedAtBlock: observedAtBlock ?? "unknown",
           observedAt,
           rpcEndpoint: null,
           warnings: [],
