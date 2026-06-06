@@ -58,10 +58,12 @@ export type HexBpdYieldStatus = "applicable" | "not_applicable" | "unknown";
 // ─── Yield status ─────────────────────────────────────────────────────────────
 //
 //   unsupported: yield reads not yet implemented (Phases 1–3)
+//   unavailable: reads implemented but data cannot be produced for this stake
+//                (rate limit hit, day-range gap, stale data, null provenance)
 //   estimated:   dailyDataRange estimation available (Phase 4+)
 //   exact:       yield confirmed on-chain at endStake (Phase 5+)
 
-export type HexYieldStatus = "unsupported" | "estimated" | "exact";
+export type HexYieldStatus = "unsupported" | "unavailable" | "estimated" | "exact";
 
 // ─── Pricing / valuation / PnL status ────────────────────────────────────────
 //
