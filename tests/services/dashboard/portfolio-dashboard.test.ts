@@ -1904,4 +1904,125 @@ describe("assemblePortfolioDashboard", () => {
     expect(result.ledgerCoverage.fromBlock).toBe("50");
     expect(result.ledgerCoverage.toBlock).toBe("200");
   });
+
+  it("records source_disabled in pnlCoverage when the only available observation is from a disabled source", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => ({
+        selected: null,
+        rejected: [{ id: "obs-1", reason: "SOURCE_DISABLED" }],
+      }),
+      calculatePnl: async () =>
+        createPnlResult({
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [createPnlWarning()],
+        }),
+    });
+
+    expect(result.tokenPositions[0]?.pricing.status).toBe("unavailable");
+    expect(result.tokenPositions[0]?.pricing.rejectedReasons).toContain("SOURCE_DISABLED");
+    expect(result.pnlCoverage).toMatchObject({
+      status: "unavailable",
+      reasons: expect.arrayContaining(["source_disabled"]),
+      affectedSections: expect.arrayContaining(["tokens", "summary"]),
+      sourceDisabledPositionsCount: 1,
+    });
+  });
+
+  it("does not produce partial_history or missing_disposal_events even when a token has insufficient cost basis warnings", async () => {
+    // INSUFFICIENT_COST_BASIS (disposal > tracked holdings) is the scenario most
+    // adjacent to partial history / missing disposal events. Neither deferred reason
+    // should appear; the current contract maps this to insufficient_cost_basis only.
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice(),
+      calculatePnl: async () =>
+        createPnlResult({
+          averageCost: "0",
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [
+            createPnlWarning({
+              code: "INSUFFICIENT_COST_BASIS",
+              detail: "Disposition exceeds tracked holdings and was skipped.",
+            }),
+          ],
+        }),
+    });
+
+    expect(result.pnlCoverage.reasons).toContain("insufficient_cost_basis");
+    expect(result.pnlCoverage.reasons).not.toContain("partial_history");
+    expect(result.pnlCoverage.reasons).not.toContain("missing_disposal_events");
+  });
+
+  it("does not produce missing_native_price_history for a native-asset token balance", async () => {
+    // Native-asset balance (chain:369:native:PLS) is the scenario most adjacent to
+    // missing_native_price_history. The current contract does not emit that reason
+    // regardless of position type or pricing state.
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: NATIVE_ASSET,
+            assetAddress: null,
+            balanceQuantity: "1000",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => ({ selected: null, rejected: [] }),
+      calculatePnl: async () =>
+        createPnlResult({
+          assetId: NATIVE_ASSET,
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [createPnlWarning()],
+        }),
+    });
+
+    expect(result.pnlCoverage.reasons).not.toContain("missing_native_price_history");
+  });
 });
