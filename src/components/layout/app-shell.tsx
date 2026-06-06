@@ -35,7 +35,32 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
       </aside>
 
-      <div className="coin-shell__body">{children}</div>
+      <div className="coin-shell__body">
+        <nav className="coin-mobile-nav" aria-label="Mobile navigation">
+          <details className="coin-mobile-nav__menu">
+            <summary className="coin-mobile-nav__toggle">CoinPulse</summary>
+            <div className="coin-mobile-nav__links">
+              {PRIMARY_NAV_LINKS.map((link) => (
+                <Link key={link.href} href={link.href} className="coin-mobile-nav__link">
+                  {link.label}
+                </Link>
+              ))}
+              <div className="coin-mobile-nav__section-label">Operator</div>
+              {OPERATOR_NAV_LINKS.map((link) => (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className="coin-mobile-nav__link coin-mobile-nav__link--muted"
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </div>
+          </details>
+        </nav>
+
+        {children}
+      </div>
     </div>
   );
 }

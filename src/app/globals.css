@@ -212,3 +212,90 @@ textarea {
     display: none;
   }
 }
+
+/* ── Mobile navigation ────────────────────────────────────────────────────── */
+
+.coin-mobile-nav {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .coin-mobile-nav {
+    display: block;
+    background: var(--surface-1);
+    border-bottom: 1px solid var(--border-soft);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  .coin-mobile-nav__menu {
+    padding: 0;
+  }
+
+  .coin-mobile-nav__toggle {
+    display: flex;
+    align-items: center;
+    padding: 0.875rem var(--space-page-x);
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--foreground);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+  }
+
+  .coin-mobile-nav__toggle::marker,
+  .coin-mobile-nav__toggle::-webkit-details-marker {
+    display: none;
+  }
+
+  .coin-mobile-nav__toggle::after {
+    content: "▾";
+    margin-left: auto;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    transition: transform 120ms;
+  }
+
+  .coin-mobile-nav__menu[open] .coin-mobile-nav__toggle::after {
+    transform: rotate(180deg);
+  }
+
+  .coin-mobile-nav__links {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    padding: 0.375rem var(--space-page-x) 0.75rem;
+    border-top: 1px solid var(--border-soft);
+  }
+
+  .coin-mobile-nav__section-label {
+    padding: 0.5rem 0.625rem 0.25rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .coin-mobile-nav__link {
+    display: block;
+    padding: 0.55rem 0.625rem;
+    border-radius: var(--radius-md);
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--foreground);
+    transition: background 120ms;
+  }
+
+  .coin-mobile-nav__link:hover {
+    background: var(--surface-2);
+  }
+
+  .coin-mobile-nav__link--muted {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+}
