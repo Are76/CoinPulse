@@ -572,7 +572,7 @@ The existing `SourceFamily` enum in `prisma/schema.prisma` includes `STAKING` (u
 
 **Status: RESOLVED — documented here for implementation reference.**
 
-`HexYieldStatus` is defined in `src/services/hexmining/types.ts` (updated in this PR to add `"unavailable"`):
+`HexYieldStatus` is defined in `src/services/hexmining/types.ts` (updated in PR #194 to add `"unavailable"`):
 
 ```typescript
 export type HexYieldStatus = "unsupported" | "unavailable" | "estimated" | "exact";
@@ -590,7 +590,7 @@ The complete vocabulary and its promotion rules are:
 **Critical invariants — these must be enforced in tests before implementation:**
 
 1. `yield.status` is set exclusively by the backend reader. The frontend never infers, upgrades, or defaults it.
-2. `"unsupported"` → `"estimated"` promotion requires complete, non-stale `dailyDataRange` coverage for the stake's **elapsed active days**: `lockedDay` through `min(currentDay, lockedDay + stakedDays)`. Future days (beyond `currentDay`) have no dailyData yet and are excluded from the required range. Partial coverage of elapsed days produces `"unavailable"`, not `"estimated"`.
+2. `"unsupported"` → `"estimated"` promotion requires complete, non-stale `dailyDataRange` coverage for the stake's **elapsed active days** — an inclusive range: `rangeStartDay = lockedDay` through `rangeEndDay = min(currentDay, lockedDay + stakedDays - 1)`. Note: `lockedDay + stakedDays` is the first day *after* the stake's committed duration; subtracting one gives the last day within the stake's active period. Future days beyond `currentDay` have no dailyData yet and are excluded from the required range. Partial coverage of elapsed days produces `"unavailable"`, not `"estimated"`.
 3. `"estimated"` → `"exact"` promotion requires an indexed `endStake` event with a confirmed `STAKE_YIELD_RECEIVED` ledger entry. It is never promoted from estimate alone.
 4. `"estimated"` must always be accompanied by a non-null `estimatedYieldHex` value and a provenance block carrying `observedAtBlock`, `observedAt`, and the day range used.
 5. Big Pay Day (`bpdYieldHex`) is separate from general yield. BPD yield is only attributed when `bpdYieldStatus: "applicable"` is confirmed. It is never silently included in `estimatedYieldHex`.
@@ -668,30 +668,64 @@ The yield status contract test work has been completed in two PRs:
 
 **Status: RESOLVED — documented here for the persistence contract PR (§11.10, Step 1).**
 
-Each `RawHexDailyDataObservation` record represents a single `dailyDataRange(startDay, endDay)` RPC call result, keyed by the parameters of the call and the block at which it was made.
+Each `RawHexDailyDataObservation` record represents a single `dailyDataRange(startDay, endDay)` RPC call result, persisted with full call-level provenance.
 
-**Conceptual uniqueness key:**
+**Three distinct concepts — identity key, dedupe key, canonical-selection policy — must not be conflated:**
+
+**Primary identity key (per-row surrogate):**
+
+Each persisted row has a unique `observationId` (surrogate, e.g. UUID or auto-increment) assigned at write time. This is the foreign key referenced by yield provenance (`observationIds` in §11.9). Two calls that read the same day range at the same block from different endpoints or retry attempts produce two separate rows, each with a distinct `observationId`.
+
+**Deduplication key (call-level uniqueness check):**
+
+Before writing a new row, the persistence service checks whether an observation with identical parameters already exists. The dedupe key is:
 
 | Field | Type | Description |
 |---|---|---|
 | `chainId` | `number` | Chain on which the read was made (369 for pHEX) |
+| `sourceFamily` | `string` | Always `"HEXMINING"` for dailyData reads |
 | `rangeStartDay` | `number` | `startDay` argument passed to `dailyDataRange` |
 | `rangeEndDay` | `number` | `endDay` argument passed to `dailyDataRange` |
 | `observedAtBlock` | `string` | Block number (as string) at time of read |
+| `rpcEndpointLabel` | `string \| null` | Labeled identifier for the RPC endpoint used (hashed/configured, never raw URL) |
+| `payloadHash` | `string` | Hash of the canonical serialized payload (see encoding below) |
 
-**Identity rule:** `(chainId, rangeStartDay, rangeEndDay, observedAtBlock)` is the natural uniqueness key. Multiple observations of the same day range at different blocks are retained independently — they are not overwritten. This preserves the full observation history for audit purposes.
+If a row with an identical dedupe key already exists, the write is skipped (idempotent re-reads of the same block/range/endpoint produce one row). Observations from different endpoints or with different payload content are never collapsed — they are distinct rows.
 
 **Additional fields on each observation record:**
 
 | Field | Type | Description |
 |---|---|---|
 | `observedAt` | `string` | ISO 8601 timestamp at time of read |
-| `rpcEndpointLabel` | `string \| null` | Labeled identifier for the RPC endpoint used. Not the raw URL (may contain API key); use a hashed or configured label. |
 | `payloadVersion` | `string` | Schema version of the stored payload (e.g., `"v1"`). Allows future decoding changes without re-fetching. |
-| `rawDailyDataPayload` | `string` | JSON-encoded `dailyDataRange` response array. Immutable once written. |
+| `rawDailyDataPayload` | `string` | Canonical bigint-safe JSON encoding of the `dailyDataRange` response (see encoding policy below). Immutable once written. |
 | `warnings` | `string[]` | Any warnings from the read (rate-limit proximity, truncation, etc.). |
 
-**Retention policy:** Observation records are never deleted or updated. If a later read covers the same day range at a newer block, a new record is written alongside the existing one. Yield derivation uses the most recent non-stale observation for a given day range. The `REORGED` sentinel (not deletion) is used if a reorg invalidates an observation.
+**Bigint-safe payload encoding policy:**
+
+viem returns `dailyDataRange` results with `uint*` fields as JavaScript `bigint` values. `JSON.stringify` throws on `bigint`; naive encoding is unsafe. The canonical encoding rule is:
+
+- All `uint*` and `int*` contract values from `dailyDataRange` are serialized as **base-10 decimal strings** (not hex, not JavaScript numbers).
+- No JavaScript `bigint` values are stored directly in JSON.
+- Serialization must be deterministic: fields in a fixed order, no extra whitespace, no locale-dependent formatting.
+- `payloadHash` is computed over the canonical serialized payload (e.g., SHA-256 hex of the UTF-8 bytes). If payload content changes between retries, the hash differs and a new row is written.
+- The schema/contract PR (Step 1 of §11.10) must include test fixtures using viem-shaped `bigint` input and assert that the persisted payload contains decimal strings.
+
+**Canonical-selection policy (yield derivation):**
+
+When multiple `RawHexDailyDataObservation` rows cover an overlapping day range (e.g., from different endpoints or retries at different blocks), the yield estimator selects the canonical observation by policy:
+- Prefer the observation with the highest `observedAtBlock` (most recent read).
+- Among observations at the same block, prefer the row with no `warnings`.
+- Among otherwise equal rows, prefer the row from the primary configured RPC endpoint.
+- The selection policy is implemented in the yield estimator (Step 3 of §11.10), not in the persistence layer.
+
+**Retention policy:**
+
+Observation rows are append-only and immutable. A later read of the same range at a newer block produces a new row; existing rows are never updated or deleted. See reorg invalidation policy below.
+
+**Reorg invalidation — append-only:**
+
+If a chain reorg invalidates an observation (the block it was read at is orphaned), CoinPulse does NOT mutate the existing row. Instead, the persistence layer appends a separate invalidation record (e.g., `RawHexDailyDataObservationInvalidation`) referencing the original `observationId` and recording the reorg event. The raw observation row remains immutable evidence. The exact model name for the invalidation record is decided in the schema PR (Step 1 of §11.10).
 
 **Not in this document:** The exact Prisma model field names, indexes, and foreign key relationships are defined in the persistence contract PR (§11.10, Step 1).
 
@@ -711,7 +745,7 @@ For a `HexStakeDto` to carry `yield.status: "estimated"`, the backend reader mus
 | `stakeIndex` | stake read | Wallet-relative index at time of read |
 | `stakeSource` | stake read | `"native"` (Phase 4 scope) |
 | `rangeStartDay` | computed | `lockedDay` — first day of estimated range |
-| `rangeEndDay` | computed | `min(currentDay, lockedDay + stakedDays) - 1` — last elapsed day |
+| `rangeEndDay` | computed | `min(currentDay, lockedDay + stakedDays - 1)` — last elapsed day (inclusive; `lockedDay + stakedDays` is the first post-stake day) |
 | `observedAtBlock` | observation record | Block at which dailyData observations were read |
 | `observedAt` | observation record | Timestamp of observations |
 | `observationIds` | observation record(s) | Foreign key(s) to `RawHexDailyDataObservation` row(s) used in the estimate |
@@ -719,7 +753,7 @@ For a `HexStakeDto` to carry `yield.status: "estimated"`, the backend reader mus
 
 **Invariant:** If any of these provenance fields cannot be populated (e.g., `observedAtBlock` is null, `rangeEndDay` < `rangeStartDay`, an observation record cannot be located), the reader must set `yield.status: "unavailable"` with an explicit warning. It must never produce `"estimated"` with incomplete provenance.
 
-**`rangeEndDay` computation note:** Phase 4 yield estimates cover only **elapsed active days**. Future days beyond `currentDay` have no `dailyDataRange` data and are excluded. The required range is `lockedDay` through `min(currentDay, lockedDay + stakedDays) - 1`. If the stake has not yet started (`lockedDay > currentDay`), no elapsed days exist and the status must be `"unavailable"`.
+**`rangeEndDay` computation note:** Phase 4 yield estimates cover only **elapsed active days** (inclusive range). Future days beyond `currentDay` have no `dailyDataRange` data and are excluded. The required range is `lockedDay` through `min(currentDay, lockedDay + stakedDays - 1)`. Here `lockedDay + stakedDays` is the first day after the stake's committed duration; subtracting one gives the last day within the active period. This matches §11.4 invariant #2 exactly. If the stake has not yet started (`lockedDay > currentDay`), no elapsed days exist and the status must be `"unavailable"`.
 
 **BPD provenance:** Big Pay Day yield (`bpdYieldHex`) requires its own provenance: confirmation that the stake's `[lockedDay, lockedDay + stakedDays)` range includes protocol day 353. BPD yield is never inferred or silently included in `estimatedYieldHex`. See §11.4 invariant #5.
 
@@ -727,43 +761,40 @@ For a `HexStakeDto` to carry `yield.status: "estimated"`, the backend reader mus
 
 ### 11.10 Phase 4 implementation sequence
 
-**Status: RESOLVED — six ordered steps, each a separate PR, preserving the CoinPulse test-first and persistence-first guardrails.**
+**Status: RESOLVED — five ordered steps, each a separate PR, preserving the CoinPulse architecture guardrails.**
 
-No step may be skipped. No live `dailyDataRange` reads reach production before Step 4. No schema migration is required before Step 2.
+No step may be skipped. No live `dailyDataRange` reads reach production before Step 3.
 
-**Step 1 — Persistence contract test PR (immediate next)**
-`test(hexmining): define raw dailyData observation persistence contract`
-- Define the `RawHexDailyDataObservation` persistence contract: field names, uniqueness key, retention policy.
-- Test-first: contract tests assert the model's invariants before the Prisma model exists.
-- No schema migration in this PR. No runtime reader code.
-- Files in scope: `tests/services/hexmining/` only.
-
-**Step 2 — Schema migration and persistence service PR**
-`feat(hexmining): add RawHexDailyDataObservation persistence and HEXMINING source family`
+**Step 1 — Schema contract and persistence tests PR (immediate next)**
+`feat(hexmining): add raw dailyData observation schema contract`
 - Add `RawHexDailyDataObservation` model to `prisma/schema.prisma`.
 - Add `HEXMINING` to `SourceFamily` enum.
-- Add persistence service: write-observation, read-by-range, deduplication check.
-- All tests use mock or migration-applied test database; no live RPC.
-- Files in scope: `prisma/schema.prisma`, new migration file, `src/services/hexmining/`, `tests/services/hexmining/`.
+- Run `npx prisma generate` to regenerate the client.
+- Add persistence service (write-observation, read-by-range, deduplication check per §11.8 dedupe key).
+- Add contract tests proving the model key shape, dedupe invariant, canonical-selection policy, bigint-safe encoding (§11.8), and the provenance completeness invariant (§11.9).
+- Tests use the migration-applied test database; no live RPC.
+- **No reader, no RPC calls, no yield calculation, no API routes, no frontend.**
+- Files in scope: `prisma/schema.prisma`, new migration file, `src/services/hexmining/` (persistence only), `tests/services/hexmining/`.
 
-**Step 3 — `currentDay()` reader PR**
+**Step 2 — `currentDay()` reader PR**
 `feat(hexmining): add currentDay read to HexMining reader`
 - Add `currentDay()` RPC read to the backend `HexMiningReadClient`.
 - Protocol day stored in observation provenance.
 - No yield calculation yet.
 - Files in scope: `src/services/hexmining/reader.ts`, `tests/services/hexmining/reader.test.ts`.
 
-**Step 4 — `dailyDataRange` reader and yield estimation PR**
+**Step 3 — `dailyDataRange` reader and yield estimation PR**
 `feat(hexmining): add dailyDataRange reads and yield estimation`
 - Add `dailyDataRange(startDay, endDay)` reads to `HexMiningReadClient`.
-- Persist results as `RawHexDailyDataObservation` records.
+- Persist results as `RawHexDailyDataObservation` records using the bigint-safe encoding from §11.8.
 - Compute `yield.status: "estimated"` when all promotion conditions from §11.4 are met.
-- Enforce elapsed-days-only coverage rule: `lockedDay` through `min(currentDay, lockedDay + stakedDays) - 1` (see §11.4 invariant #2 and §11.9).
+- Enforce elapsed-days-only coverage rule: `rangeStartDay = lockedDay`, `rangeEndDay = min(currentDay, lockedDay + stakedDays - 1)` (see §11.4 invariant #2 and §11.9).
+- Apply canonical-selection policy (§11.8) when multiple observations cover the same range.
 - Model Big Pay Day with `bpdYieldStatus` / `bpdYieldHex` per §11.4 invariant #5.
 - All RPC reads use mock `HexMiningReadClient` in tests; no live network calls.
 - Files in scope: `src/services/hexmining/reader.ts`, new yield estimator module, `tests/services/hexmining/`.
 
-**Step 5 — Yield DTO wiring and API route update PR**
+**Step 4 — Yield DTO wiring and API route update PR**
 `feat(hexmining): wire estimated yield fields into HexStakeDto and API route`
 - Update `HexStakeDto` yield field assembly in the reader/assembler.
 - Update `GET /api/hexmining/stakes` to return yield fields.
@@ -771,7 +802,7 @@ No step may be skipped. No live `dailyDataRange` reads reach production before S
 - `valuation.status` and `pnl.status` remain `"unsupported"`.
 - Files in scope: `src/app/api/hexmining/`, `src/services/hexmining/`, `tests/`.
 
-**Step 6 — Frontend yield display PR**
+**Step 5 — Frontend yield display PR**
 `feat(hexmining): display yield estimate on HexMining page`
 - Add yield fields to the HexMining page display.
 - Read-only. No frontend calculation. Status-explicit (`"estimated"` displayed distinctly from `"exact"`).
@@ -788,31 +819,32 @@ No step may be skipped. No live `dailyDataRange` reads reach production before S
 - No Ethereum/eHEX support.
 - No cross-chain yield aggregation.
 - No silent coercion of partial or missing yield data to zero or to an estimate.
-- No schema migration before Step 2.
-- No `dailyDataRange` production reads before Step 4.
+- No `dailyDataRange` production reads before Step 3.
 
 ---
 
 ## 12. Proposed Next PR (updated)
 
-**Immediate next PR:** `test(hexmining): define raw dailyData observation persistence contract`
+**Immediate next PR:** `feat(hexmining): add raw dailyData observation schema contract`
 
 This is Step 1 of §11.10. It is the correct next step because:
 - Decision 1 (§11.2) is now resolved — the persistence model is `RawHexDailyDataObservation`.
 - Decision 2 (§11.3) is now resolved — the source family is `HEXMINING`.
 - The yield type contracts are complete (PRs #195 and #196).
-- Persistence contract tests must be written before the Prisma model is designed, keeping the test-first guardrail intact.
+- Schema and contract tests must land together in one bounded PR — tests asserting Prisma model invariants cannot pass without the model (the prior "test-only" step was not mergeable).
 
 **Scope of the immediate next PR:**
-- New test file `tests/services/hexmining/daily-data-observation-contract.test.ts` (or equivalent name).
-- Asserts: observation identity key shape (§11.8), retention policy (no overwrite), minimum required fields, provenance completeness invariant (§11.9).
-- No schema migration. No runtime reader code. No API routes. No frontend. No live RPC.
+- Additive `RawHexDailyDataObservation` Prisma model and `HEXMINING` source family enum value.
+- `npx prisma generate` to regenerate the client.
+- Persistence service (write-observation, read-by-range, dedupe check per §11.8).
+- Contract tests proving model key shape, dedupe invariant, bigint-safe encoding (§11.8), and provenance completeness invariant (§11.9).
+- Tests use the migration-applied test database; no live RPC.
 
 **What this PR does NOT do:**
-- No `RawHexDailyDataObservation` Prisma model (that is Step 2).
-- No `HEXMINING` enum migration (that is Step 2).
-- No `dailyDataRange` reader (that is Step 4).
+- No `currentDay()` reader (that is Step 2).
+- No `dailyDataRange` reader (that is Step 3).
 - No yield calculation.
+- No API route changes.
 - No frontend changes.
 
 ---
@@ -833,9 +865,9 @@ This is Step 1 of §11.10. It is the correct next step because:
 - `npm run typecheck` — passed, all `@ts-expect-error` directives active (no unused-directive errors).
 - `npm run build` — passed, all routes compiled cleanly.
 
-**This PR (docs/hexmining-phase4-observation-model) — docs only:**
+**This PR (docs/hexmining-phase4-observation-model) — docs only (both commits):**
 - `git diff --check` — passed, no trailing whitespace.
-- `npm run test` — 98 test files, 1265 tests, all passed (unchanged — docs-only PR).
+- `npm run test` — 1265 tests, all passed.
 - `npm run lint` — passed, no ESLint errors.
 - `npm run typecheck` — passed, no type errors.
 - `npm run build` — passed, all routes compiled cleanly.
@@ -856,7 +888,8 @@ This is Step 1 of §11.10. It is the correct next step because:
 **This PR (docs/hexmining-phase4-observation-model):**
 - **Branch:** `docs/hexmining-phase4-observation-model`
 - **Changed files:** `docs/v2-hexmining-roadmap.md` only
-- **What changed:** Decision 1 (§11.2) resolved to `RawHexDailyDataObservation` persistence; Decision 2 (§11.3) resolved to `HEXMINING` source family; §11.8 observation identity/key shape added; §11.9 minimum provenance for "estimated" yield added; §11.10 six-step Phase 4 implementation sequence added; §11.7 updated to reflect PRs #195/#196 complete; §12 updated to next PR.
+- **What changed (original commit):** Decision 1 (§11.2) resolved to `RawHexDailyDataObservation` persistence; Decision 2 (§11.3) resolved to `HEXMINING` source family; §11.8 observation identity/key shape added; §11.9 minimum provenance for "estimated" yield added; §11.10 five-step Phase 4 implementation sequence added; §11.7 updated to reflect PRs #195/#196 complete; §12 updated to next PR.
+- **What changed (review fixes):** §11.4 invariant #2 day-range formula aligned; §11.8 expanded with non-colliding observation identity (observationId + dedupe key + canonical-selection policy), bigint-safe encoding policy, and append-only reorg invalidation; §11.9 rangeEndDay formula corrected; §11.10 Step 1 changed from unmergeable test-only to combined schema+test PR (five steps); §12 next PR updated; §11.4 line 575 "in this PR" corrected to "in PR #194"; validation summary inconsistency resolved.
 - **PR status:** DOCS-ONLY — no source, test, schema, or config files changed. Safe to open for review.
 - **Merge requirement:** None blocking. The two previously blocked decisions are now resolved. The immediate next step is §11.10 Step 1.
 - **Recommendation: OPEN PR**
