@@ -18,6 +18,8 @@ import { describe, expect, it } from "vitest";
 
 import { PHEX_ASSET_ID } from "@/services/hexmining/types";
 import type {
+  EstimatedYieldDto,
+  ExactYieldDto,
   HexBpdYieldStatus,
   HexStakeDto,
   HexStakeYieldDto,
@@ -56,12 +58,14 @@ function buildEstimatedYieldDto(opts: {
   bpdYieldHex?: string | null;
   bpdYieldStatus?: HexBpdYieldStatus;
 }): HexStakeYieldDto {
+  // Callers are responsible for valid BPD combinations. Invalid combos are
+  // tested with @ts-expect-error in yield-dto-invariants.test.ts.
   return {
     status: "estimated",
     estimatedYieldHex: opts.estimatedYieldHex,
     bpdYieldHex: opts.bpdYieldHex ?? null,
     bpdYieldStatus: opts.bpdYieldStatus ?? "unknown",
-  };
+  } as EstimatedYieldDto;
 }
 
 function buildExactYieldDto(opts?: {
@@ -69,12 +73,14 @@ function buildExactYieldDto(opts?: {
   bpdYieldHex?: string | null;
   bpdYieldStatus?: HexBpdYieldStatus;
 }): HexStakeYieldDto {
+  // Callers are responsible for valid BPD combinations. Invalid combos are
+  // tested with @ts-expect-error in yield-dto-invariants.test.ts.
   return {
     status: "exact",
     estimatedYieldHex: opts?.estimatedYieldHex ?? "1000000000",
     bpdYieldHex: opts?.bpdYieldHex ?? null,
     bpdYieldStatus: opts?.bpdYieldStatus ?? "not_applicable",
-  };
+  } as ExactYieldDto;
 }
 
 // ─── Full stake DTO fixture builder ───────────────────────────────────────────

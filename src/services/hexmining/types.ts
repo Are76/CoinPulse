@@ -119,25 +119,57 @@ export type HexStakePnlDto = {
   costBasisPolicy: null;
 };
 
-// ─── Yield DTO ────────────────────────────────────────────────────────────────
+// ─── BPD field correlation ────────────────────────────────────────────────────
 //
-// status:            HexYieldStatus — "unsupported" | "unavailable" | "estimated" | "exact"
-// estimatedYieldHex: scaled decimal string; non-null when status is "estimated" or "exact"
-// bpdYieldHex:       Big Pay Day yield — separate from estimatedYieldHex (Phase 4+)
-// bpdYieldStatus:    non-null when status is "estimated" or "exact"
+// bpdYieldHex is structurally dependent on bpdYieldStatus:
+//   "applicable"     → bpdYieldHex: string  (BPD yield was received)
+//   "not_applicable" → bpdYieldHex: null    (stake did not span HEX day 353)
+//   "unknown"        → bpdYieldHex: null    (applicability not yet determined)
 //
-// Field invariants enforced by tests (not type system):
-//   "unsupported" → all fields null
-//   "unavailable" → all fields null (read path exists but data cannot be produced)
-//   "estimated"   → estimatedYieldHex required; bpdYieldStatus required; provenance required
-//   "exact"       → as "estimated" but yield confirmed at endStake (Phase 5+)
+// Used in EstimatedYieldDto and ExactYieldDto via intersection.
 
-export type HexStakeYieldDto = {
-  status: HexYieldStatus;
-  estimatedYieldHex: string | null;        // non-null for "estimated" / "exact"
-  bpdYieldHex: string | null;              // non-null when bpdYieldStatus is "applicable"
-  bpdYieldStatus: HexBpdYieldStatus | null; // null for "unsupported" / "unavailable"
+export type HexStakeBpdYieldFields =
+  | { bpdYieldStatus: "applicable"; bpdYieldHex: string }
+  | { bpdYieldStatus: "not_applicable"; bpdYieldHex: null }
+  | { bpdYieldStatus: "unknown"; bpdYieldHex: null };
+
+// ─── Yield DTO — discriminated union on status ────────────────────────────────
+//
+// Each branch enforces field types at compile time:
+//   UnsupportedYieldDto  — no yield read path (Phases 1–3); all fields null
+//   UnavailableYieldDto  — read path exists but data cannot be produced; all fields null
+//   EstimatedYieldDto    — dailyDataRange estimate; estimatedYieldHex required; BPD correlated
+//   ExactYieldDto        — confirmed at endStake; estimatedYieldHex required; BPD correlated
+
+export type UnsupportedYieldDto = {
+  status: "unsupported";
+  estimatedYieldHex: null;
+  bpdYieldHex: null;
+  bpdYieldStatus: null;
 };
+
+export type UnavailableYieldDto = {
+  status: "unavailable";
+  estimatedYieldHex: null;
+  bpdYieldHex: null;
+  bpdYieldStatus: null;
+};
+
+export type EstimatedYieldDto = {
+  status: "estimated";
+  estimatedYieldHex: string;
+} & HexStakeBpdYieldFields;
+
+export type ExactYieldDto = {
+  status: "exact";
+  estimatedYieldHex: string;
+} & HexStakeBpdYieldFields;
+
+export type HexStakeYieldDto =
+  | UnsupportedYieldDto
+  | UnavailableYieldDto
+  | EstimatedYieldDto
+  | ExactYieldDto;
 
 // ─── Core stake DTO ───────────────────────────────────────────────────────────
 
