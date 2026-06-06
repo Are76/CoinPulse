@@ -53,6 +53,7 @@ enum SourceFamily {
   LP
   STAKING
   NATIVE
+  HEXMINING
 }
 
 enum TokenMetadataSourceKind {
@@ -100,10 +101,11 @@ model Chain {
   portfolioLpPositions PortfolioLpPosition[]
   portfolioStakePositions PortfolioStakePosition[]
   portfolioMaterializationStates PortfolioMaterializationState[]
-  priceObservations PriceObservation[]
-  protocols         Protocol[]
-  rpcRequestLogs    RpcRequestLog[]
-  reorgEvents       ReorgEvent[]
+  priceObservations               PriceObservation[]
+  protocols                       Protocol[]
+  rpcRequestLogs                  RpcRequestLog[]
+  reorgEvents                     ReorgEvent[]
+  rawHexDailyDataObservations     RawHexDailyDataObservation[]
 }
 
 model Wallet {
@@ -606,4 +608,64 @@ model PriceObservation {
 
   @@index([chainId, assetId, quoteAsset, observedAt(sort: Desc)])
   @@index([chainId, sourceType, observedAt(sort: Desc)])
+}
+
+// ─── HexMining Phase 4 — raw dailyDataRange observation models ────────────────
+//
+// Each RawHexDailyDataObservation row represents one persisted dailyDataRange
+// RPC call result. Rows are append-only raw audit evidence — never mutated.
+//
+// Reorg/invalidation is handled via the companion model below (append-only).
+// The raw observation row is never updated for reorg state.
+//
+// canonicalPayload stores the dailyDataRange response as deterministic JSON
+// with all uint*/int* contract values encoded as base-10 decimal strings.
+// JavaScript bigint values must never appear directly in the JSON. The
+// payloadHash field is the SHA-256 hex of the canonical serialized payload.
+//
+// Multiple rows may exist for the same (chainId, rangeStartDay, rangeEndDay,
+// observedAtBlock) if reads were made from different RPC endpoints or with
+// different payloads. Deduplication is enforced at the service layer using
+// (chainId, sourceFamily, rangeStartDay, rangeEndDay, observedAtBlock,
+// rpcEndpointLabel, payloadHash) before writing. No DB unique constraint is
+// applied to preserve legitimate retry/endpoint observations.
+
+model RawHexDailyDataObservation {
+  id               String         @id @default(cuid())
+  chainId          Int
+  sourceFamily     SourceFamily   @default(HEXMINING)
+  rangeStartDay    Int
+  rangeEndDay      Int
+  observedAtBlock  BigInt
+  observedAt       DateTime
+  rpcEndpointLabel String?
+  payloadVersion   String         @default("v1")
+  canonicalPayload String
+  payloadHash      String
+  warnings         String[]       @default([])
+  createdAt        DateTime       @default(now())
+  chain            Chain          @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  invalidations    RawHexDailyDataObservationInvalidation[] @relation("InvalidatedObservation")
+  supersessions    RawHexDailyDataObservationInvalidation[] @relation("SupersessionTarget")
+
+  @@index([chainId, rangeStartDay, rangeEndDay, observedAtBlock])
+  @@index([chainId, sourceFamily])
+  @@index([payloadHash])
+}
+
+// Append-only invalidation record. Written when a reorg or supersession event
+// makes an existing observation non-canonical. The raw observation row is never
+// mutated — this model records the event alongside it.
+model RawHexDailyDataObservationInvalidation {
+  id                        String                      @id @default(cuid())
+  observationId             String
+  reason                    String
+  reorgBlockHash            String?
+  supersededByObservationId String?
+  createdAt                 DateTime                    @default(now())
+  observation               RawHexDailyDataObservation  @relation("InvalidatedObservation", fields: [observationId], references: [id], onDelete: Restrict)
+  supersededBy              RawHexDailyDataObservation? @relation("SupersessionTarget", fields: [supersededByObservationId], references: [id], onDelete: SetNull)
+
+  @@index([observationId])
+  @@index([supersededByObservationId])
 }
