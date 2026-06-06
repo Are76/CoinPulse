@@ -119,25 +119,49 @@ export type HexStakePnlDto = {
   costBasisPolicy: null;
 };
 
-// ─── Yield DTO ────────────────────────────────────────────────────────────────
+// ─── Yield DTO — discriminated union on status ────────────────────────────────
 //
-// status:            HexYieldStatus — "unsupported" | "unavailable" | "estimated" | "exact"
-// estimatedYieldHex: scaled decimal string; non-null when status is "estimated" or "exact"
-// bpdYieldHex:       Big Pay Day yield — separate from estimatedYieldHex (Phase 4+)
-// bpdYieldStatus:    non-null when status is "estimated" or "exact"
+// Each branch enforces field types at compile time, making invalid combinations
+// (e.g. status: "estimated" + estimatedYieldHex: null) a TypeScript error.
 //
-// Field invariants enforced by tests (not type system):
-//   "unsupported" → all fields null
-//   "unavailable" → all fields null (read path exists but data cannot be produced)
-//   "estimated"   → estimatedYieldHex required; bpdYieldStatus required; provenance required
-//   "exact"       → as "estimated" but yield confirmed at endStake (Phase 5+)
+//   UnsupportedYieldDto  — no yield read path (Phases 1–3); all fields null
+//   UnavailableYieldDto  — read path exists but data cannot be produced; all fields null
+//   EstimatedYieldDto    — dailyDataRange estimate; estimatedYieldHex and bpdYieldStatus required
+//   ExactYieldDto        — confirmed at endStake; estimatedYieldHex and bpdYieldStatus required
 
-export type HexStakeYieldDto = {
-  status: HexYieldStatus;
-  estimatedYieldHex: string | null;        // non-null for "estimated" / "exact"
-  bpdYieldHex: string | null;              // non-null when bpdYieldStatus is "applicable"
-  bpdYieldStatus: HexBpdYieldStatus | null; // null for "unsupported" / "unavailable"
+export type UnsupportedYieldDto = {
+  status: "unsupported";
+  estimatedYieldHex: null;
+  bpdYieldHex: null;
+  bpdYieldStatus: null;
 };
+
+export type UnavailableYieldDto = {
+  status: "unavailable";
+  estimatedYieldHex: null;
+  bpdYieldHex: null;
+  bpdYieldStatus: null;
+};
+
+export type EstimatedYieldDto = {
+  status: "estimated";
+  estimatedYieldHex: string;           // required — never null when estimated
+  bpdYieldHex: string | null;          // null when bpdYieldStatus is "not_applicable"
+  bpdYieldStatus: HexBpdYieldStatus;   // required — never null when estimated
+};
+
+export type ExactYieldDto = {
+  status: "exact";
+  estimatedYieldHex: string;           // required — confirmed yield value from endStake
+  bpdYieldHex: string | null;          // null when bpdYieldStatus is "not_applicable"
+  bpdYieldStatus: HexBpdYieldStatus;   // required — never null when exact
+};
+
+export type HexStakeYieldDto =
+  | UnsupportedYieldDto
+  | UnavailableYieldDto
+  | EstimatedYieldDto
+  | ExactYieldDto;
 
 // ─── Core stake DTO ───────────────────────────────────────────────────────────
 
