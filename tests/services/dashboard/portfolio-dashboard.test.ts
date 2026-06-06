@@ -1904,4 +1904,80 @@ describe("assemblePortfolioDashboard", () => {
     expect(result.ledgerCoverage.fromBlock).toBe("50");
     expect(result.ledgerCoverage.toBlock).toBe("200");
   });
+
+  it("records source_disabled in pnlCoverage when the only available observation is from a disabled source", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => ({
+        selected: null,
+        rejected: [{ id: "obs-1", reason: "SOURCE_DISABLED" }],
+      }),
+      calculatePnl: async () =>
+        createPnlResult({
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [createPnlWarning()],
+        }),
+    });
+
+    expect(result.tokenPositions[0]?.pricing.status).toBe("unavailable");
+    expect(result.tokenPositions[0]?.pricing.rejectedReasons).toContain("SOURCE_DISABLED");
+    expect(result.pnlCoverage).toMatchObject({
+      status: "unavailable",
+      reasons: expect.arrayContaining(["source_disabled"]),
+      affectedSections: expect.arrayContaining(["tokens", "summary"]),
+      sourceDisabledPositionsCount: 1,
+    });
+  });
+
+  it("never produces partial_history, missing_disposal_events, or missing_native_price_history in pnlCoverage.reasons", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => ({ selected: null, rejected: [] }),
+      calculatePnl: async () =>
+        createPnlResult({
+          unrealizedPnl: null,
+          markPrice: null,
+          warnings: [createPnlWarning()],
+        }),
+    });
+
+    expect(result.pnlCoverage.reasons).not.toContain("partial_history");
+    expect(result.pnlCoverage.reasons).not.toContain("missing_disposal_events");
+    expect(result.pnlCoverage.reasons).not.toContain("missing_native_price_history");
+  });
 });
