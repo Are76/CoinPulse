@@ -1,8 +1,21 @@
 # V2 HexMining Roadmap
 
-**Document status:** Docs-only — no runtime implementation. Do not merge without review.
+**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4 kickoff decisions documented below.
 **Created:** 2026-06-06
-**Branch:** `claude/v2-hexmining-roadmap-O56OV`
+**Last updated:** 2026-06-06 (Phase 4 kickoff)
+
+## Phase completion status
+
+| Phase | Title | Status |
+|---|---|---|
+| Phase 0 | Roadmap and decisions | ✅ Complete — merged PR #188 |
+| Phase 1 | HexMining DTO contract skeleton | ✅ Complete — merged PR #189 |
+| Phase 2 | Native PulseChain active stake reads | ✅ Complete — merged PRs #190, #191 |
+| Phase 3 | HexMining page shell / unsupported valuation display | ✅ Complete — merged PRs #192, #193 |
+| Phase 4 | dailyData and yield support | 🔲 Decisions documented — not yet implemented |
+| Phase 5 | Ended stake discovery | 🔲 Not started |
+| Phase 6 | HSI and HTT source families | 🔲 Not started |
+| Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
 
 ---
 
@@ -465,44 +478,194 @@ The following are not part of HexMining V2 in any phase:
 
 ---
 
-## 11. Proposed Next PR
+## 11. Phase 4 Kickoff Decisions
 
-**Recommended:** `test(hexmining): add DTO contract skeleton tests`
+This section documents the decisions that must be resolved or explicitly framed before any Phase 4 runtime code is written. Phases 0–3 are complete and merged. No Phase 4 implementation PR may open until these decisions are recorded here.
 
-This is the correct next PR because:
-1. It is docs-compatible — pure TypeScript types and tests, no runtime code
-2. It forces all DTO field shapes to be explicit before any implementation
-3. It establishes the `status: "unsupported"` sentinel pattern for all HexMining valuation/PnL/yield fields
-4. It creates a stable contract that Phase 2 (live reads) must satisfy
-5. It does not require a schema migration
-6. It does not require a frontend change
-7. It does not risk any existing V1 guardrail
+---
 
-**What it includes:**
-- `src/services/hexmining/types.ts` — DTO type definitions
-- `tests/services/hexmining/dto-contract.test.ts` — contract tests for shape, status invariants, provenance fields, schema version
-- No API routes, no frontend pages, no schema migration, no live RPC
+### 11.1 Phase completion summary (Phases 0–3)
+
+| PR | Title | Scope |
+|---|---|---|
+| #188 | `docs(hexmining): define V2 roadmap` | This document (Phase 0) |
+| #189 | `feat(hexmining): add Phase 1 DTO contract skeleton` | `types.ts`, `dto-contract.test.ts` |
+| #190 | `feat(hexmining): add Phase 2 native PulseChain stake reader` | `reader.ts`, `reader.test.ts` |
+| #191 | `feat(hexmining): expose GET /api/hexmining/stakes route` | API route + contract test |
+| #192 | `feat(hexmining): add stakes API client and query hook` | `hexmining-client.ts`, `use-hexmining-stakes-query.ts`, tests |
+| #193 | `feat(hexmining): add read-only HexMining page shell` | Screen component, nav config, UX tests, wiring tests |
+
+Post-merge audit (2026-06-06) confirmed: all 1168 tests pass, lint clean, typecheck clean, build clean, no guardrail violations.
+
+---
+
+### 11.2 Decision 1 — Raw observation model for dailyData/yield inputs
+
+**Status: EXPLICITLY BLOCKED — must be resolved before Phase 4 runtime implementation.**
+
+**Background:**
+
+Phase 2 is a pure read-through: RPC calls produce a `HexStakeListDto` that is returned directly to the API caller. No observation record is written to the database. This is correct for Phase 2 (active stake state is cheap to re-read). Phase 4 adds `dailyDataRange` reads, which are substantially different:
+
+- `dailyDataRange(startDay, endDay)` returns historical per-day payout/share data.
+- These reads are expensive and may be rate-limited on public RPC endpoints.
+- The same data range does not change once the days have passed (historical, not live state).
+- Without persistence, every request re-reads the full day range from RPC. This is operationally unsafe at scale.
+- Provenance without persistence means there is no audit trail for how a yield estimate was derived.
+
+**The two viable options:**
+
+**Option A — Persist raw dailyData observations (recommended):**
+Introduce a new `RawDailyDataObservation` model (or extend `RawStakeAction` with an `observationKind` discriminator) to cache `dailyDataRange` results keyed by `(chainId, startDay, endDay, observedAtBlock)`. Yield estimates are then derived from persisted data, not live RPC. This satisfies CoinPulse's raw-audit-immutability rule and enables deterministic rebuild.
+
+**Option B — Defer persistence to Phase 5, use live reads with aggressive rate-limit guards:**
+Phase 4 adds `dailyDataRange` reads but does not persist them. Observations carry provenance but are not stored. Yield estimates in `HexStakeYieldDto` always carry `status: "estimated"` with explicit `observedAtBlock` and `observedAt` provenance. Rate-limit failures produce `status: "unavailable"` (not `"unsupported"`) with a warning. This is architecturally weaker but avoids a schema migration in Phase 4.
+
+**Resolution required before Phase 4 implementation:**
+
+This decision affects whether Phase 4 requires a Prisma schema migration. The author must choose Option A or Option B and document the choice here before any Phase 4 implementation PR is opened. The choice determines which files are in scope for the Phase 4 implementation PR.
+
+**Why this blocks Phase 4:** Without this decision, a Phase 4 implementation PR cannot know whether it needs a schema migration, and the DTO `provenance` shape for yield may differ between options.
+
+---
+
+### 11.3 Decision 2 — Source family for HexMining yield inputs
+
+**Status: EXPLICITLY BLOCKED — must be resolved before Phase 4 runtime implementation.**
+
+**Background:**
+
+The existing `SourceFamily` enum in `prisma/schema.prisma` includes `STAKING` (used for V1 `startStake`/`endStake` event ingestion) alongside `TRANSFERS`, `DEX`, `LP`, `NATIVE`. Phase 2 native stake reads do not use `SyncRun` or `SyncCursor` — they are on-demand reads, not syncs. Phase 4 `dailyDataRange` reads may need to be tracked as sync operations if they are batched and persisted (Decision 1 Option A).
+
+**The two viable options:**
+
+**Option A — Use existing `STAKING` source family:**
+`dailyDataRange` reads are grouped under `SourceFamily.STAKING` alongside event-based stake ingestion. No schema migration for the enum. Operationally simpler, but conflates two distinct read models (event-based vs. read-model-based) in `SyncCursor` and `SyncRun` records.
+
+**Option B — Introduce a new `HEXMINING` source family:**
+Add `HEXMINING` to the `SourceFamily` enum via a Prisma migration. This makes the distinction between V1 event-based ingestion and V2 read-model-based stake monitoring explicit in all sync lifecycle records. More expressive, but requires an additive schema migration.
+
+**Resolution required before Phase 4 implementation:**
+
+The author must choose Option A or Option B before any Phase 4 implementation PR. If Decision 1 resolves to Option B (no persistence), this decision may be deferred further — `SyncRun`/`SyncCursor` are only relevant when persistence is added. If Decision 1 resolves to Option A (persist observations), Decision 2 must be resolved simultaneously.
+
+**Why this blocks Phase 4 (if Decision 1 = Option A):** The `RawDailyDataObservation` model and any `SyncCursor` entries for `dailyDataRange` need a source family. An undecided source family cannot be modeled.
+
+---
+
+### 11.4 Yield status policy
+
+**Status: RESOLVED — documented here for implementation reference.**
+
+`HexYieldStatus` already exists in `src/services/hexmining/types.ts`:
+
+```typescript
+export type HexYieldStatus = "unsupported" | "estimated" | "exact";
+```
+
+The complete vocabulary and its promotion rules are:
+
+| Status | Meaning | Promotion condition |
+|---|---|---|
+| `"unsupported"` | `dailyDataRange` reads not yet implemented. The backend has no mechanism to produce a yield figure. Current state for all stakes in Phases 1–3. | Never promoted until Phase 4 `dailyDataRange` implementation is merged and stable. |
+| `"estimated"` | Backend has read sufficient `dailyDataRange` data to compute a per-stake estimated yield. The estimate is an approximation — exact yield is only known at `endStake`. | Only set by the backend when: (a) `dailyDataRange` data is available and not stale for all days in the stake's locked-day range, (b) the observation carries a valid `observedAtBlock` and `observedAt`, and (c) all day-range data is complete (no gaps). If any of these conditions fail, status must be `"unavailable"`, not `"estimated"`. |
+| `"exact"` | Yield confirmed on-chain at `endStake`. Only available when the stake has ended and the `endStake` transaction has been indexed with confirmed yield. Phase 5+ scope. | Only set by the backend when an `endStake` event has been ingested and the `STAKE_YIELD_RECEIVED` ledger entry is present. Never inferred from `dailyDataRange` estimates. |
+
+**Critical invariants — these must be enforced in tests before implementation:**
+
+1. `yield.status` is set exclusively by the backend reader. The frontend never infers, upgrades, or defaults it.
+2. `"unsupported"` → `"estimated"` promotion requires complete, non-stale `dailyDataRange` coverage for the stake's locked-day range. Partial coverage produces `"unavailable"`, not `"estimated"`.
+3. `"estimated"` → `"exact"` promotion requires an indexed `endStake` event with a confirmed `STAKE_YIELD_RECEIVED` ledger entry. It is never promoted from estimate alone.
+4. `"estimated"` must always be accompanied by a non-null `estimatedYieldHex` value and a provenance block carrying `observedAtBlock`, `observedAt`, and the day range used.
+5. Big Pay Day (`bpdYieldHex`) is separate from general yield. BPD yield is only attributed when `bpdYieldStatus: "applicable"` is confirmed. It is never silently included in `estimatedYieldHex`.
+6. Missing, stale, rate-limited, or partial `dailyDataRange` data must produce `status: "unavailable"` with an explicit warning, not a partial estimate passed off as complete.
+
+---
+
+### 11.5 When yield.status must remain "unsupported" or "unavailable"
+
+**"unsupported"** — use when `dailyDataRange` reads are not yet implemented or the backend has no yield read path for this stake:
+- All stakes in Phases 1–3 (current state).
+- After Phase 4 launches, stakes on unsupported chains (not 369) continue to show `"unsupported"`.
+- HSI/HTT stakes before Phase 6 show `"unsupported"`.
+
+**"unavailable"** — use when `dailyDataRange` reads are implemented but data cannot be produced for this specific stake at this time:
+- RPC rate limit hit during `dailyDataRange` read.
+- `dailyDataRange` returned a gap — some days in the stake's range are missing.
+- `currentDay()` could not be read (cannot determine the stake's active day range).
+- `observedAtBlock` is `null` or `"unknown"` (provenance insufficient for an auditable estimate).
+- Data is stale beyond a configured freshness threshold.
+
+**Neither status may be silently coerced to zero or to an estimated value.** If yield data is unavailable, the DTO must show `"unavailable"` with an explicit warning string (e.g., `"hexmining-yield-data-gap-day-1234"`, `"hexmining-yield-rpc-rate-limited"`).
+
+---
+
+### 11.6 What Phase 4 must NOT include
+
+These guardrails apply to every Phase 4 implementation PR, regardless of what is being added:
+
+- No live-network tests (all RPC reads must use mock clients matching `HexMiningReadClient` interface pattern).
+- No frontend calculation of yield, APY, BPD, or any financial value.
+- No frontend RPC reads (`dailyDataRange`, `globalInfo`, `currentDay` are backend-only).
+- No pricing, valuation, or PnL — those remain `status: "unsupported"` until Phase 7.
+- No HSI/HTT stake source families.
+- No ended stake discovery.
+- No Ethereum/eHEX support.
+- No cross-chain yield aggregation.
+- No silent coercion of partial or missing yield data to zero or to an estimate.
+- No schema migration until Decision 1 and Decision 2 are resolved and documented here.
+- No `dailyDataRange` implementation PR until a test-first contract PR has established the `status: "estimated"` invariants and the `HexStakeYieldDto` type widening is contract-tested.
+
+---
+
+### 11.7 Required next PR — Phase 4 test-first contract
+
+**Recommended:** `test(hexmining): define yield status contract`
+
+**Why test-first:** The `HexStakeYieldDto` type currently enforces `status: "unsupported"` (via `HexMiningUnsupportedStatus`). Before `dailyDataRange` reads are implemented, the contract tests for `status: "estimated"` must be written. Writing the tests first ensures:
+
+1. The `HexStakeYieldDto` type widening (from `HexMiningUnsupportedStatus` to `HexYieldStatus`) is covered by tests before any reader code uses it.
+2. The promotion invariants in §11.4 above are encoded as failing tests that Phase 4 implementation must satisfy.
+3. The `estimatedYieldHex`, `bpdYieldHex`, and `bpdYieldStatus` field shapes for the `"estimated"` state are explicitly contract-tested before any read path produces them.
+4. The `"unavailable"` sentinel is tested separately from `"unsupported"`, making the distinction explicit before it matters in production.
+
+**Scope of that PR:**
+- `src/services/hexmining/types.ts` — widen `HexStakeYieldDto.status` from `HexMiningUnsupportedStatus` to `HexYieldStatus`; widen `estimatedYieldHex`, `bpdYieldHex`, `bpdYieldStatus` to allow non-null values for the `"estimated"` state.
+- `tests/services/hexmining/yield-contract.test.ts` — new contract test file asserting: `"unsupported"` state invariants, `"estimated"` state invariants (non-null `estimatedYieldHex` required, provenance fields required), `"unavailable"` state invariants, BPD attribution rules, promotion guard (never `"estimated"` without complete day coverage).
+- No API routes, no reader changes, no frontend changes, no schema migration, no live RPC.
 
 **What it explicitly does NOT include:**
-- Any live `stakeCount`/`stakeLists` reads
-- Any yield, valuation, or PnL fields in non-unsupported status
-- Any Ethereum eHEX handling
-- Any HSI/HTT handling
+- Any `dailyDataRange` RPC implementation.
+- Any `globalInfo` or `currentDay` reads beyond what Phase 2 already uses.
+- Any yield calculation logic.
+- Any schema migration.
+- Any frontend change.
+
+---
+
+## 12. Proposed Next PR (updated)
+
+**Recommended next PR:** `test(hexmining): define yield status contract`
+
+See §11.7 above for full scope. This is the correct next step because it resolves the type contract before any implementation, keeping the architecture test-first and preventing the `HexStakeYieldDto` type widening from silently landing in a reader PR without contract coverage.
+
+Decision 1 and Decision 2 (§11.2 and §11.3) must be resolved **in this document** by the author before the Phase 4 implementation PR (the `dailyDataRange` reader) is opened. The yield-contract test PR does not require those decisions to be resolved first, since it adds no runtime reads.
 
 ---
 
 ## Validation Notes
 
-- `npm run test` — not run for this docs-only PR (no runtime code changed)
-- `npm run lint` — not run for this docs-only PR (markdown is not linted by the configured lint pipeline; `eslint` targets TypeScript source files only)
-- `git diff --check` — run before commit to verify no whitespace errors
+- `npm run test` — not run for this docs-only PR (no runtime code changed).
+- `npm run lint` — not run for this docs-only PR (ESLint targets TypeScript source files only; markdown is not linted by the configured pipeline).
+- `npm run typecheck` — not run for this docs-only PR (`src/services/hexmining/types.ts` was not modified).
+- `git diff --check` — run before commit to verify no trailing whitespace.
 
 ---
 
 ## Final Status
 
-- **Branch:** `claude/v2-hexmining-roadmap-O56OV`
-- **Changed files:** `docs/v2-hexmining-roadmap.md` (this document only)
-- **PR status:** DOCS-ONLY — safe to open as a pull request for review
-- **DO NOT MERGE** without author review and sign-off on the data model decisions in Section 8
-- **Recommendation: OPEN DOCS-ONLY PR — DO NOT MERGE**
+- **Branch:** `docs/hexmining-phase4-kickoff`
+- **Changed files:** `docs/v2-hexmining-roadmap.md` only
+- **PR status:** DOCS-ONLY — safe to open for review
+- **Merge requirement:** Author sign-off on Decision 1 (§11.2) and Decision 2 (§11.3) before the Phase 4 implementation PR. This docs PR itself may be merged independently.
+- **Recommendation: OPEN DOCS-ONLY PR**
