@@ -17,6 +17,7 @@ import type {
   EstimatedYieldDto,
   ExactYieldDto,
   HexBpdYieldStatus,
+  HexStakeBpdYieldFields,
   HexStakeYieldDto,
   UnavailableYieldDto,
   UnsupportedYieldDto,
@@ -425,5 +426,164 @@ describe("Phase 1–3 unsupported state is unchanged by the union refactor", () 
     expect(unsupported.status).not.toBe(unavailable.status);
     expect(unsupported.status).not.toBe("estimated");
     expect(unsupported.status).not.toBe("exact");
+  });
+});
+
+// ─── BPD field correlation invariants ────────────────────────────────────────
+//
+// HexStakeBpdYieldFields is a discriminated union on bpdYieldStatus.
+// Invalid combinations (applicable + null, not_applicable + string, etc.)
+// are TypeScript errors enforced at compile time.
+
+describe("HexStakeBpdYieldFields: valid combinations compile", () => {
+  it("'applicable' + bpdYieldHex string is valid", () => {
+    const fields: HexStakeBpdYieldFields = {
+      bpdYieldStatus: "applicable",
+      bpdYieldHex: "5000000000",
+    };
+    expect(fields.bpdYieldStatus).toBe("applicable");
+    expect(fields.bpdYieldHex).toBe("5000000000");
+    expect(fields.bpdYieldHex).not.toBeNull();
+  });
+
+  it("'not_applicable' + bpdYieldHex null is valid", () => {
+    const fields: HexStakeBpdYieldFields = {
+      bpdYieldStatus: "not_applicable",
+      bpdYieldHex: null,
+    };
+    expect(fields.bpdYieldStatus).toBe("not_applicable");
+    expect(fields.bpdYieldHex).toBeNull();
+  });
+
+  it("'unknown' + bpdYieldHex null is valid", () => {
+    const fields: HexStakeBpdYieldFields = {
+      bpdYieldStatus: "unknown",
+      bpdYieldHex: null,
+    };
+    expect(fields.bpdYieldStatus).toBe("unknown");
+    expect(fields.bpdYieldHex).toBeNull();
+  });
+
+  it("EstimatedYieldDto with applicable + string compiles", () => {
+    const dto: EstimatedYieldDto = {
+      status: "estimated",
+      estimatedYieldHex: "1000000000",
+      bpdYieldStatus: "applicable",
+      bpdYieldHex: "5000000000",
+    };
+    expect(dto.bpdYieldStatus).toBe("applicable");
+    expect(dto.bpdYieldHex).toBe("5000000000");
+  });
+
+  it("EstimatedYieldDto with not_applicable + null compiles", () => {
+    const dto: EstimatedYieldDto = {
+      status: "estimated",
+      estimatedYieldHex: "1000000000",
+      bpdYieldStatus: "not_applicable",
+      bpdYieldHex: null,
+    };
+    expect(dto.bpdYieldStatus).toBe("not_applicable");
+    expect(dto.bpdYieldHex).toBeNull();
+  });
+
+  it("EstimatedYieldDto with unknown + null compiles", () => {
+    const dto: EstimatedYieldDto = {
+      status: "estimated",
+      estimatedYieldHex: "1000000000",
+      bpdYieldStatus: "unknown",
+      bpdYieldHex: null,
+    };
+    expect(dto.bpdYieldStatus).toBe("unknown");
+    expect(dto.bpdYieldHex).toBeNull();
+  });
+
+  it("ExactYieldDto with applicable + string compiles", () => {
+    const dto: ExactYieldDto = {
+      status: "exact",
+      estimatedYieldHex: "9876543210",
+      bpdYieldStatus: "applicable",
+      bpdYieldHex: "5000000000",
+    };
+    expect(dto.bpdYieldStatus).toBe("applicable");
+    expect(dto.bpdYieldHex).not.toBeNull();
+  });
+
+  it("ExactYieldDto with not_applicable + null compiles", () => {
+    const dto: ExactYieldDto = {
+      status: "exact",
+      estimatedYieldHex: "9876543210",
+      bpdYieldStatus: "not_applicable",
+      bpdYieldHex: null,
+    };
+    expect(dto.bpdYieldStatus).toBe("not_applicable");
+    expect(dto.bpdYieldHex).toBeNull();
+  });
+});
+
+describe("BPD field correlation: invalid combinations cannot compile (enforced by typecheck)", () => {
+  it("'estimated' + applicable + null bpdYieldHex is a type error", () => {
+    // @ts-expect-error — "applicable" requires bpdYieldHex: string, not null
+    const _dto: EstimatedYieldDto = {
+      status: "estimated",
+      estimatedYieldHex: "1000000000",
+      bpdYieldStatus: "applicable",
+      bpdYieldHex: null,
+    };
+    void _dto;
+  });
+
+  it("'exact' + applicable + null bpdYieldHex is a type error", () => {
+    // @ts-expect-error — "applicable" requires bpdYieldHex: string, not null
+    const _dto: ExactYieldDto = {
+      status: "exact",
+      estimatedYieldHex: "9876543210",
+      bpdYieldStatus: "applicable",
+      bpdYieldHex: null,
+    };
+    void _dto;
+  });
+
+  it("'estimated' + not_applicable + string bpdYieldHex is a type error", () => {
+    // @ts-expect-error — "not_applicable" requires bpdYieldHex: null, not string
+    const _dto: EstimatedYieldDto = {
+      status: "estimated",
+      estimatedYieldHex: "1000000000",
+      bpdYieldStatus: "not_applicable",
+      bpdYieldHex: "5000000000",
+    };
+    void _dto;
+  });
+
+  it("'exact' + not_applicable + string bpdYieldHex is a type error", () => {
+    // @ts-expect-error — "not_applicable" requires bpdYieldHex: null, not string
+    const _dto: ExactYieldDto = {
+      status: "exact",
+      estimatedYieldHex: "9876543210",
+      bpdYieldStatus: "not_applicable",
+      bpdYieldHex: "5000000000",
+    };
+    void _dto;
+  });
+
+  it("'estimated' + unknown + string bpdYieldHex is a type error", () => {
+    // @ts-expect-error — "unknown" requires bpdYieldHex: null, not string
+    const _dto: EstimatedYieldDto = {
+      status: "estimated",
+      estimatedYieldHex: "1000000000",
+      bpdYieldStatus: "unknown",
+      bpdYieldHex: "5000000000",
+    };
+    void _dto;
+  });
+
+  it("'exact' + unknown + string bpdYieldHex is a type error", () => {
+    // @ts-expect-error — "unknown" requires bpdYieldHex: null, not string
+    const _dto: ExactYieldDto = {
+      status: "exact",
+      estimatedYieldHex: "9876543210",
+      bpdYieldStatus: "unknown",
+      bpdYieldHex: "5000000000",
+    };
+    void _dto;
   });
 });
