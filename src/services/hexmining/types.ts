@@ -119,17 +119,24 @@ export type HexStakePnlDto = {
   costBasisPolicy: null;
 };
 
-// ─── Yield DTO (Phase 1: always unsupported) ──────────────────────────────────
+// ─── Yield DTO ────────────────────────────────────────────────────────────────
 //
-// estimatedYieldHex: dailyDataRange-derived estimate (Phase 4+)
-// bpdYieldHex: Big Pay Day attribution (Phase 4+)
-// bpdYieldStatus: whether this stake spanned HEX day 353
+// status:            HexYieldStatus — "unsupported" | "unavailable" | "estimated" | "exact"
+// estimatedYieldHex: scaled decimal string; non-null when status is "estimated" or "exact"
+// bpdYieldHex:       Big Pay Day yield — separate from estimatedYieldHex (Phase 4+)
+// bpdYieldStatus:    non-null when status is "estimated" or "exact"
+//
+// Field invariants enforced by tests (not type system):
+//   "unsupported" → all fields null
+//   "unavailable" → all fields null (read path exists but data cannot be produced)
+//   "estimated"   → estimatedYieldHex required; bpdYieldStatus required; provenance required
+//   "exact"       → as "estimated" but yield confirmed at endStake (Phase 5+)
 
 export type HexStakeYieldDto = {
-  status: HexMiningUnsupportedStatus;
-  estimatedYieldHex: null;
-  bpdYieldHex: null;
-  bpdYieldStatus: null;
+  status: HexYieldStatus;
+  estimatedYieldHex: string | null;        // non-null for "estimated" / "exact"
+  bpdYieldHex: string | null;              // non-null when bpdYieldStatus is "applicable"
+  bpdYieldStatus: HexBpdYieldStatus | null; // null for "unsupported" / "unavailable"
 };
 
 // ─── Core stake DTO ───────────────────────────────────────────────────────────
