@@ -118,13 +118,13 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
   const stakes: HexStakeDto[] = [];
   let isComplete = true;
 
-  for (let i = 0; i < Number(stakeCount); i++) {
+  for (let index = 0n; index < stakeCount; index += 1n) {
     try {
       const raw = (await args.publicClient.readContract({
         address: PHEX_ADDRESS as `0x${string}`,
         abi: PHEX_READ_ABI,
         functionName: "stakeLists",
-        args: [walletAddress as `0x${string}`, BigInt(i)],
+        args: [walletAddress as `0x${string}`, index],
       })) as [bigint, bigint, bigint, number, number, number, boolean];
 
       const stakeId = raw[0];
@@ -138,7 +138,7 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
       stakes.push({
         schemaVersion: "v1",
         stakeId: stakeId.toString(),
-        stakeIndex: i,
+        stakeIndex: Number(index),
         stakeSource: "native",
         chainId: PULSECHAIN_CHAIN_ID,
         assetId: PHEX_ASSET_ID,
@@ -166,7 +166,7 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
           chainId: PULSECHAIN_CHAIN_ID,
           walletAddress,
           stakeId: stakeId.toString(),
-          stakeIndex: i,
+          stakeIndex: Number(index),
           stakeSource: "native",
           observedAtBlock: observedAtBlock ?? "unknown",
           observedAt,
@@ -177,7 +177,7 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
       });
     } catch {
       isComplete = false;
-      listWarnings.push(`hexmining-read-failed-stake-at-index-${i}`);
+      listWarnings.push(`hexmining-read-failed-stake-at-index-${Number(index)}`);
     }
   }
 
