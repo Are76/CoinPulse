@@ -42,6 +42,12 @@ describe("AppShell desktop sidebar navigation", () => {
     expect(within(sidebar).getByRole("link", { name: "Transactions" })).toHaveAttribute("href", "/transactions");
   });
 
+  it("contains a link to hexmining at /hexmining", () => {
+    render(<AppShell><div /></AppShell>);
+    const sidebar = screen.getByRole("complementary");
+    expect(within(sidebar).getByRole("link", { name: "HexMining" })).toHaveAttribute("href", "/hexmining");
+  });
+
   it("primary nav link count matches PRIMARY_NAV_LINKS config", () => {
     render(<AppShell><div /></AppShell>);
     const primaryNav = screen.getByRole("navigation", { name: "Primary" });
