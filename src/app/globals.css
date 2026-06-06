@@ -127,3 +127,88 @@ textarea {
   font-size: var(--text-metric);
   letter-spacing: -0.01em;
 }
+
+/* ── App shell layout ─────────────────────────────────────────────────────── */
+
+:root {
+  --coin-sidebar-w: 220px;
+}
+
+.coin-shell {
+  flex: 1;
+  display: flex;
+}
+
+.coin-sidebar {
+  width: var(--coin-sidebar-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  overflow-y: auto;
+  background: var(--surface-1);
+  border-right: 1px solid var(--border-soft);
+  padding: 1.25rem 0.75rem;
+  gap: 0.25rem;
+}
+
+.coin-sidebar__brand {
+  padding: 0.25rem 0.5rem 1rem;
+}
+
+.coin-sidebar__brand-text {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--foreground);
+}
+
+.coin-sidebar__primary,
+.coin-sidebar__operator {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.coin-sidebar__section-label {
+  padding: 0.75rem 0.5rem 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.coin-sidebar__link {
+  display: block;
+  padding: 0.45rem 0.625rem;
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--foreground);
+  transition: background 120ms;
+}
+
+.coin-sidebar__link:hover {
+  background: var(--surface-2);
+}
+
+.coin-sidebar__link--muted {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.coin-shell__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 767px) {
+  .coin-sidebar {
+    display: none;
+  }
+}
