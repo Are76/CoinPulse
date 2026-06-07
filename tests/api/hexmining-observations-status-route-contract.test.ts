@@ -8,8 +8,9 @@
 //   5. HTTP 500 with sanitized error envelope on DB failure; no internal details leak.
 //   6. Provenance fields confirm DB-backed read-only source.
 //   7. DB query uses chainId 369 and sourceFamily HEXMINING.
-//
-// No live DB. No RPC. No external services. Pure in-memory mock DB.
+//   8. observedAt exposed in DTO as ISO string (RPC read time, distinct from createdAt).
+//   9. DB query filters out invalidated observations via invalidations: { none: {} }.
+//  10. Invalidated latest observation is not returned as "available".
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +23,7 @@ type ObsRow = {
   rangeStartDay: number;
   rangeEndDay: number;
   observedAtBlock: bigint;
+  observedAt: Date;
   rpcEndpointLabel: string | null;
   payloadHash: string;
   createdAt: Date;
@@ -32,6 +34,7 @@ const SAMPLE_OBS: ObsRow = {
   rangeStartDay: 1000,
   rangeEndDay: 1099,
   observedAtBlock: BigInt("23456789"),
+  observedAt: new Date("2026-06-05T23:00:00.000Z"),
   rpcEndpointLabel: "pulsechain-primary",
   payloadHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   createdAt: new Date("2026-06-06T00:00:00.000Z"),
@@ -96,6 +99,7 @@ describe("GET /api/hexmining/observations/status route contract", () => {
           rangeStartDay: SAMPLE_OBS.rangeStartDay,
           rangeEndDay: SAMPLE_OBS.rangeEndDay,
           observedAtBlock: "23456789",
+          observedAt: SAMPLE_OBS.observedAt.toISOString(),
           rpcEndpointLabel: SAMPLE_OBS.rpcEndpointLabel,
           payloadHash: SAMPLE_OBS.payloadHash,
           createdAt: SAMPLE_OBS.createdAt.toISOString(),
@@ -240,6 +244,68 @@ describe("GET /api/hexmining/observations/status route contract", () => {
     expect(findFirstCalls[0]!.where.sourceFamily).toBe("HEXMINING");
   });
 
+  it("DB query invalidations filter is { none: {} }", async () => {
+    const findFirstCalls: Array<{ where: Record<string, unknown> }> = [];
+    getDb.mockReturnValue({
+      rawHexDailyDataObservation: {
+        async findFirst(args: { where: Record<string, unknown> }) {
+          findFirstCalls.push(args);
+          return null;
+        },
+      },
+    });
+    const { GET } = await import(
+      "../../app/api/hexmining/observations/status/route"
+    );
+    await GET();
+
+    expect(findFirstCalls).toHaveLength(1);
+    expect(findFirstCalls[0]!.where.invalidations).toEqual({ none: {} });
+  });
+
+  it("observedAt is a valid ISO string in the DTO when observation exists", async () => {
+    getDb.mockReturnValue(createMemoryDb(SAMPLE_OBS));
+    const { GET } = await import(
+      "../../app/api/hexmining/observations/status/route"
+    );
+    const response = await GET();
+    const body = await response.json();
+
+    const observedAt: string = body.data.latestObservation.observedAt;
+    expect(typeof observedAt).toBe("string");
+    expect(() => new Date(observedAt)).not.toThrow();
+    expect(new Date(observedAt).toISOString()).toBe(observedAt);
+    expect(observedAt).toBe(SAMPLE_OBS.observedAt.toISOString());
+  });
+
+  it("observedAt differs from createdAt (RPC read time is before row insert time)", async () => {
+    getDb.mockReturnValue(createMemoryDb(SAMPLE_OBS));
+    const { GET } = await import(
+      "../../app/api/hexmining/observations/status/route"
+    );
+    const response = await GET();
+    const body = await response.json();
+
+    const { observedAt, createdAt } = body.data.latestObservation;
+    expect(observedAt).not.toBe(createdAt);
+    expect(new Date(observedAt).getTime()).toBeLessThan(
+      new Date(createdAt).getTime(),
+    );
+  });
+
+  it("status is missing when findFirst returns null (all observations invalidated)", async () => {
+    getDb.mockReturnValue(createMemoryDb(null));
+    const { GET } = await import(
+      "../../app/api/hexmining/observations/status/route"
+    );
+    const response = await GET();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data.status).toBe("missing");
+    expect(body.data.latestObservation).toBeNull();
+  });
+
   it("service-level: returns full DTO with injected now and observation", async () => {
     const fixedNow = new Date("2026-06-07T12:00:00.000Z");
     getDb.mockReturnValue(createMemoryDb(SAMPLE_OBS));
@@ -259,6 +325,7 @@ describe("GET /api/hexmining/observations/status route contract", () => {
         rangeStartDay: SAMPLE_OBS.rangeStartDay,
         rangeEndDay: SAMPLE_OBS.rangeEndDay,
         observedAtBlock: "23456789",
+        observedAt: SAMPLE_OBS.observedAt.toISOString(),
         rpcEndpointLabel: SAMPLE_OBS.rpcEndpointLabel,
         payloadHash: SAMPLE_OBS.payloadHash,
         createdAt: SAMPLE_OBS.createdAt.toISOString(),

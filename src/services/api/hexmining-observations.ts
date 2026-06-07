@@ -14,6 +14,7 @@ type ObsRow = {
   rangeStartDay: number;
   rangeEndDay: number;
   observedAtBlock: bigint;
+  observedAt: Date;
   rpcEndpointLabel: string | null;
   payloadHash: string;
   createdAt: Date;
@@ -22,13 +23,18 @@ type ObsRow = {
 type HexObsStatusDbClient = {
   rawHexDailyDataObservation: {
     findFirst(args: {
-      where: { chainId: number; sourceFamily: SourceFamily };
+      where: {
+        chainId: number;
+        sourceFamily: SourceFamily;
+        invalidations: { none: Record<string, unknown> };
+      };
       orderBy: { observedAtBlock: "desc" };
       select: {
         id: true;
         rangeStartDay: true;
         rangeEndDay: true;
         observedAtBlock: true;
+        observedAt: true;
         rpcEndpointLabel: true;
         payloadHash: true;
         createdAt: true;
@@ -50,9 +56,10 @@ export type HexMiningObservationStatusDto = {
     rangeStartDay: number;
     rangeEndDay: number;
     observedAtBlock: string; // bigint serialized as base-10 decimal string (§11.8 policy)
+    observedAt: string; // ISO timestamp of the RPC read
     rpcEndpointLabel: string | null;
     payloadHash: string;
-    createdAt: string; // ISO timestamp
+    createdAt: string; // ISO timestamp of row insert
   } | null;
   provenance: {
     source: "rawHexDailyDataObservation";
@@ -73,6 +80,7 @@ export async function getHexMiningObservationStatus(
     where: {
       chainId: PULSECHAIN_CHAIN_ID,
       sourceFamily: SourceFamily.HEXMINING,
+      invalidations: { none: {} },
     },
     orderBy: { observedAtBlock: "desc" },
     select: {
@@ -80,6 +88,7 @@ export async function getHexMiningObservationStatus(
       rangeStartDay: true,
       rangeEndDay: true,
       observedAtBlock: true,
+      observedAt: true,
       rpcEndpointLabel: true,
       payloadHash: true,
       createdAt: true,
@@ -98,6 +107,7 @@ export async function getHexMiningObservationStatus(
           rangeStartDay: latest.rangeStartDay,
           rangeEndDay: latest.rangeEndDay,
           observedAtBlock: latest.observedAtBlock.toString(),
+          observedAt: latest.observedAt.toISOString(),
           rpcEndpointLabel: latest.rpcEndpointLabel,
           payloadHash: latest.payloadHash,
           createdAt: latest.createdAt.toISOString(),
