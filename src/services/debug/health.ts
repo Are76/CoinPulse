@@ -10,6 +10,10 @@ import {
   getMaterializationDiagnosticsReport,
   type MaterializationDiagnosticsReport,
 } from "@/services/portfolio";
+import {
+  getHexMiningObservationStatus,
+  type HexMiningObservationStatusDto,
+} from "@/services/api/hexmining-observations";
 
 export type DependencyState = "ready" | "degraded" | "unavailable";
 
@@ -47,6 +51,9 @@ export type DebugStatusReport = {
   };
   operationState: OperationStateReport;
   materializationDiagnostics: MaterializationDiagnosticsReport;
+  hexMining: {
+    observationStatus: HexMiningObservationStatusDto | { status: "unavailable" };
+  };
 };
 
 type HealthDependencies = {
@@ -88,6 +95,10 @@ export async function getHealthReport(dependencies: HealthDependencies = {}): Pr
 }
 
 export async function getDebugStatusReport(): Promise<DebugStatusReport> {
+  const hexMiningObsStatus = await getHexMiningObservationStatus().catch(() => ({
+    status: "unavailable" as const,
+  }));
+
   return {
     status: "ok",
     timestamp: new Date().toISOString(),
@@ -106,6 +117,9 @@ export async function getDebugStatusReport(): Promise<DebugStatusReport> {
     },
     operationState: await getOperationStateReport(),
     materializationDiagnostics: await getMaterializationDiagnosticsReport(),
+    hexMining: {
+      observationStatus: hexMiningObsStatus,
+    },
   };
 }
 
