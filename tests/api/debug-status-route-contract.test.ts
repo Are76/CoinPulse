@@ -83,6 +83,28 @@ type RawLogRecord = {
   topic2: string | null;
 };
 
+type HexObsRow = {
+  id: string;
+  rangeStartDay: number;
+  rangeEndDay: number;
+  observedAtBlock: bigint;
+  observedAt: Date;
+  rpcEndpointLabel: string | null;
+  payloadHash: string;
+  createdAt: Date;
+};
+
+const SAMPLE_HEX_OBS: HexObsRow = {
+  id: "obs_debug_test_abc",
+  rangeStartDay: 1000,
+  rangeEndDay: 1099,
+  observedAtBlock: BigInt("23456789"),
+  observedAt: new Date("2026-06-05T23:00:00.000Z"),
+  rpcEndpointLabel: "pulsechain-primary",
+  payloadHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  createdAt: new Date("2026-06-06T00:00:00.000Z"),
+};
+
 function countMatching<T>(rows: T[], predicate: (row: T) => boolean) {
   return rows.filter(predicate).length;
 }
@@ -94,6 +116,7 @@ function createMemoryDb(overrides?: {
   rawBlocks?: RawBlockRecord[];
   rawTransactions?: RawTransactionRecord[];
   rawLogs?: RawLogRecord[];
+  hexObs?: HexObsRow | null | "throw";
 }) {
   const syncRuns = overrides?.syncRuns ?? [];
   const tokenBalances = overrides?.tokenBalances ?? [];
@@ -101,6 +124,7 @@ function createMemoryDb(overrides?: {
   const rawBlocks = overrides?.rawBlocks ?? [];
   const rawTransactions = overrides?.rawTransactions ?? [];
   const rawLogs = overrides?.rawLogs ?? [];
+  const hexObs = overrides?.hexObs ?? null;
 
   return new Proxy(
     {
@@ -227,6 +251,12 @@ function createMemoryDb(overrides?: {
           return materializationStates;
         },
       },
+      rawHexDailyDataObservation: {
+        async findFirst() {
+          if (hexObs === "throw") throw new Error("db-hex-obs-error");
+          return hexObs;
+        },
+      },
     },
     {
       get(target, property, receiver) {
@@ -351,6 +381,7 @@ describe("GET /api/debug/status route contract", () => {
             wallet: { addressLower: WALLET_ADDRESS.toLowerCase() },
           },
         ],
+        hexObs: null,
       }),
     );
 
@@ -437,6 +468,7 @@ describe("GET /api/debug/status route contract", () => {
         rawLogs: [],
         tokenBalances: [],
         materializationStates: [],
+        hexObs: null,
       }),
     );
 
@@ -456,5 +488,121 @@ describe("GET /api/debug/status route contract", () => {
         },
       },
     });
+  });
+
+  // ─── HexMining observation status integration ──────────────────────────────
+
+  it("hexMining.observationStatus appears in debug/status response", async () => {
+    getDb.mockReturnValue(createMemoryDb({ hexObs: null }));
+    const { GET } = await import("../../app/api/debug/status/route");
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data).toHaveProperty("hexMining");
+    expect(body.data.hexMining).toHaveProperty("observationStatus");
+  });
+
+  it("hexMining.observationStatus is available with full DTO when observation exists", async () => {
+    getDb.mockReturnValue(createMemoryDb({ hexObs: SAMPLE_HEX_OBS }));
+    const { GET } = await import("../../app/api/debug/status/route");
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.hexMining.observationStatus).toMatchObject({
+      schemaVersion: "v1",
+      chainId: 369,
+      sourceFamily: "HEXMINING",
+      status: "available",
+      asOf: expect.any(String),
+      latestObservation: {
+        id: SAMPLE_HEX_OBS.id,
+        rangeStartDay: SAMPLE_HEX_OBS.rangeStartDay,
+        rangeEndDay: SAMPLE_HEX_OBS.rangeEndDay,
+        observedAtBlock: "23456789",
+        observedAt: SAMPLE_HEX_OBS.observedAt.toISOString(),
+        rpcEndpointLabel: SAMPLE_HEX_OBS.rpcEndpointLabel,
+        payloadHash: SAMPLE_HEX_OBS.payloadHash,
+        createdAt: SAMPLE_HEX_OBS.createdAt.toISOString(),
+      },
+      provenance: { source: "rawHexDailyDataObservation", storage: "postgres" },
+      warnings: [],
+    });
+  });
+
+  it("hexMining.observationStatus is missing with null latestObservation when no observation exists", async () => {
+    getDb.mockReturnValue(createMemoryDb({ hexObs: null }));
+    const { GET } = await import("../../app/api/debug/status/route");
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.hexMining.observationStatus).toMatchObject({
+      schemaVersion: "v1",
+      chainId: 369,
+      sourceFamily: "HEXMINING",
+      status: "missing",
+      latestObservation: null,
+    });
+  });
+
+  it("hexMining.observationStatus is unavailable when service throws; overall route still returns 200", async () => {
+    getDb.mockReturnValue(createMemoryDb({ hexObs: "throw" }));
+    const { GET } = await import("../../app/api/debug/status/route");
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.hexMining.observationStatus).toEqual({ status: "unavailable" });
+  });
+
+  it("canonicalPayload is not present in debug/status response", async () => {
+    getDb.mockReturnValue(createMemoryDb({ hexObs: SAMPLE_HEX_OBS }));
+    const { GET } = await import("../../app/api/debug/status/route");
+    const response = await GET();
+    const body = await response.json();
+
+    expect(JSON.stringify(body)).not.toContain("canonicalPayload");
+  });
+
+  it("observedAt is preserved in latestObservation when observation exists", async () => {
+    getDb.mockReturnValue(createMemoryDb({ hexObs: SAMPLE_HEX_OBS }));
+    const { GET } = await import("../../app/api/debug/status/route");
+    const response = await GET();
+    const body = await response.json();
+
+    const observedAt: string =
+      body.data.hexMining.observationStatus.latestObservation.observedAt;
+    expect(typeof observedAt).toBe("string");
+    expect(new Date(observedAt).toISOString()).toBe(observedAt);
+    expect(observedAt).toBe(SAMPLE_HEX_OBS.observedAt.toISOString());
+  });
+
+  it("debug/status integration exercises rawHexDailyDataObservation via the service (no duplicated DB logic)", async () => {
+    const findFirstCalls: Array<{ where: Record<string, unknown> }> = [];
+    getDb.mockReturnValue({
+      syncRun: { async findMany() { return []; }, async findFirst() { return null; } },
+      rawBlock: { async count() { return 0; } },
+      rawTransaction: { async count() { return 0; } },
+      rawLog: { async count() { return 0; } },
+      portfolioTokenBalance: { async findMany() { return []; } },
+      portfolioLpPosition: { async findMany() { return []; } },
+      portfolioStakePosition: { async findMany() { return []; } },
+      portfolioMaterializationState: { async findMany() { return []; } },
+      rawHexDailyDataObservation: {
+        async findFirst(args: { where: Record<string, unknown> }) {
+          findFirstCalls.push(args);
+          return null;
+        },
+      },
+    });
+    const { GET } = await import("../../app/api/debug/status/route");
+    await GET();
+
+    expect(findFirstCalls).toHaveLength(1);
+    expect(findFirstCalls[0]!.where.chainId).toBe(369);
+    expect(findFirstCalls[0]!.where.sourceFamily).toBe("HEXMINING");
+    expect(findFirstCalls[0]!.where.invalidations).toEqual({ none: {} });
   });
 });

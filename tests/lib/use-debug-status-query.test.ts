@@ -41,6 +41,21 @@ const MOCK_STATUS = {
     persistedObservationsOnly: true as const,
     liveAdaptersEnabled: false as const,
   },
+  hexMining: {
+    observationStatus: {
+      schemaVersion: "v1" as const,
+      chainId: 369,
+      sourceFamily: "HEXMINING" as const,
+      status: "missing" as const,
+      asOf: "2026-01-01T00:00:00.000Z",
+      latestObservation: null,
+      provenance: {
+        source: "rawHexDailyDataObservation" as const,
+        storage: "postgres" as const,
+      },
+      warnings: [],
+    },
+  },
 };
 
 describe("useDebugStatusQuery", () => {

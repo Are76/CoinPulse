@@ -9,6 +9,37 @@ import {
   runRebuild,
 } from "@/lib/api/debug-client";
 
+const HEX_OBS_MISSING = {
+  schemaVersion: "v1" as const,
+  chainId: 369,
+  sourceFamily: "HEXMINING" as const,
+  status: "missing" as const,
+  asOf: "2026-06-07T00:00:00.000Z",
+  latestObservation: null,
+  provenance: { source: "rawHexDailyDataObservation" as const, storage: "postgres" as const },
+  warnings: [],
+};
+
+const HEX_OBS_AVAILABLE = {
+  schemaVersion: "v1" as const,
+  chainId: 369,
+  sourceFamily: "HEXMINING" as const,
+  status: "available" as const,
+  asOf: "2026-06-07T00:00:00.000Z",
+  latestObservation: {
+    id: "obs_abc",
+    rangeStartDay: 1000,
+    rangeEndDay: 1099,
+    observedAtBlock: "23456789",
+    observedAt: "2026-06-05T23:00:00.000Z",
+    rpcEndpointLabel: "pulsechain-primary",
+    payloadHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  },
+  provenance: { source: "rawHexDailyDataObservation" as const, storage: "postgres" as const },
+  warnings: [],
+};
+
 const originalFetch = global.fetch;
 
 describe("debug client", () => {
@@ -55,6 +86,7 @@ describe("debug client", () => {
                 persistedObservationsOnly: true,
                 liveAdaptersEnabled: false,
               },
+              hexMining: { observationStatus: HEX_OBS_MISSING },
             },
           }),
           { status: 200 },
@@ -178,5 +210,88 @@ describe("debug client", () => {
       code: "INTERNAL_ERROR",
       message: "Internal server error.",
     });
+  });
+
+  // ─── hexMining.observationStatus client schema tests ──────────────────────────
+
+  function makeStatusResponse(observationStatus: unknown) {
+    return new Response(
+      JSON.stringify({
+        data: {
+          status: "ok",
+          timestamp: "2026-06-07T00:00:00.000Z",
+          app: { env: "development" },
+          supportedChains: [],
+          sourceFamilies: [],
+          pricing: { persistedObservationsOnly: true, liveAdaptersEnabled: false },
+          hexMining: { observationStatus },
+        },
+      }),
+      { status: 200 },
+    );
+  }
+
+  it("fetchDebugStatus preserves hexMining.observationStatus when status is missing", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(makeStatusResponse(HEX_OBS_MISSING)) as typeof fetch;
+
+    const result = await fetchDebugStatus();
+    expect(result.hexMining.observationStatus.status).toBe("missing");
+    expect(result.hexMining.observationStatus).toMatchObject({
+      schemaVersion: "v1",
+      chainId: 369,
+      sourceFamily: "HEXMINING",
+      status: "missing",
+      latestObservation: null,
+    });
+  });
+
+  it("fetchDebugStatus preserves hexMining.observationStatus when status is available with latestObservation", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(makeStatusResponse(HEX_OBS_AVAILABLE)) as typeof fetch;
+
+    const result = await fetchDebugStatus();
+    expect(result.hexMining.observationStatus.status).toBe("available");
+    if (result.hexMining.observationStatus.status === "available") {
+      expect(result.hexMining.observationStatus.latestObservation).not.toBeNull();
+      expect(result.hexMining.observationStatus.latestObservation?.observedAt).toBe(
+        "2026-06-05T23:00:00.000Z",
+      );
+      expect(result.hexMining.observationStatus.latestObservation?.createdAt).toBe(
+        "2026-06-06T00:00:00.000Z",
+      );
+      expect(result.hexMining.observationStatus.latestObservation?.observedAtBlock).toBe(
+        "23456789",
+      );
+    }
+  });
+
+  it("fetchDebugStatus preserves hexMining.observationStatus when status is unavailable", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(makeStatusResponse({ status: "unavailable" })) as typeof fetch;
+
+    const result = await fetchDebugStatus();
+    expect(result.hexMining.observationStatus).toEqual({ status: "unavailable" });
+  });
+
+  it("fetchDebugStatus does not expose canonicalPayload via client schema", async () => {
+    const obsWithPayload = {
+      ...HEX_OBS_AVAILABLE,
+      canonicalPayload: '{"secret":"data"}',
+      latestObservation: {
+        ...HEX_OBS_AVAILABLE.latestObservation,
+        canonicalPayload: '{"secret":"data"}',
+      },
+    };
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(makeStatusResponse(obsWithPayload)) as typeof fetch;
+
+    const result = await fetchDebugStatus();
+    expect(JSON.stringify(result)).not.toContain("canonicalPayload");
+    expect(JSON.stringify(result)).not.toContain('"secret"');
   });
 });
