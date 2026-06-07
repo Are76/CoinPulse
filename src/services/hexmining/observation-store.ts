@@ -62,6 +62,41 @@ export type CreateRawHexDailyDataObservationInvalidationInput = {
   supersededByObservationId?: string | null;
 };
 
+// ─── Canonical payload validation ─────────────────────────────────────────────
+
+// Rejects any payload that contains a numeric JSON value anywhere in its
+// structure. All uint*/int* contract values must be base-10 decimal strings
+// before they reach the persistence boundary (§11.8 bigint-safe policy).
+// Throws before hashing or writing if the payload is not canonical.
+export function validateCanonicalPayload(canonicalPayload: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(canonicalPayload);
+  } catch {
+    throw new Error("Non-canonical payload: invalid JSON.");
+  }
+  rejectNumericValues(parsed);
+}
+
+function rejectNumericValues(value: unknown): void {
+  if (typeof value === "number") {
+    throw new Error(
+      "Non-canonical payload: numeric JSON values are not allowed. Use decimal-string encoding.",
+    );
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      rejectNumericValues(item);
+    }
+    return;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const v of Object.values(value as Record<string, unknown>)) {
+      rejectNumericValues(v);
+    }
+  }
+}
+
 // ─── Hash helper ──────────────────────────────────────────────────────────────
 
 // Returns the SHA-256 hex digest of the canonical payload string.
@@ -77,6 +112,7 @@ export async function persistHexDailyDataObservation(
   input: CreateRawHexDailyDataObservationInput,
   client: ObservationStoreClient = getDb(),
 ): Promise<{ id: string }> {
+  validateCanonicalPayload(input.canonicalPayload);
   return client.rawHexDailyDataObservation.create({
     data: {
       chainId: input.chainId,

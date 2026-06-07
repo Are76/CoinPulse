@@ -2,15 +2,17 @@
 //
 // Verifies the write contract for RawHexDailyDataObservation persistence:
 //
-//   1. computePayloadHash produces a deterministic 64-char SHA-256 hex digest.
-//   2. persistHexDailyDataObservation always writes sourceFamily=HEXMINING —
+//   1. validateCanonicalPayload rejects numeric JSON values anywhere in the
+//      payload structure (§11.8 bigint-safe encoding policy).
+//   2. computePayloadHash produces a deterministic 64-char SHA-256 hex digest.
+//   3. persistHexDailyDataObservation always writes sourceFamily=HEXMINING —
 //      callers cannot override it (enforced by both the input type and the service).
-//   3. persistHexDailyDataObservation derives payloadHash from canonicalPayload —
+//   4. persistHexDailyDataObservation derives payloadHash from canonicalPayload —
 //      callers cannot supply a pre-computed hash.
-//   4. Optional fields default correctly (warnings → [], rpcEndpointLabel → null).
-//   5. persistHexDailyDataObservationInvalidation writes only the reference id —
+//   5. Optional fields default correctly (warnings → [], rpcEndpointLabel → null).
+//   6. persistHexDailyDataObservationInvalidation writes only the reference id —
 //      the original observation row is never mutated (append-only guarantee).
-//   6. Compile-time guards: type-level conditionals confirm that sourceFamily
+//   7. Compile-time guards: type-level conditionals confirm that sourceFamily
 //      and payloadHash are absent from the caller's input type.
 //
 // No live database, no RPC, no viem, no API routes. Pure in-memory mock DB.
@@ -25,6 +27,7 @@ import {
   computePayloadHash,
   persistHexDailyDataObservation,
   persistHexDailyDataObservationInvalidation,
+  validateCanonicalPayload,
   type CreateRawHexDailyDataObservationInput,
   type CreateRawHexDailyDataObservationInvalidationInput,
 } from "@/services/hexmining/observation-store";
@@ -75,7 +78,87 @@ const BASE_OBS: CreateRawHexDailyDataObservationInput = {
   ]),
 };
 
-// ─── 1. computePayloadHash ────────────────────────────────────────────────────
+// ─── 1. validateCanonicalPayload ──────────────────────────────────────────────
+
+describe("validateCanonicalPayload", () => {
+  // ── valid payloads ──────────────────────────────────────────────────────────
+
+  it("accepts an empty array payload", () => {
+    expect(() => validateCanonicalPayload("[]")).not.toThrow();
+  });
+
+  it("accepts a payload with decimal-string numeric values (canonical form)", () => {
+    const payload = JSON.stringify([
+      { dayPayoutTotal: "123456789012345678", dayStakeSharesTotal: "9876543210", dayUnclaimedSatoshisTotal: "0" },
+    ]);
+    expect(() => validateCanonicalPayload(payload)).not.toThrow();
+  });
+
+  it("accepts payloads containing boolean values", () => {
+    expect(() => validateCanonicalPayload(JSON.stringify([{ active: true }]))).not.toThrow();
+  });
+
+  it("accepts payloads containing null values", () => {
+    expect(() => validateCanonicalPayload(JSON.stringify([{ field: null }]))).not.toThrow();
+  });
+
+  it("accepts payloads containing nested objects with only string values", () => {
+    const payload = JSON.stringify([{ meta: { source: "pulsechain-primary", version: "v1" } }]);
+    expect(() => validateCanonicalPayload(payload)).not.toThrow();
+  });
+
+  // ── invalid payloads: numeric values ───────────────────────────────────────
+
+  it("rejects a payload with a top-level numeric value in an object", () => {
+    const payload = JSON.stringify([{ dayPayoutTotal: 123456789 }]);
+    expect(() => validateCanonicalPayload(payload)).toThrow(
+      "Non-canonical payload: numeric JSON values are not allowed. Use decimal-string encoding.",
+    );
+  });
+
+  it("rejects a payload with a numeric value in a nested object", () => {
+    const payload = JSON.stringify([{ meta: { count: 5 } }]);
+    expect(() => validateCanonicalPayload(payload)).toThrow(
+      "Non-canonical payload: numeric JSON values are not allowed.",
+    );
+  });
+
+  it("rejects a payload with a numeric value in a nested array", () => {
+    const payload = JSON.stringify([{ values: [1, 2, 3] }]);
+    expect(() => validateCanonicalPayload(payload)).toThrow(
+      "Non-canonical payload: numeric JSON values are not allowed.",
+    );
+  });
+
+  it("rejects a payload that is a bare JSON number", () => {
+    expect(() => validateCanonicalPayload("42")).toThrow(
+      "Non-canonical payload: numeric JSON values are not allowed.",
+    );
+  });
+
+  it("rejects a payload containing 0 as a number (not the string \"0\")", () => {
+    const payload = JSON.stringify([{ dayUnclaimedSatoshisTotal: 0 }]);
+    expect(() => validateCanonicalPayload(payload)).toThrow(
+      "Non-canonical payload: numeric JSON values are not allowed.",
+    );
+  });
+
+  // ── invalid payloads: malformed JSON ───────────────────────────────────────
+
+  it("rejects malformed JSON", () => {
+    expect(() => validateCanonicalPayload("not json")).toThrow(
+      "Non-canonical payload: invalid JSON.",
+    );
+  });
+
+  it("rejects empty string (not valid JSON)", () => {
+    expect(() => validateCanonicalPayload("")).toThrow(
+      "Non-canonical payload: invalid JSON.",
+    );
+  });
+});
+
+// ─── 2. computePayloadHash ──────────────────────────────────────────────────
 
 describe("computePayloadHash", () => {
   it("returns a 64-character lowercase hex string (SHA-256 digest)", () => {
@@ -222,6 +305,39 @@ describe("persistHexDailyDataObservation — optional field defaults", () => {
     const result = await persistHexDailyDataObservation(BASE_OBS, db);
     expect(result).toHaveProperty("id");
     expect(typeof result.id).toBe("string");
+  });
+
+  it("throws and does not call create when canonicalPayload contains a numeric value", async () => {
+    const { db, obsCalls } = createMockDb();
+    const invalidPayload = JSON.stringify([{ dayPayoutTotal: 123456789 }]);
+
+    await expect(
+      persistHexDailyDataObservation({ ...BASE_OBS, canonicalPayload: invalidPayload }, db),
+    ).rejects.toThrow("Non-canonical payload: numeric JSON values are not allowed.");
+
+    // create must never be called — the write is blocked before hashing
+    expect(obsCalls).toHaveLength(0);
+  });
+
+  it("throws and does not call create when canonicalPayload is malformed JSON", async () => {
+    const { db, obsCalls } = createMockDb();
+
+    await expect(
+      persistHexDailyDataObservation({ ...BASE_OBS, canonicalPayload: "bad json" }, db),
+    ).rejects.toThrow("Non-canonical payload: invalid JSON.");
+
+    expect(obsCalls).toHaveLength(0);
+  });
+
+  it("does call create for a valid decimal-string payload (validation passes)", async () => {
+    const { db, obsCalls } = createMockDb();
+    const validPayload = JSON.stringify([{ dayPayoutTotal: "123456789012345678" }]);
+
+    await persistHexDailyDataObservation({ ...BASE_OBS, canonicalPayload: validPayload }, db);
+
+    expect(obsCalls).toHaveLength(1);
+    expect(obsCalls[0]!.data.canonicalPayload).toBe(validPayload);
+    expect(obsCalls[0]!.data.payloadHash).toBe(computePayloadHash(validPayload));
   });
 });
 
