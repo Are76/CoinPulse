@@ -11,6 +11,18 @@ import { getDb } from "@/lib/db";
 // the full Prisma import at the persistence call-sites.
 type ObservationStoreClient = {
   rawHexDailyDataObservation: {
+    findFirst(args: {
+      where: {
+        chainId: number;
+        sourceFamily: SourceFamily;
+        rangeStartDay: number;
+        rangeEndDay: number;
+        observedAtBlock: bigint;
+        rpcEndpointLabel: string | null;
+        payloadHash: string;
+      };
+      select: { id: true };
+    }): Promise<{ id: string } | null>;
     create(args: {
       data: {
         chainId: number;
@@ -113,6 +125,25 @@ export async function persistHexDailyDataObservation(
   client: ObservationStoreClient = getDb(),
 ): Promise<{ id: string }> {
   validateCanonicalPayload(input.canonicalPayload);
+
+  const payloadHash = computePayloadHash(input.canonicalPayload);
+  const rpcEndpointLabel = input.rpcEndpointLabel ?? null;
+
+  const existing = await client.rawHexDailyDataObservation.findFirst({
+    where: {
+      chainId: input.chainId,
+      sourceFamily: SourceFamily.HEXMINING,
+      rangeStartDay: input.rangeStartDay,
+      rangeEndDay: input.rangeEndDay,
+      observedAtBlock: input.observedAtBlock,
+      rpcEndpointLabel,
+      payloadHash,
+    },
+    select: { id: true },
+  });
+
+  if (existing) return { id: existing.id };
+
   return client.rawHexDailyDataObservation.create({
     data: {
       chainId: input.chainId,
@@ -121,10 +152,10 @@ export async function persistHexDailyDataObservation(
       rangeEndDay: input.rangeEndDay,
       observedAtBlock: input.observedAtBlock,
       observedAt: input.observedAt,
-      rpcEndpointLabel: input.rpcEndpointLabel ?? null,
+      rpcEndpointLabel,
       payloadVersion: input.payloadVersion,
       canonicalPayload: input.canonicalPayload,
-      payloadHash: computePayloadHash(input.canonicalPayload),
+      payloadHash,
       warnings: input.warnings ?? [],
     },
   });

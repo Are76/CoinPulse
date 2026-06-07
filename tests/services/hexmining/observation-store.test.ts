@@ -40,14 +40,31 @@ import {
 
 type ObsCreateArg = { data: Record<string, unknown> };
 type InvCreateArg = { data: Record<string, unknown> };
+type FindFirstArg = {
+  where: {
+    chainId: number;
+    sourceFamily: SourceFamily;
+    rangeStartDay: number;
+    rangeEndDay: number;
+    observedAtBlock: bigint;
+    rpcEndpointLabel: string | null;
+    payloadHash: string;
+  };
+  select: { id: true };
+};
 
 function createMockDb() {
   let idCounter = 0;
   const obsCalls: ObsCreateArg[] = [];
   const invCalls: InvCreateArg[] = [];
+  const findFirstCalls: FindFirstArg[] = [];
 
   const db = {
     rawHexDailyDataObservation: {
+      findFirst: vi.fn((args: FindFirstArg) => {
+        findFirstCalls.push(args);
+        return Promise.resolve(null as { id: string } | null);
+      }),
       create: vi.fn((args: ObsCreateArg) => {
         obsCalls.push(args);
         return Promise.resolve({ id: `obs_${++idCounter}` });
@@ -61,7 +78,7 @@ function createMockDb() {
     },
   };
 
-  return { db, obsCalls, invCalls };
+  return { db, obsCalls, invCalls, findFirstCalls };
 }
 
 // ─── Minimal valid observation input ─────────────────────────────────────────
@@ -307,25 +324,27 @@ describe("persistHexDailyDataObservation — optional field defaults", () => {
     expect(typeof result.id).toBe("string");
   });
 
-  it("throws and does not call create when canonicalPayload contains a numeric value", async () => {
-    const { db, obsCalls } = createMockDb();
+  it("throws and does not call findFirst or create when canonicalPayload contains a numeric value", async () => {
+    const { db, obsCalls, findFirstCalls } = createMockDb();
     const invalidPayload = JSON.stringify([{ dayPayoutTotal: 123456789 }]);
 
     await expect(
       persistHexDailyDataObservation({ ...BASE_OBS, canonicalPayload: invalidPayload }, db),
     ).rejects.toThrow("Non-canonical payload: numeric JSON values are not allowed.");
 
-    // create must never be called — the write is blocked before hashing
+    // validation runs before find/create — neither must be called
+    expect(findFirstCalls).toHaveLength(0);
     expect(obsCalls).toHaveLength(0);
   });
 
-  it("throws and does not call create when canonicalPayload is malformed JSON", async () => {
-    const { db, obsCalls } = createMockDb();
+  it("throws and does not call findFirst or create when canonicalPayload is malformed JSON", async () => {
+    const { db, obsCalls, findFirstCalls } = createMockDb();
 
     await expect(
       persistHexDailyDataObservation({ ...BASE_OBS, canonicalPayload: "bad json" }, db),
     ).rejects.toThrow("Non-canonical payload: invalid JSON.");
 
+    expect(findFirstCalls).toHaveLength(0);
     expect(obsCalls).toHaveLength(0);
   });
 
@@ -341,7 +360,102 @@ describe("persistHexDailyDataObservation — optional field defaults", () => {
   });
 });
 
-// ─── 5. persistHexDailyDataObservationInvalidation — append-only guarantee ───
+// ─── 5. persistHexDailyDataObservation — service-layer deduplication ─────────
+
+describe("persistHexDailyDataObservation — service-layer deduplication", () => {
+  // A. Duplicate observation returns existing id without calling create
+  it("returns existing id and skips create when dedup key already exists", async () => {
+    const { db, obsCalls } = createMockDb();
+    db.rawHexDailyDataObservation.findFirst.mockResolvedValueOnce({ id: "existing_obs_id" });
+
+    const result = await persistHexDailyDataObservation(BASE_OBS, db);
+
+    expect(result).toEqual({ id: "existing_obs_id" });
+    expect(obsCalls).toHaveLength(0);
+  });
+
+  // B. New observation creates row when no existing match
+  it("calls create when findFirst returns null (no dedup match)", async () => {
+    const { db, obsCalls } = createMockDb();
+    // findFirst returns null by default
+
+    const result = await persistHexDailyDataObservation(BASE_OBS, db);
+
+    expect(obsCalls).toHaveLength(1);
+    expect(result).toHaveProperty("id");
+  });
+
+  // C. Dedup query uses full key including computed payloadHash
+  it("dedup findFirst query includes all seven key fields", async () => {
+    const { db, findFirstCalls } = createMockDb();
+    await persistHexDailyDataObservation(BASE_OBS, db);
+
+    const where = findFirstCalls[0]!.where;
+    expect(where.chainId).toBe(BASE_OBS.chainId);
+    expect(where.sourceFamily).toBe(SourceFamily.HEXMINING);
+    expect(where.rangeStartDay).toBe(BASE_OBS.rangeStartDay);
+    expect(where.rangeEndDay).toBe(BASE_OBS.rangeEndDay);
+    expect(where.observedAtBlock).toBe(BASE_OBS.observedAtBlock);
+    expect(where.rpcEndpointLabel).toBeNull(); // undefined input normalized to null
+    expect(where.payloadHash).toBe(computePayloadHash(BASE_OBS.canonicalPayload));
+  });
+
+  it("dedup query includes rpcEndpointLabel when provided", async () => {
+    const { db, findFirstCalls } = createMockDb();
+    await persistHexDailyDataObservation(
+      { ...BASE_OBS, rpcEndpointLabel: "pulsechain-primary" },
+      db,
+    );
+
+    expect(findFirstCalls[0]!.where.rpcEndpointLabel).toBe("pulsechain-primary");
+  });
+
+  // D. Different rpcEndpointLabel is a distinct dedup key — no dedup
+  it("does not dedup when rpcEndpointLabel differs — create is called", async () => {
+    const { db, findFirstCalls, obsCalls } = createMockDb();
+    // findFirst returns null (no match for endpoint-b)
+
+    await persistHexDailyDataObservation(
+      { ...BASE_OBS, rpcEndpointLabel: "endpoint-b" },
+      db,
+    );
+
+    expect(findFirstCalls[0]!.where.rpcEndpointLabel).toBe("endpoint-b");
+    expect(obsCalls).toHaveLength(1);
+  });
+
+  // E. Different payloadHash (different canonicalPayload) is a distinct dedup key
+  it("does not dedup when canonicalPayload differs — different payloadHash queried", async () => {
+    const { db, findFirstCalls, obsCalls } = createMockDb();
+    const differentPayload = JSON.stringify([{ dayPayoutTotal: "999" }]);
+
+    await persistHexDailyDataObservation(
+      { ...BASE_OBS, canonicalPayload: differentPayload },
+      db,
+    );
+
+    expect(findFirstCalls[0]!.where.payloadHash).toBe(computePayloadHash(differentPayload));
+    expect(findFirstCalls[0]!.where.payloadHash).not.toBe(
+      computePayloadHash(BASE_OBS.canonicalPayload),
+    );
+    expect(obsCalls).toHaveLength(1);
+  });
+
+  // F. Invalid payload blocks findFirst and create
+  it("throws before findFirst or create when canonicalPayload has a numeric value", async () => {
+    const { db, findFirstCalls, obsCalls } = createMockDb();
+    const invalidPayload = JSON.stringify([{ dayPayoutTotal: 123456789 }]);
+
+    await expect(
+      persistHexDailyDataObservation({ ...BASE_OBS, canonicalPayload: invalidPayload }, db),
+    ).rejects.toThrow("Non-canonical payload: numeric JSON values are not allowed.");
+
+    expect(findFirstCalls).toHaveLength(0);
+    expect(obsCalls).toHaveLength(0);
+  });
+});
+
+// ─── 6. persistHexDailyDataObservationInvalidation — append-only guarantee ───
 
 describe("persistHexDailyDataObservationInvalidation — append-only reference", () => {
   it("stores only the observationId reference — not the observation's payload", async () => {
