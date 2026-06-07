@@ -42,6 +42,36 @@ const healthReportSchema = z.object({
   }),
 });
 
+const hexMiningLatestObservationSchema = z.object({
+  id: z.string(),
+  rangeStartDay: z.number(),
+  rangeEndDay: z.number(),
+  observedAtBlock: z.string(),
+  observedAt: z.string(),
+  rpcEndpointLabel: z.string().nullable(),
+  payloadHash: z.string(),
+  createdAt: z.string(),
+});
+
+const hexMiningObsDtoBaseSchema = z.object({
+  schemaVersion: z.literal("v1"),
+  chainId: z.number(),
+  sourceFamily: z.literal("HEXMINING"),
+  asOf: z.string(),
+  latestObservation: hexMiningLatestObservationSchema.nullable(),
+  provenance: z.object({
+    source: z.literal("rawHexDailyDataObservation"),
+    storage: z.literal("postgres"),
+  }),
+  warnings: z.array(z.string()),
+});
+
+const hexMiningObservationSurfaceSchema = z.discriminatedUnion("status", [
+  hexMiningObsDtoBaseSchema.extend({ status: z.literal("available") }),
+  hexMiningObsDtoBaseSchema.extend({ status: z.literal("missing") }),
+  z.object({ status: z.literal("unavailable") }),
+]);
+
 const debugStatusReportSchema = z.object({
   status: z.literal("ok"),
   timestamp: z.string(),
@@ -59,6 +89,9 @@ const debugStatusReportSchema = z.object({
   pricing: z.object({
     persistedObservationsOnly: z.literal(true),
     liveAdaptersEnabled: z.literal(false),
+  }),
+  hexMining: z.object({
+    observationStatus: hexMiningObservationSurfaceSchema,
   }),
 });
 
