@@ -29,6 +29,10 @@ const observationCreateSchema = z
   });
 
 export async function POST(request: Request) {
+  if (process.env.HEXMINING_OBSERVATION_ADMIN_ENABLED !== "true") {
+    return Response.json({ error: { code: "NOT_FOUND", message: "Not found." } }, { status: 404 });
+  }
+
   try {
     const input = await parseJsonBody(observationCreateSchema, request);
     const publicClient = createPublicClientForChain() as unknown as HexMiningReadClient;
