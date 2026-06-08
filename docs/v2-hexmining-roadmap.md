@@ -1,8 +1,8 @@
 # V2 HexMining Roadmap
 
-**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4 observation model decisions resolved. Yield type contracts complete.
+**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4 observation/status chain complete (PRs #199–#202). Observation read boundary is the next implementation slice.
 **Created:** 2026-06-06
-**Last updated:** 2026-06-06 (Phase 4 observation model — Decisions 1 & 2 resolved)
+**Last updated:** 2026-06-08 (Phase 4A observation/status chain complete — PRs #199–#202; read boundary next)
 
 ## Phase completion status
 
@@ -12,7 +12,9 @@
 | Phase 1 | HexMining DTO contract skeleton | ✅ Complete — merged PR #189 |
 | Phase 2 | Native PulseChain active stake reads | ✅ Complete — merged PRs #190, #191 |
 | Phase 3 | HexMining page shell / unsupported valuation display | ✅ Complete — merged PRs #192, #193 |
-| Phase 4 | dailyData and yield support | 🔲 Type contracts complete — observation model decided — persistence contract next |
+| Phase 4A | Observation persistence, status API, and operator surface | ✅ Complete — merged PRs #199–#202 |
+| Phase 4B | dailyDataRange observation read boundary | 🔲 Next — see §11.12 |
+| Phase 4C | Yield estimation and DTO wiring | 🔲 Not started — requires Phase 4B complete |
 | Phase 5 | Ended stake discovery | 🔲 Not started |
 | Phase 6 | HSI and HTT source families | 🔲 Not started |
 | Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
@@ -484,7 +486,7 @@ This section documents the decisions that must be resolved or explicitly framed 
 
 ---
 
-### 11.1 Phase completion summary (Phases 0–3)
+### 11.1 Phase completion summary (Phases 0–3 and Phase 4A)
 
 | PR | Title | Scope |
 |---|---|---|
@@ -497,8 +499,12 @@ This section documents the decisions that must be resolved or explicitly framed 
 | #194 | `docs(hexmining): define Phase 4 yield decisions` | §11 kickoff — yield status policy, Phase 4 guardrails, Decision 1/2 framing |
 | #195 | `test(hexmining): define yield status contract` | `types.ts` yield widening; `yield-contract.test.ts` (53 tests) |
 | #196 | `test(hexmining): enforce yield dto invariants` | `types.ts` discriminated union + BPD intersection; `yield-dto-invariants.test.ts` (44 tests) |
+| #199 | `feat(hexmining): add observation persistence service contract` | `observation-store.ts`: `validateCanonicalPayload`, `computePayloadHash`, `persistHexDailyDataObservation` (with service-layer dedup), `persistHexDailyDataObservationInvalidation`; 76 tests |
+| #200 | `feat(hexmining): expose observation status DTO` | `GET /api/hexmining/observations/status`; read-only DB-backed `HexMiningObservationStatusDto`; bigint-safe `observedAtBlock`; route + service contract tests |
+| #201 | `fix(hexmining): report observation freshness and invalidation status` | Added `observedAt` to `HexMiningObservationStatusDto`; filtered invalidated observations with `invalidations: { none: {} }`; 4 new tests |
+| #202 | `feat(hexmining): surface observation status in debug status` | `data.hexMining.observationStatus` in `GET /api/debug/status`; `hexMining` added to `debugStatusReportSchema` in `debug-client.ts` (discriminated union for available/missing/unavailable); 7 + 4 new tests |
 
-Post-merge audit (2026-06-06, after PR #196): all 1265 tests pass, lint clean, typecheck clean, build clean, no guardrail violations.
+Post-merge audit (2026-06-08, after PR #202): all 1354 tests pass, lint clean, typecheck clean, build clean, no guardrail violations.
 
 ---
 
@@ -823,29 +829,165 @@ No step may be skipped. No live `dailyDataRange` reads reach production before S
 
 ---
 
+### 11.11 Phase 4A completed work — observation persistence and status surface
+
+**Status: COMPLETE — merged PRs #199–#202.**
+
+The four PRs in this sub-phase delivered the operator observability surface for persisted `RawHexDailyDataObservation` records. They are a prerequisite for Phase 4B but do not themselves introduce any dailyDataRange read logic, yield calculation, or schema beyond what was already in place.
+
+#### What was completed
+
+| Area | What was added |
+|---|---|
+| Persistence service contract | `src/services/hexmining/observation-store.ts`: `validateCanonicalPayload()`, `computePayloadHash()`, `persistHexDailyDataObservation()` (with service-layer dedup), `persistHexDailyDataObservationInvalidation()` |
+| Canonical payload validation | Rejects any observation whose `canonicalPayload` contains a numeric JSON value (§11.8 bigint-safe policy). Throws before hashing or writing. |
+| Service-layer dedup | `findFirst` with `(chainId, sourceFamily, rangeStartDay, rangeEndDay, observedAtBlock, rpcEndpointLabel, payloadHash)` dedupe key before `create`; returns existing row ID without error if already present |
+| Observation status route | `GET /api/hexmining/observations/status` — read-only, DB-backed, returns `HexMiningObservationStatusDto` |
+| `observedAt` freshness | Status DTO includes both `observedAt` (RPC read timestamp) and `createdAt` (DB insert timestamp) in `latestObservation` |
+| Invalidation-safe semantics | `findFirst` uses `invalidations: { none: {} }` to exclude any observation that carries a `RawHexDailyDataObservationInvalidation` row; returns `status: "missing"` when all observations are invalidated |
+| Debug/status surface | `GET /api/debug/status` now includes `data.hexMining.observationStatus` (full DTO, or `{ status: "unavailable" }` on service failure) via the existing `getHexMiningObservationStatus()` service — no DB truth logic duplicated |
+| Client schema alignment | `debugStatusReportSchema` in `src/lib/api/debug-client.ts` includes `hexMining.observationStatus` as a discriminated union (`available` \| `missing` \| `unavailable`) so Zod does not strip the field for `fetchDebugStatus` / `useDebugStatusQuery` consumers |
+
+#### Truth and status model established by Phase 4A
+
+These rules govern all HexMining observation status surfaces. They must be preserved in every subsequent PR.
+
+**Persistence truth:**
+- PostgreSQL-persisted `rawHexDailyDataObservation` rows are the backend source of truth for operator status.
+- RPC is upstream ingestion input only. Frontend code never calls RPC. Backend readers call RPC and persist the result.
+- `canonicalPayload` is stored in the DB and validated before persistence; it is never exposed through status or debug DTOs. Status routes expose metadata only (`id`, `rangeStartDay`, `rangeEndDay`, `observedAtBlock`, `rpcEndpointLabel`, `payloadHash`, `observedAt`, `createdAt`).
+
+**Timestamp semantics:**
+- `observedAt` = the ISO timestamp at which the RPC read was taken (set by the caller before calling `persistHexDailyDataObservation`).
+- `createdAt` = the ISO timestamp at which the row was inserted into the database (set by the DB via `@default(now())`).
+- These two fields are distinct and both must be present in the status DTO. `observedAt` is the freshness signal for consumers; `createdAt` is the persistence audit timestamp. Neither replaces the other.
+
+**Invalidation semantics:**
+- Invalidated observations must never be silently returned as usable `"available"` observations.
+- The `findFirst` where clause must always include `invalidations: { none: {} }` to exclude rows with a `RawHexDailyDataObservationInvalidation` record.
+- When all observations are invalidated (or none exist), the status is `"missing"` — not an error, not `"available"` with a warning.
+
+**Debug/status service contract:**
+- `GET /api/debug/status` surfaces `data.hexMining.observationStatus` by calling `getHexMiningObservationStatus()` from the existing service.
+- The debug/status aggregation must not duplicate the raw DB query logic — it reuses the service.
+- Service failure in the hexmining path is caught and sanitized to `{ status: "unavailable" }` without leaking internals; the overall `/api/debug/status` route remains HTTP 200.
+
+**Client schema alignment:**
+- `debugStatusReportSchema` in `src/lib/api/debug-client.ts` must stay aligned with the `GET /api/debug/status` response shape.
+- Any future addition to `data.hexMining` must be reflected in the Zod schema in the same PR that adds the backend field, so Zod does not silently strip the new field for `fetchDebugStatus` / `useDebugStatusQuery` consumers.
+
+---
+
+### 11.12 Next implementation slice — HexMining raw dailyDataRange observation read boundary
+
+**Status: DEFINED — next code PR after this docs PR. See acceptance criteria below.**
+
+#### Slice name
+
+**Phase 4B: HexMining raw dailyDataRange observation read boundary**
+
+#### Purpose
+
+Phase 4A established the persistence layer and operator status surface. Phase 4B adds the bounded backend read/ingest path that acquires raw `dailyDataRange` payloads from the PulseChain HEX contract and persists them as `RawHexDailyDataObservation` records using the service from PR #199.
+
+This slice does not compute yield. It does not estimate APY. It does not expose any financial value. Its sole responsibility is obtaining, validating, and persisting the raw `dailyDataRange` payload for a requested day range on chain ID 369, and returning a persistence result that a future yield estimator can reference.
+
+#### Scope
+
+- A bounded, isolated backend reader/adapter (the "read boundary") that:
+  - Accepts `(chainId: 369, rangeStartDay: number, rangeEndDay: number)` as input
+  - Calls `dailyDataRange(startDay, endDay)` on the pHEX HEX contract via the backend RPC abstraction
+  - Encodes the response using the §11.8 bigint-safe canonical encoding (all `uint*`/`int*` values as base-10 decimal strings, deterministic field order)
+  - Validates the canonical payload via `validateCanonicalPayload()` (already in `observation-store.ts`) — blocks any numeric JSON value before persistence
+  - Calls `persistHexDailyDataObservation()` (already in `observation-store.ts`) with the validated payload and full provenance
+  - Returns the persisted `observationId` (or the existing row's ID if dedup matched)
+- `currentDay()` reader: a lightweight RPC call returning the current HEX protocol day, used to scope the `rangeEndDay` so future days are never requested
+- Full test coverage with a mock RPC client — no live network calls in tests
+- Source family: `HEXMINING`
+
+#### Non-goals for this slice
+
+The following must not be included in the Phase 4B implementation PR under any circumstances:
+
+| Non-goal | Why deferred |
+|---|---|
+| Yield calculation | Phase 4C scope. Requires estimated yield invariants and provenance completeness check (§11.9) before computation begins. |
+| Estimated APY | Derived from yield. Phase 4C or later. |
+| Pricing, valuation, PnL | Phase 7. Requires persisted `PriceObservation` records and explicit cost-basis policy. |
+| `valuation.status` or `pnl.status` changes | Must remain `"unsupported"` until Phase 7. |
+| Frontend UI | No page, panel, or chart for dailyData reads in Phase 4B. |
+| React hooks | No `use-hexmining-daily-data-query.ts` or equivalent in Phase 4B. |
+| TanStack Query hooks | Same as above. |
+| Stake dashboard UI | No changes to the HexMining page shell or any frontend component. |
+| HSI/HTT source families | Phase 6. Native pHEX stakes only. |
+| Ended stake discovery | Phase 5. |
+| Ethereum/eHEX | Chain ID 369 (PulseChain) only. |
+| Cross-chain support | Deferred. PulseChain-first. |
+| Schema or migrations | No new Prisma models or migrations unless a later explicit prompt authorizes. The existing `RawHexDailyDataObservation` schema from PR #198/#199 is sufficient for Phase 4B. |
+| Broad sync jobs | No `SyncRun` / `SyncCursor` lifecycle for Phase 4B reads (on-demand reads, not batched syncs). Sync lifecycle is Phase 4C scope. |
+| Portfolio accounting integration | `canonicalPayload` is stored but never interpreted as accounting truth in Phase 4B. |
+| DexScreener or external price truth | Never a source of truth in CoinPulse. |
+| Interpreting canonicalPayload as accounting truth | `canonicalPayload` is raw audit evidence. The yield estimator (Phase 4C) is the first place it is parsed for business logic. |
+
+#### Acceptance criteria for the Phase 4B code PR
+
+The PR must pass all of these checks before review is requested:
+
+1. **Isolated reader/adapter:** The `dailyDataRange` reader is in a named, isolated module (e.g., `src/services/hexmining/daily-data-reader.ts`) with a typed interface that is fully mockable. The module has no dependencies on the persistence service beyond what is injected.
+
+2. **No live RPC in tests:** All tests use a mock implementation of the reader's RPC interface. No test makes a network call to a PulseChain node.
+
+3. **Canonical payload validation enforced:** The reader calls `validateCanonicalPayload()` before calling `persistHexDailyDataObservation()`. Tests confirm that a payload containing a numeric JSON value throws before any persistence attempt.
+
+4. **Bigint-safe encoding:** viem returns `uint*`/`int*` fields as JavaScript `bigint`. Tests assert that the canonical payload stored by the reader contains only base-10 decimal string representations (not `bigint`, not JavaScript `number`, not hex strings). The encoding must be deterministic across repeated calls.
+
+5. **Dedup path reused:** The reader does not implement its own dedup logic. It calls `persistHexDailyDataObservation()`, which contains the service-layer dedup from PR #199. Tests confirm that a duplicate read of the same `(chainId, rangeStartDay, rangeEndDay, observedAtBlock, rpcEndpointLabel, payloadHash)` returns the existing row ID without creating a new row.
+
+6. **Observation metadata completeness:** Each persisted observation includes: `chainId` (369), `rangeStartDay`, `rangeEndDay`, `observedAtBlock`, `rpcEndpointLabel`, `observedAt` (RPC read timestamp, distinct from DB `createdAt`), `payloadHash`. No field may be silently null when the value is available from the RPC call.
+
+7. **`currentDay()` scopes `rangeEndDay`:** The reader reads the current HEX protocol day before making a `dailyDataRange` request. The `rangeEndDay` must not exceed `currentDay()` — future days have no data and must not be requested.
+
+8. **No canonicalPayload exposure:** The reader module and any route that calls it must not expose `canonicalPayload` through any DTO, API response, or debug surface.
+
+9. **Error handling sanitized:** If the RPC call fails or returns malformed data, the reader returns a structured error result (not throws to the caller unguarded). Any API route invoking the reader must sanitize errors before returning an HTTP response — no RPC error messages leak to the response body.
+
+10. **Full validation required before PR is opened:**
+    - `npx prisma generate`
+    - `npm run test` (all test files pass; focused tests for the new reader pass)
+    - `npm run lint`
+    - `npm run typecheck`
+    - `npm run build`
+
+---
+
 ## 12. Proposed Next PR (updated)
 
-**Immediate next PR:** `feat(hexmining): add raw dailyData observation schema contract`
+**Immediate next PR:** `feat(hexmining): add raw dailyDataRange observation read boundary`
 
-This is Step 1 of §11.10. It is the correct next step because:
-- Decision 1 (§11.2) is now resolved — the persistence model is `RawHexDailyDataObservation`.
-- Decision 2 (§11.3) is now resolved — the source family is `HEXMINING`.
+This is Phase 4B (§11.12). It is the correct next step because:
+- The `RawHexDailyDataObservation` persistence service contract is complete (PR #199).
+- The `HEXMINING` source family is in place.
+- The operator status surface and debug/status integration are live (PRs #200–#202).
 - The yield type contracts are complete (PRs #195 and #196).
-- Schema and contract tests must land together in one bounded PR — tests asserting Prisma model invariants cannot pass without the model (the prior "test-only" step was not mergeable).
+- The only missing piece before yield estimation can begin is the read/ingest boundary for `dailyDataRange` payloads.
 
 **Scope of the immediate next PR:**
-- Additive `RawHexDailyDataObservation` Prisma model and `HEXMINING` source family enum value.
-- `npx prisma generate` to regenerate the client.
-- Persistence service (write-observation, read-by-range, dedupe check per §11.8).
-- Contract tests proving model key shape, dedupe invariant, bigint-safe encoding (§11.8), and provenance completeness invariant (§11.9).
-- Tests use the migration-applied test database; no live RPC.
+- `currentDay()` RPC reader — returns the current HEX protocol day, used to bound `rangeEndDay`.
+- `dailyDataRange(startDay, endDay)` RPC reader — acquires the raw payload for a requested day range.
+- Canonical bigint-safe encoding of the response per §11.8.
+- Calls `validateCanonicalPayload()` before persistence (already in `observation-store.ts`).
+- Calls `persistHexDailyDataObservation()` for persistence and dedup (already in `observation-store.ts`).
+- Returns persisted `observationId` (or existing row ID on dedup match).
+- Full tests with mock RPC client; no live network calls.
 
 **What this PR does NOT do:**
-- No `currentDay()` reader (that is Step 2).
-- No `dailyDataRange` reader (that is Step 3).
-- No yield calculation.
-- No API route changes.
-- No frontend changes.
+- No yield calculation (Phase 4C).
+- No estimated APY, pricing, valuation, or PnL.
+- No API route changes or new routes.
+- No frontend changes, React hooks, or TanStack Query hooks.
+- No new Prisma schema or migrations.
+- No `SyncRun` / `SyncCursor` lifecycle tracking (on-demand reads, not batched syncs).
+- No canonicalPayload exposure in any DTO or API response.
 
 ---
 
@@ -885,11 +1027,22 @@ This is Step 1 of §11.10. It is the correct next step because:
 **PR #196 (test/hexmining-yield-dto-invariants) — merged:**
 - Changed files: `src/services/hexmining/types.ts`, `tests/services/hexmining/yield-contract.test.ts`, `tests/services/hexmining/yield-dto-invariants.test.ts`
 
-**This PR (docs/hexmining-phase4-observation-model):**
-- **Branch:** `docs/hexmining-phase4-observation-model`
+**PR #199 (feat/hexmining-raw-observation-persistence) — merged:**
+- Changed files: `src/services/hexmining/observation-store.ts`, `tests/services/hexmining/observation-store.test.ts`
+
+**PR #200 (feat/hexmining-observation-status-dto) — merged:**
+- Changed files: `src/services/api/hexmining-observations.ts`, `app/api/hexmining/observations/status/route.ts`, `tests/api/hexmining-observations-status-route-contract.test.ts`
+
+**PR #201 (fix/hexmining-observation-status-freshness) — merged:**
+- Changed files: `src/services/api/hexmining-observations.ts`, `tests/api/hexmining-observations-status-route-contract.test.ts`
+
+**PR #202 (feat/hexmining-observation-status-debug-surface) — merged:**
+- Changed files: `src/services/debug/health.ts`, `src/lib/api/debug-client.ts`, `tests/api/debug-status-route-contract.test.ts`, `tests/lib/debug-client.test.ts`, `tests/lib/use-debug-status-query.test.ts`
+
+**This PR (docs/hexmining-phase4-kickoff — updated):**
+- **Branch:** `docs/hexmining-phase4-kickoff`
 - **Changed files:** `docs/v2-hexmining-roadmap.md` only
-- **What changed (original commit):** Decision 1 (§11.2) resolved to `RawHexDailyDataObservation` persistence; Decision 2 (§11.3) resolved to `HEXMINING` source family; §11.8 observation identity/key shape added; §11.9 minimum provenance for "estimated" yield added; §11.10 five-step Phase 4 implementation sequence added; §11.7 updated to reflect PRs #195/#196 complete; §12 updated to next PR.
-- **What changed (review fixes):** §11.4 invariant #2 day-range formula aligned; §11.8 expanded with non-colliding observation identity (observationId + dedupe key + canonical-selection policy), bigint-safe encoding policy, and append-only reorg invalidation; §11.9 rangeEndDay formula corrected; §11.10 Step 1 changed from unmergeable test-only to combined schema+test PR (five steps); §12 next PR updated; §11.4 line 575 "in this PR" corrected to "in PR #194"; validation summary inconsistency resolved.
-- **PR status:** DOCS-ONLY — no source, test, schema, or config files changed. Safe to open for review.
-- **Merge requirement:** None blocking. The two previously blocked decisions are now resolved. The immediate next step is §11.10 Step 1.
-- **Recommendation: OPEN PR**
+- **What changed:** Updated document header and Phase completion table to reflect PRs #199–#202; updated §11.1 with new PR entries and post-merge audit result (1354 tests); added §11.11 documenting the Phase 4A observation/status completed work and truth/status model; added §11.12 defining Phase 4B (raw dailyDataRange observation read boundary) with scope, non-goals, and acceptance criteria; updated §12 and Final Status.
+- **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
+- **Merge requirement:** None blocking. Phase 4A is complete. Phase 4B (§11.12) is fully defined and ready for implementation.
+- **Recommendation: MERGE**
