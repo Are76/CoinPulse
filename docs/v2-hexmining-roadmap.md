@@ -1,8 +1,8 @@
 # V2 HexMining Roadmap
 
-**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4 observation/status chain complete (PRs #199–#202). Observation read boundary is the next implementation slice.
+**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is next.
 **Created:** 2026-06-06
-**Last updated:** 2026-06-08 (Phase 4A observation/status chain complete — PRs #199–#202; read boundary next)
+**Last updated:** 2026-06-08 (Phase 4B complete — PRs #204, #205, #206; Phase 4C yield estimation next)
 
 ## Phase completion status
 
@@ -13,8 +13,8 @@
 | Phase 2 | Native PulseChain active stake reads | ✅ Complete — merged PRs #190, #191 |
 | Phase 3 | HexMining page shell / unsupported valuation display | ✅ Complete — merged PRs #192, #193 |
 | Phase 4A | Observation persistence, status API, and operator surface | ✅ Complete — merged PRs #199–#202 |
-| Phase 4B | dailyDataRange observation read boundary | 🔲 Next — see §11.12 |
-| Phase 4C | Yield estimation and DTO wiring | 🔲 Not started — requires Phase 4B complete |
+| Phase 4B | dailyDataRange read boundary, persistence wiring, and gated operator route | ✅ Complete — merged PRs #204, #205, #206 |
+| Phase 4C | Yield estimation and DTO wiring | 🔲 Not started — must begin with a small estimator-contract PR only; no UI |
 | Phase 5 | Ended stake discovery | 🔲 Not started |
 | Phase 6 | HSI and HTT source families | 🔲 Not started |
 | Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
@@ -503,8 +503,14 @@ This section documents the decisions that must be resolved or explicitly framed 
 | #200 | `feat(hexmining): expose observation status DTO` | `GET /api/hexmining/observations/status`; read-only DB-backed `HexMiningObservationStatusDto`; bigint-safe `observedAtBlock`; route + service contract tests |
 | #201 | `fix(hexmining): report observation freshness and invalidation status` | Added `observedAt` to `HexMiningObservationStatusDto`; filtered invalidated observations with `invalidations: { none: {} }`; 4 new tests |
 | #202 | `feat(hexmining): surface observation status in debug status` | `data.hexMining.observationStatus` in `GET /api/debug/status`; `hexMining` added to `debugStatusReportSchema` in `debug-client.ts` (discriminated union for available/missing/unavailable); 7 + 4 new tests |
+| #203 | `docs(hexmining): define Phase 4 observation read boundary` | §11.10 updated with Step 2 acceptance criteria; §11.12 Phase 4B defined with scope, non-goals, and end-exclusive `dailyDataRange` semantics |
+| #204 | `feat(hexmining): add dailyDataRange read boundary` | `src/services/hexmining/daily-data-reader.ts`: `readCurrentDay()`, `readDailyDataRangeObservation()`; PulseChain chain ID 369 only; pHEX `dailyDataRange` reads; persisted `rangeEndDay` is inclusive, RPC call uses `rangeEndDay + 1` (end-exclusive); `rawDailyData` remains `bigint[]` at read boundary; no persistence, yield, or UI in this PR |
+| #205 | `feat(hexmining): wire dailyDataRange observations to persistence` | `acquireAndPersistHexDailyDataObservation()` in `src/services/hexmining/daily-data-observation-service.ts`; encodes `rawDailyData` `bigint[]` as deterministic base-10 decimal strings; validates canonical payload before persistence; persists via `persistHexDailyDataObservation()`; reuses `payloadHash`/dedup in `observation-store.ts`; no `canonicalPayload` exposure; no yield, UI, schema, or sync |
+| #206 | `feat(hexmining): add observation admin route` | `POST /api/hexmining/observations`; disabled by default — returns 404 unless `HEXMINING_OBSERVATION_ADMIN_ENABLED=true`; gate fires before JSON parse, client construction, or service invocation; accepts inclusive `rangeStartDay`/`rangeEndDay`; validates via Zod; calls `acquireAndPersistHexDailyDataObservation()`; returns safe metadata only (`id`, `rangeStartDay`, `rangeEndDay`, `observedAtBlock`, `observedAt`, `warnings`); does not expose `canonicalPayload`, `rawDailyData`, or `payloadHash`; no yield, UI, schema, sync, or cron |
 
 Post-merge audit (2026-06-08, after PR #202): all 1354 tests pass, lint clean, typecheck clean, build clean, no guardrail violations.
+
+Post-merge audit (2026-06-08, after PR #206): all 1421 tests pass, lint clean, typecheck clean, build clean, no guardrail violations.
 
 ---
 
@@ -779,15 +785,15 @@ No step may be skipped. No yield calculation reaches production before Step 3 (P
 - Contract tests: model key shape, dedupe invariant, canonical-selection policy, bigint-safe encoding (§11.8), provenance completeness invariant (§11.9).
 - No reader, no RPC calls, no yield calculation, no API routes, no frontend.
 
-**Step 2 — `dailyDataRange` read boundary PR (Phase 4B)**
-`feat(hexmining): add raw dailyDataRange observation read boundary`
-- Add `currentDay()` RPC read to the backend `HexMiningReadClient` — returns the current HEX protocol day, used to scope `rangeEndDay` so future days are never requested.
-- Add `dailyDataRange(rangeStartDay, rangeEndDay + 1)` RPC read — the HEX contract's `endDay` argument is end-exclusive, so the stored inclusive `rangeEndDay` must be incremented by one before passing to the contract.
-- Encode the response using the §11.8 bigint-safe canonical encoding (all `uint*`/`int*` values as base-10 decimal strings, deterministic field order).
-- Validate via `validateCanonicalPayload()` and persist via `persistHexDailyDataObservation()` (both already in `observation-store.ts`).
-- Returns persisted `observationId` (or existing row ID on dedup match).
-- **No yield calculation.** No APY. No pricing, valuation, or PnL. No API route changes. No frontend.
-- Files in scope: `src/services/hexmining/daily-data-reader.ts` (new), `tests/services/hexmining/`.
+**Step 2 — `dailyDataRange` read boundary PR (Phase 4B) ✅ COMPLETE (PRs #204, #205, #206)**
+`feat(hexmining): add dailyDataRange read boundary` / `feat(hexmining): wire dailyDataRange observations to persistence` / `feat(hexmining): add observation admin route`
+- `readCurrentDay()` and `readDailyDataRangeObservation()` in `src/services/hexmining/daily-data-reader.ts` — PulseChain chain ID 369 only.
+- `dailyDataRange(rangeStartDay, rangeEndDay + 1)` RPC call — HEX contract `endDay` is end-exclusive; stored `rangeEndDay` is inclusive.
+- `rawDailyData` remains `bigint[]` at the read boundary; encoding happens in the persistence wiring layer.
+- `acquireAndPersistHexDailyDataObservation()` in `daily-data-observation-service.ts` encodes `rawDailyData` as base-10 decimal strings, validates via `validateCanonicalPayload()`, persists via `persistHexDailyDataObservation()`.
+- `POST /api/hexmining/observations` admin route gated behind `HEXMINING_OBSERVATION_ADMIN_ENABLED=true`; returns 404 before any processing when not set.
+- No yield calculation, no APY, no pricing, valuation, PnL, no schema/migration, no frontend.
+- `canonicalPayload`, `rawDailyData`, and `payloadHash` are never exposed through any DTO or API response.
 
 **Step 3 — Yield estimation PR (Phase 4C)**
 `feat(hexmining): add dailyDataRange yield estimation`
@@ -876,118 +882,108 @@ These rules govern all HexMining observation status surfaces. They must be prese
 
 ---
 
-### 11.12 Next implementation slice — HexMining raw dailyDataRange observation read boundary
+### 11.12 Phase 4B completed work — dailyDataRange read boundary, persistence wiring, and gated operator route
 
-**Status: DEFINED — next code PR after this docs PR. See acceptance criteria below.**
+**Status: COMPLETE — merged PRs #204, #205, #206.**
 
 #### Slice name
 
 **Phase 4B: HexMining raw dailyDataRange observation read boundary**
 
-#### Purpose
+#### What was completed
 
-Phase 4A established the persistence layer and operator status surface. Phase 4B adds the bounded backend read/ingest path that acquires raw `dailyDataRange` payloads from the PulseChain HEX contract and persists them as `RawHexDailyDataObservation` records using the service from PR #199.
+Phase 4A established the persistence layer and operator status surface. Phase 4B delivered the bounded backend read/ingest path that acquires raw `dailyDataRange` payloads from the PulseChain HEX contract, encodes them safely, validates them, persists them as `RawHexDailyDataObservation` records, and exposes a gated admin route for operator-triggered ingestion.
 
-This slice does not compute yield. It does not estimate APY. It does not expose any financial value. Its sole responsibility is obtaining, validating, and persisting the raw `dailyDataRange` payload for a requested day range on chain ID 369, and returning a persistence result that a future yield estimator can reference.
+Phase 4B does not compute yield. It does not estimate APY. It does not expose any financial value. Its responsibility is obtaining, validating, and persisting the raw `dailyDataRange` payload for a requested day range on chain ID 369, making persisted observations available for a future yield estimator.
 
-#### Scope
+#### What was not included — preserved for Phase 4C
 
-- A bounded, isolated backend reader/adapter (the "read boundary") that:
-  - Accepts `(chainId: 369, rangeStartDay: number, rangeEndDay: number)` as input
-  - Calls `dailyDataRange(startDay, endDay)` on the pHEX HEX contract via the backend RPC abstraction
-  - Encodes the response using the §11.8 bigint-safe canonical encoding (all `uint*`/`int*` values as base-10 decimal strings, deterministic field order)
-  - Validates the canonical payload via `validateCanonicalPayload()` (already in `observation-store.ts`) — blocks any numeric JSON value before persistence
-  - Calls `persistHexDailyDataObservation()` (already in `observation-store.ts`) with the validated payload and full provenance
-  - Returns the persisted `observationId` (or the existing row's ID if dedup matched)
-- `currentDay()` reader: a lightweight RPC call returning the current HEX protocol day, used to scope the `rangeEndDay` so future days are never requested
-- Full test coverage with a mock RPC client — no live network calls in tests
-- Source family: `HEXMINING`
+The following were explicitly excluded from Phase 4B and must not be treated as already implemented:
 
-#### Non-goals for this slice
+#### What was delivered
 
-The following must not be included in the Phase 4B implementation PR under any circumstances:
+- `src/services/hexmining/daily-data-reader.ts`: `readCurrentDay()` (lightweight RPC call returning the current HEX protocol day) and `readDailyDataRangeObservation()` (acquires `dailyDataRange` payload for a requested day range on chain ID 369).
+- `readDailyDataRangeObservation()` calls `dailyDataRange(rangeStartDay, rangeEndDay + 1)` — the HEX contract's `endDay` argument is end-exclusive; the stored `rangeEndDay` is inclusive.
+- `rawDailyData` is `bigint[]` at the read boundary; it is not encoded at the reader level.
+- `src/services/hexmining/daily-data-observation-service.ts`: `acquireAndPersistHexDailyDataObservation()` encodes `rawDailyData` as base-10 decimal strings per §11.8, validates via `validateCanonicalPayload()`, persists via `persistHexDailyDataObservation()`, and returns the persisted `observationId` (or existing row ID on dedup match).
+- `app/api/hexmining/observations/route.ts`: `POST /api/hexmining/observations` admin route; returns 404 unless `HEXMINING_OBSERVATION_ADMIN_ENABLED=true`; gate fires before JSON parse, client construction, or service invocation; accepts inclusive `rangeStartDay`/`rangeEndDay`; validates via Zod; returns safe metadata only.
+- `canonicalPayload`, `rawDailyData`, and `payloadHash` are never exposed through any DTO or API response.
+- Full test coverage with mock RPC clients — no live network calls in tests.
 
-| Non-goal | Why deferred |
+#### Phase 4B guardrails preserved
+
+- PostgreSQL-persisted `RawHexDailyDataObservation` rows are the backend source of truth.
+- RPC is upstream ingestion input only — `dailyDataRange` reads are backend-only; the frontend never calls RPC.
+- `canonicalPayload` is raw evidence input, not accounting truth. It is stored but never interpreted by Phase 4B code.
+- Frontend consumes backend DTOs only. Phase 4B added no frontend components, React hooks, or TanStack Query hooks.
+- `valuation.status` and `pnl.status` remain `"unsupported"` — unchanged by Phase 4B.
+
+#### What was not included — preserved for Phase 4C
+
+The following were excluded from Phase 4B and remain deferred. Phase 4C must observe all of them:
+
+| Deferred item | Phase 4C constraint |
 |---|---|
-| Yield calculation | Phase 4C scope. Requires estimated yield invariants and provenance completeness check (§11.9) before computation begins. |
-| Estimated APY | Derived from yield. Phase 4C or later. |
-| Pricing, valuation, PnL | Phase 7. Requires persisted `PriceObservation` records and explicit cost-basis policy. |
-| `valuation.status` or `pnl.status` changes | Must remain `"unsupported"` until Phase 7. |
-| Frontend UI | No page, panel, or chart for dailyData reads in Phase 4B. |
-| React hooks | No `use-hexmining-daily-data-query.ts` or equivalent in Phase 4B. |
-| TanStack Query hooks | Same as above. |
-| Stake dashboard UI | No changes to the HexMining page shell or any frontend component. |
+| Yield calculation | Phase 4C must consume **persisted** `RawHexDailyDataObservation` rows — must not call `dailyDataRange` RPC directly from yield logic. |
+| Estimated APY | Derived from yield; Phase 4C or later. |
+| Pricing, valuation, PnL | Phase 7. Must not appear in Phase 4C. `valuation.status` and `pnl.status` remain `"unsupported"`. |
+| Frontend UI | Phase 4C must not introduce any frontend page, panel, chart, or hook for dailyData reads. |
+| React / TanStack Query hooks | No `use-hexmining-daily-data-query.ts` or equivalent until yield is wired to the API route (Step 4). |
 | HSI/HTT source families | Phase 6. Native pHEX stakes only. |
 | Ended stake discovery | Phase 5. |
 | Ethereum/eHEX | Chain ID 369 (PulseChain) only. |
-| Cross-chain support | Deferred. PulseChain-first. |
-| Schema or migrations | No new Prisma models or migrations unless a later explicit prompt authorizes. The existing `RawHexDailyDataObservation` schema from PR #198/#199 is sufficient for Phase 4B. |
-| Broad sync jobs | No `SyncRun` / `SyncCursor` lifecycle for Phase 4B reads (on-demand reads, not batched syncs). Sync lifecycle is Phase 4C scope. |
-| Portfolio accounting integration | `canonicalPayload` is stored but never interpreted as accounting truth in Phase 4B. |
+| Broad sync jobs | No `SyncRun` / `SyncCursor` lifecycle changes. On-demand reads only. |
+| `canonicalPayload` as accounting truth | `canonicalPayload` is raw evidence input. Phase 4C parses it for yield business logic, but the output is `yield.status: "estimated"` — never accounting truth. |
 | DexScreener or external price truth | Never a source of truth in CoinPulse. |
-| Interpreting canonicalPayload as accounting truth | `canonicalPayload` is raw audit evidence. The yield estimator (Phase 4C) is the first place it is parsed for business logic. |
 
-#### Acceptance criteria for the Phase 4B code PR
+#### Phase 4C start constraints
 
-The PR must pass all of these checks before review is requested:
-
-1. **Isolated reader/adapter:** The `dailyDataRange` reader is in a named, isolated module (e.g., `src/services/hexmining/daily-data-reader.ts`) with a typed interface that is fully mockable. The module has no dependencies on the persistence service beyond what is injected.
-
-2. **No live RPC in tests:** All tests use a mock implementation of the reader's RPC interface. No test makes a network call to a PulseChain node.
-
-3. **Canonical payload validation enforced:** The reader calls `validateCanonicalPayload()` before calling `persistHexDailyDataObservation()`. Tests confirm that a payload containing a numeric JSON value throws before any persistence attempt.
-
-4. **Bigint-safe encoding:** viem returns `uint*`/`int*` fields as JavaScript `bigint`. Tests assert that the canonical payload stored by the reader contains only base-10 decimal string representations (not `bigint`, not JavaScript `number`, not hex strings). The encoding must be deterministic across repeated calls.
-
-5. **Dedup path reused:** The reader does not implement its own dedup logic. It calls `persistHexDailyDataObservation()`, which contains the service-layer dedup from PR #199. Tests confirm that a duplicate read of the same `(chainId, rangeStartDay, rangeEndDay, observedAtBlock, rpcEndpointLabel, payloadHash)` returns the existing row ID without creating a new row.
-
-6. **Observation metadata completeness:** Each persisted observation includes: `chainId` (369), `rangeStartDay`, `rangeEndDay`, `observedAtBlock`, `rpcEndpointLabel`, `observedAt` (RPC read timestamp, distinct from DB `createdAt`), `payloadHash`. No field may be silently null when the value is available from the RPC call.
-
-7. **`currentDay()` scopes `rangeEndDay`:** The reader reads the current HEX protocol day before making a `dailyDataRange` request. The `rangeEndDay` must not exceed `currentDay()` — future days have no data and must not be requested.
-
-8. **End-exclusive `dailyDataRange` call:** The reader calls `dailyDataRange(rangeStartDay, rangeEndDay + 1)` — never `dailyDataRange(rangeStartDay, rangeEndDay)`. The HEX contract's `endDay` parameter is end-exclusive: `dailyDataRange(beginDay, endDay)` returns data for days `[beginDay, endDay)`. The stored `rangeEndDay` field is the **inclusive** last day of the read range. The reader must add one when constructing the RPC call to convert the inclusive stored bound to the end-exclusive contract argument. Tests must assert that the RPC call receives `rangeEndDay + 1` as the second argument.
-
-9. **No canonicalPayload exposure:** The reader module and any route that calls it must not expose `canonicalPayload` through any DTO, API response, or debug surface.
-
-10. **Error handling sanitized:** If the RPC call fails or returns malformed data, the reader returns a structured error result (not throws to the caller unguarded). Any API route invoking the reader must sanitize errors before returning an HTTP response — no RPC error messages leak to the response body.
-
-11. **Full validation required before PR is opened:**
-    - `npx prisma generate`
-    - `npm run test` (all test files pass; focused tests for the new reader pass)
-    - `npm run lint`
-    - `npm run typecheck`
-    - `npm run build`
+Phase 4C may not begin with a UI or DTO-wiring PR. The first Phase 4C PR must be a small, bounded estimator-contract PR only:
+- Reads persisted `RawHexDailyDataObservation` rows from the database.
+- Applies the yield estimation logic per §11.4 and §11.9.
+- Enforces elapsed-days-only coverage, BPD attribution, and canonical-selection policy.
+- Returns `yield.status: "estimated"` or `"unavailable"` with full provenance.
+- No API route changes. No frontend changes. No new schema.
+- Full contract tests with mock DB reads and no live RPC.
 
 ---
 
 ## 12. Proposed Next PR (updated)
 
-**Immediate next PR:** `feat(hexmining): add raw dailyDataRange observation read boundary`
+**Phase 4B is complete.** PRs #204, #205, and #206 delivered the full read boundary, persistence wiring, and gated operator route.
 
-This is Phase 4B (§11.12). It is the correct next step because:
-- The `RawHexDailyDataObservation` persistence service contract is complete (PR #199).
-- The `HEXMINING` source family is in place.
-- The operator status surface and debug/status integration are live (PRs #200–#202).
+**Immediate next PR: Phase 4C estimator-contract (§11.10 Step 3)**
+
+Suggested title: `feat(hexmining): add dailyDataRange yield estimation`
+
+This is the correct next step because:
+- The `RawHexDailyDataObservation` persistence layer is complete (PR #199).
+- The read boundary and persistence wiring are complete (PRs #204–#206).
 - The yield type contracts are complete (PRs #195 and #196).
-- The only missing piece before yield estimation can begin is the read/ingest boundary for `dailyDataRange` payloads.
+- Persisted observations now exist in the database as ingestion evidence.
+- The only missing piece before yield can appear in the DTO is the estimator that reads persisted observations and applies the §11.4/§11.9 rules.
 
-**Scope of the immediate next PR:**
-- `currentDay()` RPC reader — returns the current HEX protocol day, used to bound `rangeEndDay`.
-- `dailyDataRange(startDay, endDay)` RPC reader — acquires the raw payload for a requested day range.
-- Canonical bigint-safe encoding of the response per §11.8.
-- Calls `validateCanonicalPayload()` before persistence (already in `observation-store.ts`).
-- Calls `persistHexDailyDataObservation()` for persistence and dedup (already in `observation-store.ts`).
-- Returns persisted `observationId` (or existing row ID on dedup match).
-- Full tests with mock RPC client; no live network calls.
+**Scope of the Phase 4C estimator-contract PR (Step 3 only):**
+- New yield estimator module in `src/services/hexmining/`.
+- Reads persisted `RawHexDailyDataObservation` rows from the database (does **not** call RPC directly).
+- Applies elapsed-days-only coverage rule: `rangeStartDay = lockedDay`, `rangeEndDay = min(currentDay, lockedDay + stakedDays - 1)`.
+- Applies canonical-selection policy (§11.8) when multiple observations cover the same range.
+- Models Big Pay Day with `bpdYieldStatus` / `bpdYieldHex` per §11.4 invariant #5.
+- Returns `yield.status: "estimated"` or `"unavailable"` with full provenance.
+- Full contract tests with mock DB reads and no live RPC calls.
 
-**What this PR does NOT do:**
-- No yield calculation (Phase 4C).
-- No estimated APY, pricing, valuation, or PnL.
-- No API route changes or new routes.
-- No frontend changes, React hooks, or TanStack Query hooks.
+**What the Phase 4C estimator-contract PR must NOT do:**
+- No API route changes or new routes (Step 4 scope).
+- No frontend changes, React hooks, or TanStack Query hooks (Step 5 scope).
+- No pricing, valuation, or PnL.
 - No new Prisma schema or migrations.
-- No `SyncRun` / `SyncCursor` lifecycle tracking (on-demand reads, not batched syncs).
-- No canonicalPayload exposure in any DTO or API response.
+- No live RPC calls from yield logic.
+- No `canonicalPayload` exposure in any DTO or API response.
+- No `valuation.status` or `pnl.status` changes (remain `"unsupported"` until Phase 7).
+
+**Prerequisite before opening the Phase 4C PR:**
+- Verify that route-produced observations exist in the database (run `POST /api/hexmining/observations` with `HEXMINING_OBSERVATION_ADMIN_ENABLED=true` and confirm rows in `rawHexDailyDataObservation`).
+- Do not begin yield estimation until at least one valid observation row exists, or the estimator will trivially return `"unavailable"` for every stake.
 
 ---
 
@@ -1039,10 +1035,30 @@ This is Phase 4B (§11.12). It is the correct next step because:
 **PR #202 (feat/hexmining-observation-status-debug-surface) — merged:**
 - Changed files: `src/services/debug/health.ts`, `src/lib/api/debug-client.ts`, `tests/api/debug-status-route-contract.test.ts`, `tests/lib/debug-client.test.ts`, `tests/lib/use-debug-status-query.test.ts`
 
-**This PR (docs/hexmining-phase4-kickoff — updated):**
-- **Branch:** `docs/hexmining-phase4-kickoff`
+**PR #203 (docs/hexmining-phase4-observation-model — updated):**
 - **Changed files:** `docs/v2-hexmining-roadmap.md` only
-- **What changed:** Updated document header and Phase completion table to reflect PRs #199–#202; updated §11.1 with new PR entries and post-merge audit result (1354 tests); added §11.11 documenting the Phase 4A observation/status completed work and truth/status model; added §11.12 defining Phase 4B (raw dailyDataRange observation read boundary) with scope, non-goals, and acceptance criteria; updated §12 and Final Status.
+- **What changed:** Updated Phase completion table; §11.10 Step 2 acceptance criteria; §11.12 Phase 4B definition with scope, non-goals, and end-exclusive `dailyDataRange` semantics; §12 and Final Status.
+- **PR status:** DOCS-ONLY
+
+**PR #204 (feat/hexmining-daily-data-reader):**
+- **Changed files:** `src/services/hexmining/daily-data-reader.ts` (new), `tests/services/hexmining/daily-data-reader.test.ts` (new)
+- **What changed:** `readCurrentDay()` and `readDailyDataRangeObservation()` — PulseChain-only, pHEX `dailyDataRange` reads, end-exclusive RPC call, no persistence, no yield, no UI.
+- **PR status:** FEAT — service only
+
+**PR #205 (feat/hexmining-observation-persistence-wiring):**
+- **Changed files:** `src/services/hexmining/daily-data-observation-service.ts` (new), `tests/services/hexmining/daily-data-observation-service.test.ts` (new)
+- **What changed:** `acquireAndPersistHexDailyDataObservation()` — encodes `rawDailyData` bigint[] as decimal strings, validates payload, persists via `persistHexDailyDataObservation()`, dedup-safe. No `canonicalPayload` exposure, no yield, no schema, no UI.
+- **PR status:** FEAT — service only
+
+**PR #206 (feat/hexmining-observation-admin-route):**
+- **Changed files:** `app/api/hexmining/observations/route.ts` (new), `tests/api/hexmining-observations-create-route-contract.test.ts` (new), `src/services/hexmining/reader.ts` (type refactor only)
+- **What changed:** `POST /api/hexmining/observations` gated admin route; `HexMiningReadClient` type refactored to `Pick<PublicClient, "readContract" | "getBlockNumber">`. 24 contract tests. No yield, no UI, no schema.
+- **PR status:** FEAT — route only
+
+**This PR (docs/hexmining-phase4b-evidence-closure):**
+- **Branch:** `docs/hexmining-phase4b-evidence-closure`
+- **Changed files:** `docs/v2-hexmining-roadmap.md` only
+- **What changed:** Document header and Phase completion table updated for Phase 4B complete; §11.1 extended with PRs #203–#206 and post-merge audit (1421 tests); §11.10 Step 2 marked complete; §11.12 repurposed as Phase 4B completion evidence record with delivered items, guardrails, and Phase 4C constraints; §12 updated to describe Phase 4C estimator-contract as the next PR; Final Status extended.
 - **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
-- **Merge requirement:** None blocking. Phase 4A is complete. Phase 4B (§11.12) is fully defined and ready for implementation.
+- **Merge requirement:** None blocking. Phase 4B is complete. Phase 4C (§11.10 Step 3) is fully constrained and ready for implementation.
 - **Recommendation: MERGE**
