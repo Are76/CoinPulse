@@ -35,7 +35,7 @@ export async function POST(request: Request) {
 
   try {
     const input = await parseJsonBody(observationCreateSchema, request);
-    const publicClient = createPublicClientForChain() as unknown as HexMiningReadClient;
+    const publicClient = createPublicClientForChain() as HexMiningReadClient;
 
     const result = await acquireAndPersistHexDailyDataObservation({
       publicClient,
