@@ -691,7 +691,7 @@ Before writing a new row, the persistence service checks whether an observation 
 | `chainId` | `number` | Chain on which the read was made (369 for pHEX) |
 | `sourceFamily` | `string` | Always `"HEXMINING"` for dailyData reads |
 | `rangeStartDay` | `number` | `startDay` argument passed to `dailyDataRange` |
-| `rangeEndDay` | `number` | `endDay` argument passed to `dailyDataRange` |
+| `rangeEndDay` | `number` | **Inclusive** last day of the read range. The stored value is the inclusive upper bound. The RPC call uses `rangeEndDay + 1` as the `endDay` argument because `dailyDataRange(beginDay, endDay)` is end-exclusive (the contract returns data for days `[beginDay, endDay)`). |
 | `observedAtBlock` | `string` | Block number (as string) at time of read |
 | `rpcEndpointLabel` | `string \| null` | Labeled identifier for the RPC endpoint used (hashed/configured, never raw URL) |
 | `payloadHash` | `string` | Hash of the canonical serialized payload (see encoding below) |
@@ -715,7 +715,7 @@ viem returns `dailyDataRange` results with `uint*` fields as JavaScript `bigint`
 - No JavaScript `bigint` values are stored directly in JSON.
 - Serialization must be deterministic: fields in a fixed order, no extra whitespace, no locale-dependent formatting.
 - `payloadHash` is computed over the canonical serialized payload (e.g., SHA-256 hex of the UTF-8 bytes). If payload content changes between retries, the hash differs and a new row is written.
-- The schema/contract PR (Step 1 of §11.10) must include test fixtures using viem-shaped `bigint` input and assert that the persisted payload contains decimal strings.
+- PR #199 includes test fixtures using viem-shaped `bigint` input and asserts that the persisted payload contains decimal strings.
 
 **Canonical-selection policy (yield derivation):**
 
@@ -723,7 +723,7 @@ When multiple `RawHexDailyDataObservation` rows cover an overlapping day range (
 - Prefer the observation with the highest `observedAtBlock` (most recent read).
 - Among observations at the same block, prefer the row with no `warnings`.
 - Among otherwise equal rows, prefer the row from the primary configured RPC endpoint.
-- The selection policy is implemented in the yield estimator (Step 3 of §11.10), not in the persistence layer.
+- The selection policy is implemented in the yield estimator (Phase 4C), not in the persistence layer.
 
 **Retention policy:**
 
@@ -731,9 +731,9 @@ Observation rows are append-only and immutable. A later read of the same range a
 
 **Reorg invalidation — append-only:**
 
-If a chain reorg invalidates an observation (the block it was read at is orphaned), CoinPulse does NOT mutate the existing row. Instead, the persistence layer appends a separate invalidation record (e.g., `RawHexDailyDataObservationInvalidation`) referencing the original `observationId` and recording the reorg event. The raw observation row remains immutable evidence. The exact model name for the invalidation record is decided in the schema PR (Step 1 of §11.10).
+If a chain reorg invalidates an observation (the block it was read at is orphaned), CoinPulse does NOT mutate the existing row. Instead, the persistence layer appends a separate invalidation record (e.g., `RawHexDailyDataObservationInvalidation`) referencing the original `observationId` and recording the reorg event. The raw observation row remains immutable evidence. The exact model name for the invalidation record was decided in PR #199.
 
-**Not in this document:** The exact Prisma model field names, indexes, and foreign key relationships are defined in the persistence contract PR (§11.10, Step 1).
+**Not in this document:** The exact Prisma model field names, indexes, and foreign key relationships were defined in PR #199.
 
 ---
 
@@ -767,38 +767,36 @@ For a `HexStakeDto` to carry `yield.status: "estimated"`, the backend reader mus
 
 ### 11.10 Phase 4 implementation sequence
 
-**Status: RESOLVED — five ordered steps, each a separate PR, preserving the CoinPulse architecture guardrails.**
+**Status: RESOLVED — five ordered steps, each a separate PR, preserving the CoinPulse architecture guardrails. Step 1 is complete (PR #199).**
 
-No step may be skipped. No live `dailyDataRange` reads reach production before Step 3.
+No step may be skipped. No yield calculation reaches production before Step 3 (Phase 4C).
 
-**Step 1 — Schema contract and persistence tests PR (immediate next)**
+**Step 1 — Schema contract and persistence tests PR ✅ COMPLETE (PR #199)**
 `feat(hexmining): add raw dailyData observation schema contract`
-- Add `RawHexDailyDataObservation` model to `prisma/schema.prisma`.
-- Add `HEXMINING` to `SourceFamily` enum.
-- Run `npx prisma generate` to regenerate the client.
-- Add persistence service (write-observation, read-by-range, deduplication check per §11.8 dedupe key).
-- Add contract tests proving the model key shape, dedupe invariant, canonical-selection policy, bigint-safe encoding (§11.8), and the provenance completeness invariant (§11.9).
-- Tests use the migration-applied test database; no live RPC.
-- **No reader, no RPC calls, no yield calculation, no API routes, no frontend.**
-- Files in scope: `prisma/schema.prisma`, new migration file, `src/services/hexmining/` (persistence only), `tests/services/hexmining/`.
+- Added `RawHexDailyDataObservation` model to `prisma/schema.prisma`.
+- Added `HEXMINING` to `SourceFamily` enum.
+- Added persistence service (`validateCanonicalPayload`, `computePayloadHash`, `persistHexDailyDataObservation`, `persistHexDailyDataObservationInvalidation`) with service-layer dedup.
+- Contract tests: model key shape, dedupe invariant, canonical-selection policy, bigint-safe encoding (§11.8), provenance completeness invariant (§11.9).
+- No reader, no RPC calls, no yield calculation, no API routes, no frontend.
 
-**Step 2 — `currentDay()` reader PR**
-`feat(hexmining): add currentDay read to HexMining reader`
-- Add `currentDay()` RPC read to the backend `HexMiningReadClient`.
-- Protocol day stored in observation provenance.
-- No yield calculation yet.
-- Files in scope: `src/services/hexmining/reader.ts`, `tests/services/hexmining/reader.test.ts`.
+**Step 2 — `dailyDataRange` read boundary PR (Phase 4B)**
+`feat(hexmining): add raw dailyDataRange observation read boundary`
+- Add `currentDay()` RPC read to the backend `HexMiningReadClient` — returns the current HEX protocol day, used to scope `rangeEndDay` so future days are never requested.
+- Add `dailyDataRange(rangeStartDay, rangeEndDay + 1)` RPC read — the HEX contract's `endDay` argument is end-exclusive, so the stored inclusive `rangeEndDay` must be incremented by one before passing to the contract.
+- Encode the response using the §11.8 bigint-safe canonical encoding (all `uint*`/`int*` values as base-10 decimal strings, deterministic field order).
+- Validate via `validateCanonicalPayload()` and persist via `persistHexDailyDataObservation()` (both already in `observation-store.ts`).
+- Returns persisted `observationId` (or existing row ID on dedup match).
+- **No yield calculation.** No APY. No pricing, valuation, or PnL. No API route changes. No frontend.
+- Files in scope: `src/services/hexmining/daily-data-reader.ts` (new), `tests/services/hexmining/`.
 
-**Step 3 — `dailyDataRange` reader and yield estimation PR**
-`feat(hexmining): add dailyDataRange reads and yield estimation`
-- Add `dailyDataRange(startDay, endDay)` reads to `HexMiningReadClient`.
-- Persist results as `RawHexDailyDataObservation` records using the bigint-safe encoding from §11.8.
-- Compute `yield.status: "estimated"` when all promotion conditions from §11.4 are met.
+**Step 3 — Yield estimation PR (Phase 4C)**
+`feat(hexmining): add dailyDataRange yield estimation`
+- Compute `yield.status: "estimated"` from persisted `RawHexDailyDataObservation` rows using the conditions from §11.4.
 - Enforce elapsed-days-only coverage rule: `rangeStartDay = lockedDay`, `rangeEndDay = min(currentDay, lockedDay + stakedDays - 1)` (see §11.4 invariant #2 and §11.9).
 - Apply canonical-selection policy (§11.8) when multiple observations cover the same range.
 - Model Big Pay Day with `bpdYieldStatus` / `bpdYieldHex` per §11.4 invariant #5.
-- All RPC reads use mock `HexMiningReadClient` in tests; no live network calls.
-- Files in scope: `src/services/hexmining/reader.ts`, new yield estimator module, `tests/services/hexmining/`.
+- All reads use mock `HexMiningReadClient` in tests; no live network calls.
+- Files in scope: new yield estimator module, `src/services/hexmining/`, `tests/services/hexmining/`.
 
 **Step 4 — Yield DTO wiring and API route update PR**
 `feat(hexmining): wire estimated yield fields into HexStakeDto and API route`
@@ -825,7 +823,7 @@ No step may be skipped. No live `dailyDataRange` reads reach production before S
 - No Ethereum/eHEX support.
 - No cross-chain yield aggregation.
 - No silent coercion of partial or missing yield data to zero or to an estimate.
-- No `dailyDataRange` production reads before Step 3.
+- No yield calculation before Step 3 (Phase 4C).
 
 ---
 
@@ -947,11 +945,13 @@ The PR must pass all of these checks before review is requested:
 
 7. **`currentDay()` scopes `rangeEndDay`:** The reader reads the current HEX protocol day before making a `dailyDataRange` request. The `rangeEndDay` must not exceed `currentDay()` — future days have no data and must not be requested.
 
-8. **No canonicalPayload exposure:** The reader module and any route that calls it must not expose `canonicalPayload` through any DTO, API response, or debug surface.
+8. **End-exclusive `dailyDataRange` call:** The reader calls `dailyDataRange(rangeStartDay, rangeEndDay + 1)` — never `dailyDataRange(rangeStartDay, rangeEndDay)`. The HEX contract's `endDay` parameter is end-exclusive: `dailyDataRange(beginDay, endDay)` returns data for days `[beginDay, endDay)`. The stored `rangeEndDay` field is the **inclusive** last day of the read range. The reader must add one when constructing the RPC call to convert the inclusive stored bound to the end-exclusive contract argument. Tests must assert that the RPC call receives `rangeEndDay + 1` as the second argument.
 
-9. **Error handling sanitized:** If the RPC call fails or returns malformed data, the reader returns a structured error result (not throws to the caller unguarded). Any API route invoking the reader must sanitize errors before returning an HTTP response — no RPC error messages leak to the response body.
+9. **No canonicalPayload exposure:** The reader module and any route that calls it must not expose `canonicalPayload` through any DTO, API response, or debug surface.
 
-10. **Full validation required before PR is opened:**
+10. **Error handling sanitized:** If the RPC call fails or returns malformed data, the reader returns a structured error result (not throws to the caller unguarded). Any API route invoking the reader must sanitize errors before returning an HTTP response — no RPC error messages leak to the response body.
+
+11. **Full validation required before PR is opened:**
     - `npx prisma generate`
     - `npm run test` (all test files pass; focused tests for the new reader pass)
     - `npm run lint`
