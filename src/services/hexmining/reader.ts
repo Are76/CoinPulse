@@ -1,6 +1,6 @@
 import "server-only";
 
-import { parseAbi } from "viem";
+import { parseAbi, type PublicClient } from "viem";
 
 import { PHEX_ADDRESS, PHEX_DECIMALS } from "@/config/assets";
 import { Decimal } from "@/lib/decimal";
@@ -16,15 +16,7 @@ const PHEX_READ_ABI = parseAbi([
   "function currentDay() view returns (uint256)",
 ]);
 
-export type HexMiningReadClient = {
-  readContract(args: {
-    address: `0x${string}`;
-    abi: readonly unknown[];
-    functionName: string;
-    args?: readonly unknown[];
-  }): Promise<unknown>;
-  getBlockNumber(): Promise<bigint>;
-};
+export type HexMiningReadClient = Pick<PublicClient, "readContract" | "getBlockNumber">;
 
 export type ReadNativeHexStakesArgs = {
   publicClient: HexMiningReadClient;
@@ -125,7 +117,7 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
         abi: PHEX_READ_ABI,
         functionName: "stakeLists",
         args: [walletAddress as `0x${string}`, index],
-      })) as [bigint, bigint, bigint, number, number, number, boolean];
+      })) as readonly [number, bigint, bigint, number, number, number, boolean];
 
       const stakeId = raw[0];
       const stakedHearts = raw[1];
