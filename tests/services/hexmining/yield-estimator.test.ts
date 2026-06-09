@@ -10,6 +10,7 @@ import {
 const BASE_ARGS: HexMiningYieldEstimateArgs = {
   chainId: 369,
   stakeId: "12345",
+  stakeShares: 1000n,
   lockedDay: 1000,
   stakedDays: 365,
   currentDay: 1200,
@@ -370,6 +371,7 @@ describe("estimateHexMiningYield", () => {
       await estimateHexMiningYield(BASE_ARGS, deps);
 
       const [, receivedArgs] = applyCalculation.mock.calls[0] as [unknown, typeof BASE_ARGS];
+      expect(receivedArgs.stakeShares).toBe(BASE_ARGS.stakeShares);
       expect(receivedArgs.lockedDay).toBe(BASE_ARGS.lockedDay);
       expect(receivedArgs.stakedDays).toBe(BASE_ARGS.stakedDays);
       expect(receivedArgs.currentDay).toBe(BASE_ARGS.currentDay);
@@ -492,6 +494,116 @@ describe("estimateHexMiningYield", () => {
 
       expect(result.status).toBe("insufficient_observations");
       expect(applyCalculation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("stakeShares validation and passthrough", () => {
+    // ── Test 1: valid stakeShares reaches applyCalculation ───────────────────
+
+    it("positive stakeShares is passed through to applyCalculation as bigint", async () => {
+      const applyCalculation: Mock = vi.fn().mockReturnValue({
+        status: "calculation_not_implemented" as const,
+      });
+      const shares = 4722366482869645213696n; // 2n**72n — beyond Number.MAX_SAFE_INTEGER
+      const deps = { ...makeDeps(), applyCalculation };
+
+      const result = await estimateHexMiningYield({ ...BASE_ARGS, stakeShares: shares }, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(applyCalculation).toHaveBeenCalledOnce();
+      const [, receivedArgs] = applyCalculation.mock.calls[0] as [unknown, HexMiningYieldEstimateArgs];
+      expect(receivedArgs.stakeShares).toBe(shares);
+      expect(typeof receivedArgs.stakeShares).toBe("bigint");
+    });
+
+    // ── Test 2: stakeShares is bigint-safe (not coerced to Number) ───────────
+
+    it("stakeShares larger than Number.MAX_SAFE_INTEGER is received exactly as bigint", async () => {
+      const applyCalculation: Mock = vi.fn().mockReturnValue({
+        status: "calculation_not_implemented" as const,
+      });
+      // 2n**64n = 18446744073709551616n — well beyond Number.MAX_SAFE_INTEGER
+      const largeShares = 2n ** 64n;
+      const deps = { ...makeDeps(), applyCalculation };
+
+      await estimateHexMiningYield({ ...BASE_ARGS, stakeShares: largeShares }, deps);
+
+      const [, receivedArgs] = applyCalculation.mock.calls[0] as [unknown, HexMiningYieldEstimateArgs];
+      expect(receivedArgs.stakeShares).toBe(largeShares);
+      expect(receivedArgs.stakeShares).toBe(2n ** 64n);
+      // If coerced to Number, precision would be lost; bigint comparison is exact.
+      expect(receivedArgs.stakeShares).not.toBe(Number(largeShares));
+    });
+
+    // ── Test 3: zero stakeShares is rejected ─────────────────────────────────
+
+    it("zero stakeShares returns invalid_observation before evidence fetch", async () => {
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield({ ...BASE_ARGS, stakeShares: 0n }, deps);
+
+      expect(result.status).toBe("invalid_observation");
+      expect(result.schemaVersion).toBe("v1");
+      expect(result.yieldHex).toBeNull();
+      expect(result.provenance.sourceFamily).toBe("HEXMINING");
+      expect(result.warnings).toContain("hexmining-yield-invalid-stake-shares");
+      expect(deps.fetchEvidence).not.toHaveBeenCalled();
+    });
+
+    it("zero stakeShares does not reach applyCalculation", async () => {
+      const applyCalculation: Mock = vi.fn();
+      const deps = { ...makeDeps(), applyCalculation };
+
+      const result = await estimateHexMiningYield({ ...BASE_ARGS, stakeShares: 0n }, deps);
+
+      expect(result.status).toBe("invalid_observation");
+      expect(applyCalculation).not.toHaveBeenCalled();
+    });
+
+    // ── Test 4: negative stakeShares is rejected ──────────────────────────────
+
+    it("negative stakeShares returns invalid_observation before evidence fetch", async () => {
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield({ ...BASE_ARGS, stakeShares: -1n }, deps);
+
+      expect(result.status).toBe("invalid_observation");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-invalid-stake-shares");
+      expect(deps.fetchEvidence).not.toHaveBeenCalled();
+    });
+
+    it("negative stakeShares does not reach applyCalculation", async () => {
+      const applyCalculation: Mock = vi.fn();
+      const deps = { ...makeDeps(), applyCalculation };
+
+      await estimateHexMiningYield({ ...BASE_ARGS, stakeShares: -100n }, deps);
+
+      expect(applyCalculation).not.toHaveBeenCalled();
+    });
+
+    // ── Test 5: invalid stakeShares short-circuits before invalid observation ─
+
+    it("invalid stakeShares provenance has null observationId", async () => {
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield({ ...BASE_ARGS, stakeShares: 0n }, deps);
+
+      expect(result.provenance.observationId).toBeNull();
+      expect(result.provenance.chainId).toBe(369);
+      expect(result.provenance.rangeStartDay).toBe(BASE_ARGS.rangeStartDay);
+      expect(result.provenance.rangeEndDay).toBe(BASE_ARGS.rangeEndDay);
+    });
+
+    // ── Test 6: stakeShares not exposed in public result ────────────────────
+
+    it("stakeShares value is not exposed in any public result field", async () => {
+      const applyCalculation: Mock = vi.fn().mockReturnValue({
+        status: "calculation_not_implemented" as const,
+      });
+      const deps = { ...makeDeps(), applyCalculation };
+      const result = await estimateHexMiningYield({ ...BASE_ARGS, stakeShares: 999n }, deps);
+      const serialized = JSON.stringify(result);
+
+      expect(serialized).not.toContain("stakeShares");
+      expect(serialized).not.toContain("999");
     });
   });
 });

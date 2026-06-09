@@ -16,6 +16,7 @@ const PULSECHAIN_CHAIN_ID = 369;
 export type HexMiningYieldEstimateArgs = {
   chainId: number;
   stakeId: string;
+  stakeShares: bigint;
   lockedDay: number;
   stakedDays: number;
   currentDay: number;
@@ -41,9 +42,8 @@ type YieldCalculationResult = {
 // (refs: §11.4 yield status policy, §11.9 minimum provenance requirements)
 //
 // Not implemented because:
-//   (a) stakeShares is not yet available in HexMiningYieldEstimateArgs (requires stakeLists wiring)
-//   (b) no deterministic test vectors for the full yield formula exist in-repo
-// Returns calculation_not_implemented until both prerequisites are met.
+//   no deterministic test vectors for the full yield formula exist in-repo
+// Returns calculation_not_implemented until this prerequisite is met.
 function defaultApplyCalculation(
   entries: readonly DecodedDailyDataEntry[],
   args: HexMiningYieldEstimateArgs,
@@ -127,6 +127,23 @@ export async function estimateHexMiningYield(
         rangeEndDay: null,
       },
       warnings: [`hexmining-yield-unsupported-chain-${args.chainId}`],
+    };
+  }
+
+  // 1.5. Validate stakeShares — must be strictly positive; zero or negative is invalid.
+  if (args.stakeShares <= 0n) {
+    return {
+      status: "invalid_observation",
+      schemaVersion: "v1",
+      yieldHex: null,
+      provenance: {
+        chainId: args.chainId,
+        sourceFamily: "HEXMINING",
+        observationId: null,
+        rangeStartDay: args.rangeStartDay,
+        rangeEndDay: args.rangeEndDay,
+      },
+      warnings: ["hexmining-yield-invalid-stake-shares"],
     };
   }
 
