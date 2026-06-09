@@ -244,7 +244,7 @@ export async function estimateHexMiningYield(
   // 8. Apply internal calculation boundary with decoded entries
   // calculation_not_implemented → evidence_available: formula deferred, not an error
   const applyCalculation = deps.applyCalculation ?? defaultApplyCalculation;
-  applyCalculation(packedResult.entries, args);
+  void applyCalculation(packedResult.entries, args);
 
   // 9. Evidence validated and decoded — yield formula deferred
   return {
