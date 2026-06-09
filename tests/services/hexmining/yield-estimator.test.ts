@@ -17,9 +17,22 @@ const BASE_ARGS: HexMiningYieldEstimateArgs = {
   rangeEndDay: 1199,
 };
 
+// Valid canonical payload using spec §4 test vectors (bigint-safe decimal strings).
+const DEFAULT_CANONICAL_PAYLOAD = JSON.stringify({
+  schemaVersion: "v1",
+  dailyData: [
+    "0", // vector 1 — zero
+    "2361183241434822606849000", // vector 2 — payout=1000, shares=500
+    "9444732965739290427391", // vector 3 — payout=uint72max, shares=1
+  ],
+});
+
+// EvidenceWithPayload = ObservationEvidenceMetadata & { canonicalPayload: string }
+type EvidenceWithPayload = ObservationEvidenceMetadata & { canonicalPayload: string };
+
 function makeEvidence(
-  overrides: Partial<ObservationEvidenceMetadata> = {},
-): ObservationEvidenceMetadata {
+  overrides: Partial<EvidenceWithPayload> = {},
+): EvidenceWithPayload {
   return {
     observationId: "obs-abc-123",
     chainId: 369,
@@ -32,12 +45,13 @@ function makeEvidence(
     payloadSchemaValid: true,
     isInvalidated: false,
     warnings: [],
+    canonicalPayload: DEFAULT_CANONICAL_PAYLOAD,
     ...overrides,
   };
 }
 
 function makeDeps(
-  evidence: ObservationEvidenceMetadata | null = makeEvidence(),
+  evidence: EvidenceWithPayload | null = makeEvidence(),
 ): HexMiningYieldEstimatorDeps {
   return {
     fetchEvidence: vi.fn().mockResolvedValue(evidence),
@@ -141,8 +155,77 @@ describe("estimateHexMiningYield", () => {
     });
   });
 
+  describe("payload decode layer", () => {
+    it("returns invalid_observation when canonicalPayload fails decodeDailyDataPayload", async () => {
+      // payloadSchemaValid:true but schemaVersion is "v2" — provider accepts it,
+      // decodeDailyDataPayload rejects it as unsupported-schema-version.
+      const invalidPayload = JSON.stringify({
+        schemaVersion: "v2",
+        dailyData: ["1000"],
+      });
+      const deps = makeDeps(makeEvidence({ canonicalPayload: invalidPayload }));
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("invalid_observation");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-payload-decode-failed");
+    });
+
+    it("returns invalid_observation when canonicalPayload contains non-decimal entry", async () => {
+      const invalidPayload = JSON.stringify({
+        schemaVersion: "v1",
+        dailyData: ["1000", "not-a-number"],
+      });
+      const deps = makeDeps(makeEvidence({ canonicalPayload: invalidPayload }));
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("invalid_observation");
+      expect(result.warnings).toContain("hexmining-yield-payload-decode-failed");
+    });
+
+    it("negative packed value string is rejected by payload decoder before packed decoder", async () => {
+      // "-1" fails isValidUnsignedDecimalString — decodeDailyDataPayload rejects it.
+      const negativePayload = JSON.stringify({
+        schemaVersion: "v1",
+        dailyData: ["-1"],
+      });
+      const deps = makeDeps(makeEvidence({ canonicalPayload: negativePayload }));
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("invalid_observation");
+      expect(result.warnings).toContain("hexmining-yield-payload-decode-failed");
+    });
+  });
+
+  describe("packed decode layer", () => {
+    it("returns invalid_observation when a dailyData entry exceeds (2n**200n)-1n", async () => {
+      // 2n**200n = 1606938044258990275541962092341162602522202993782792835301376n
+      // Valid decimal string, passes payload decoder, fails packed decoder.
+      const tooLarge = (2n ** 200n).toString();
+      const oversizedPayload = JSON.stringify({
+        schemaVersion: "v1",
+        dailyData: ["1000", tooLarge],
+      });
+      const deps = makeDeps(makeEvidence({ canonicalPayload: oversizedPayload }));
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("invalid_observation");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-packed-decode-failed");
+    });
+
+    it("returns evidence_available when all packed entries are within valid range", async () => {
+      // All spec §4 vectors are well within (2n**200n)-1n.
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+    });
+  });
+
   describe("evidence available — formula deferred", () => {
-    it("returns evidence_available for valid non-invalidated evidence", async () => {
+    it("returns evidence_available for valid non-invalidated evidence with valid payload", async () => {
       const deps = makeDeps();
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
@@ -173,6 +256,16 @@ describe("estimateHexMiningYield", () => {
       expect(serialized).not.toContain("rawDailyData");
       expect(serialized).not.toContain("payloadHash");
       expect(serialized).not.toContain("dailyData");
+    });
+
+    it("never exposes decoded packed fields in result", async () => {
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+      const serialized = JSON.stringify(result);
+
+      expect(serialized).not.toContain("dayPayoutTotal");
+      expect(serialized).not.toContain("dayStakeSharesTotal");
+      expect(serialized).not.toContain("dayUnclaimedSatoshisTotal");
     });
 
     it("always includes schemaVersion v1 regardless of status", async () => {
