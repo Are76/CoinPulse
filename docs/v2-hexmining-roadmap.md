@@ -1,8 +1,8 @@
 # V2 HexMining Roadmap
 
-**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is next.
+**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208, #209, #210 merged; packed uint72 decoder is blocked pending verified dailyData bit-layout evidence (see §11.13).
 **Created:** 2026-06-06
-**Last updated:** 2026-06-08 (Phase 4B complete — PRs #204, #205, #206; Phase 4C yield estimation next)
+**Last updated:** 2026-06-09 (Phase 4C partial progress — PRs #208, #209, #210 merged; packed uint72 decoder blocked — see §11.13 for acceptance criteria)
 
 ## Phase completion status
 
@@ -14,7 +14,7 @@
 | Phase 3 | HexMining page shell / unsupported valuation display | ✅ Complete — merged PRs #192, #193 |
 | Phase 4A | Observation persistence, status API, and operator surface | ✅ Complete — merged PRs #199–#202 |
 | Phase 4B | dailyDataRange read boundary, persistence wiring, and gated operator route | ✅ Complete — merged PRs #204, #205, #206 |
-| Phase 4C | Yield estimation and DTO wiring | 🔲 Not started — must begin with a small estimator-contract PR only; no UI |
+| Phase 4C | Yield estimation and DTO wiring | ⚠️ In progress (blocked) — PRs #208, #209, #210 merged; packed uint72 decoder blocked pending verified dailyData bit-layout evidence (see §11.13) |
 | Phase 5 | Ended stake discovery | 🔲 Not started |
 | Phase 6 | HSI and HTT source families | 🔲 Not started |
 | Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
@@ -507,10 +507,16 @@ This section documents the decisions that must be resolved or explicitly framed 
 | #204 | `feat(hexmining): add dailyDataRange read boundary` | `src/services/hexmining/daily-data-reader.ts`: `readCurrentDay()`, `readDailyDataRangeObservation()`; PulseChain chain ID 369 only; pHEX `dailyDataRange` reads; persisted `rangeEndDay` is inclusive, RPC call uses `rangeEndDay + 1` (end-exclusive); `rawDailyData` remains `bigint[]` at read boundary; no persistence, yield, or UI in this PR |
 | #205 | `feat(hexmining): wire dailyDataRange observations to persistence` | `acquireAndPersistHexDailyDataObservation()` in `src/services/hexmining/daily-data-observation-service.ts`; encodes `rawDailyData` `bigint[]` as deterministic base-10 decimal strings; validates canonical payload before persistence; persists via `persistHexDailyDataObservation()`; reuses `payloadHash`/dedup in `observation-store.ts`; no `canonicalPayload` exposure; no yield, UI, schema, or sync |
 | #206 | `feat(hexmining): add observation admin route` | `POST /api/hexmining/observations`; disabled by default — returns 404 unless `HEXMINING_OBSERVATION_ADMIN_ENABLED=true`; gate fires before JSON parse, client construction, or service invocation; accepts inclusive `rangeStartDay`/`rangeEndDay`; validates via Zod; calls `acquireAndPersistHexDailyDataObservation()`; returns safe metadata only (`id`, `rangeStartDay`, `rangeEndDay`, `observedAtBlock`, `observedAt`, `warnings`); does not expose `canonicalPayload`, `rawDailyData`, or `payloadHash`; no yield, UI, schema, sync, or cron |
+| #207 | `docs(hexmining): close Phase 4B observation evidence` | `docs/v2-hexmining-roadmap.md` only; Phase completion table and header updated for Phase 4B complete; §11.12 Phase 4B completion evidence record; §12 updated with Phase 4C estimator-contract as next PR |
+| #208 | `feat(hexmining): add Phase 4C yield estimator contract` | `src/services/hexmining/yield-estimator.ts` (new), `tests/services/hexmining/yield-estimator.test.ts` (new); `estimateHexMiningYield(args, deps)` function; `HexMiningYieldEstimateResult` discriminated union; statuses: `estimated \| evidence_available \| insufficient_observations \| invalid_observation \| unavailable \| unsupported`; injectable `fetchEvidence` dep; no RPC, no yield math, no UI |
+| #209 | `feat(hexmining): add yield observation evidence provider` | `src/services/hexmining/observation-evidence-provider.ts` (new), `tests/services/hexmining/observation-evidence-provider.test.ts` (new); `getObservationEvidenceForRange(args, deps)` queries persisted `RawHexDailyDataObservation` rows; returns `ObservationEvidenceMetadata` (no `canonicalPayload`/`payloadHash`/`rawDailyData` exposure); `payloadSchemaValid` flag from internal decode; chain guard (369 only); DB mock tests; no RPC |
+| #210 | `feat(hexmining): add dailyData payload decoder` | `src/services/hexmining/daily-data-payload-decoder.ts` (new), `tests/services/hexmining/daily-data-payload-decoder.test.ts` (new); `decodeDailyDataPayload(canonicalPayload)` parses `{ schemaVersion: "v1", dailyData: [...] }` canonical payload; rejects numeric JSON values (§11.8), invalid root, missing fields; returns `readonly bigint[]`; 31 tests; **no packed uint72 decoding — each entry remains a raw packed bigint** |
 
 Post-merge audit (2026-06-08, after PR #202): all 1354 tests pass, lint clean, typecheck clean, build clean, no guardrail violations.
 
 Post-merge audit (2026-06-08, after PR #206): all 1421 tests pass, lint clean, typecheck clean, build clean, no guardrail violations.
+
+Post-merge audit (2026-06-09, after PR #210): tests pass, lint clean, typecheck clean, build clean, no guardrail violations. Phase 4C partial — packed uint72 decoder blocked (see §11.13).
 
 ---
 
@@ -795,14 +801,21 @@ No step may be skipped. No yield calculation reaches production before Step 3 (P
 - No yield calculation, no APY, no pricing, valuation, PnL, no schema/migration, no frontend.
 - `canonicalPayload`, `rawDailyData`, and `payloadHash` are never exposed through any DTO or API response.
 
-**Step 3 — Yield estimation PR (Phase 4C)**
-`feat(hexmining): add dailyDataRange yield estimation`
-- Compute `yield.status: "estimated"` from persisted `RawHexDailyDataObservation` rows using the conditions from §11.4.
-- Enforce elapsed-days-only coverage rule: `rangeStartDay = lockedDay`, `rangeEndDay = min(currentDay, lockedDay + stakedDays - 1)` (see §11.4 invariant #2 and §11.9).
-- Apply canonical-selection policy (§11.8) when multiple observations cover the same range.
-- Model Big Pay Day with `bpdYieldStatus` / `bpdYieldHex` per §11.4 invariant #5.
-- All reads use mock `HexMiningReadClient` in tests; no live network calls.
-- Files in scope: new yield estimator module, `src/services/hexmining/`, `tests/services/hexmining/`.
+**Step 3 — Yield estimation PR (Phase 4C) — PARTIAL PROGRESS / BLOCKED**
+
+Phase 4C has begun. Three bounded PRs are merged:
+- PR #208: yield estimator contract (`estimateHexMiningYield`) — statuses, deps, provenance; no yield math.
+- PR #209: observation evidence provider (`getObservationEvidenceForRange`) — reads persisted rows, returns `ObservationEvidenceMetadata`; no `canonicalPayload` exposure.
+- PR #210: canonical payload decoder (`decodeDailyDataPayload`) — parses `{ schemaVersion: "v1", dailyData: [...] }` to `readonly bigint[]`; no packed uint72 decoding.
+
+**Current blocker:** The next required step — decoding each raw packed uint72 bigint into named fields (`dayPayoutTotal`, `dayStakeSharesTotal`, `dayUnclaimedSatoshisTotal`) — is blocked because the dailyData uint72 bit layout is not verified in-repo. See §11.13 for the full blocker record and acceptance criteria.
+
+**Remaining scope (once bit layout is verified and documented):**
+- Packed uint72 field decoder (`src/services/hexmining/daily-data-packed-decoder.ts`).
+- Yield formula consuming decoded fields per §11.4 and §11.9.
+- Elapsed-days-only coverage rule and canonical-selection policy (§11.8).
+- Big Pay Day modelling with `bpdYieldStatus` / `bpdYieldHex` per §11.4 invariant #5.
+- Files in scope: `src/services/hexmining/`, `tests/services/hexmining/`.
 
 **Step 4 — Yield DTO wiring and API route update PR**
 `feat(hexmining): wire estimated yield fields into HexStakeDto and API route`
@@ -948,42 +961,148 @@ Phase 4C may not begin with a UI or DTO-wiring PR. The first Phase 4C PR must be
 
 ---
 
+### 11.13 Phase 4C partial progress and packed uint72 decoder blocker
+
+**Status: IN PROGRESS — PRs #208, #209, #210 merged. Packed decoder BLOCKED — bit layout not verified in-repo.**
+
+---
+
+#### What is already complete
+
+The following Phase 4C building blocks are merged and tested:
+
+| PR | What was delivered |
+|---|---|
+| #208 | `estimateHexMiningYield(args, deps)` in `src/services/hexmining/yield-estimator.ts`; injectable `fetchEvidence` dep; `HexMiningYieldEstimateResult` discriminated union with statuses `estimated \| evidence_available \| insufficient_observations \| invalid_observation \| unavailable \| unsupported`; no yield math, no RPC, no UI |
+| #209 | `getObservationEvidenceForRange(args, deps)` in `src/services/hexmining/observation-evidence-provider.ts`; queries persisted `RawHexDailyDataObservation` rows from the database; chain guard (369 only); returns `ObservationEvidenceMetadata` (never exposes `canonicalPayload`, `payloadHash`, or `rawDailyData`); `payloadSchemaValid` flag from internal payload decode; DB mock tests; no RPC |
+| #210 | `decodeDailyDataPayload(canonicalPayload)` in `src/services/hexmining/daily-data-payload-decoder.ts`; parses the persisted canonical payload shape `{ "schemaVersion": "v1", "dailyData": ["val0", "val1", ...] }`; validates schema version, root type, array structure; rejects numeric JSON values (§11.8 bigint-safe policy); returns `{ ok: true, dailyData: readonly bigint[], entryCount, warnings }` on success; **each `dailyData` entry is a raw packed uint72 bigint stored as a decimal string — no packed field decoding occurs in this PR** |
+
+**Key point:** `encodeDailyDataPayload` (PR #205, `daily-data-observation-service.ts`) stores the raw packed uint72 values received from viem directly as base-10 decimal strings. It does not pre-decode them. `decodeDailyDataPayload` (PR #210) parses the canonical payload and returns those packed bigints as-is. Unpacking each bigint into named fields is the responsibility of the packed decoder that this blocker note tracks.
+
+---
+
+#### What the next intended code slice was
+
+The next intended implementation step after PR #210 was:
+
+A pure decoder function `decodePackedDailyDataEntry(packedValue: bigint)` (or `decodePackedDailyDataEntries`) that:
+- Accepts a single raw packed uint72 bigint from the output of `decodeDailyDataPayload`.
+- Rejects negative bigints.
+- Rejects values greater than max uint72 (`2^72 - 1 = 4722366482869645213695n`).
+- Unpacks the bigint into named bigint-safe fields according to the documented HEX `dailyDataRange` uint72 packing layout.
+- Returns a result union (not throws) for expected invalid inputs.
+- Produces no yield math, no APY, no pricing, valuation, or PnL.
+
+That implementation attempt correctly stopped because the bit layout is not verified in-repo.
+
+---
+
+#### Why this step is blocked
+
+**The repository does not currently contain a verified specification for the HEX `dailyData` uint72 packed bit layout.**
+
+The repo does not specify:
+
+| Missing specification | Detail |
+|---|---|
+| Which bits correspond to `dayPayoutTotal` | Bit offset and width unknown |
+| Which bits correspond to `dayStakeSharesTotal` | Bit offset and width unknown |
+| Which bits correspond to `dayUnclaimedSatoshisTotal` | Bit offset and width unknown |
+| Bit widths for each field | Not documented |
+| Bit offsets for each field | Not documented |
+| Bit order / LSB vs MSB interpretation | Not documented |
+| Shift constants | Not documented |
+| Mask constants | Not documented |
+| Units and scaling for each field | Not documented (e.g. hearts, T-shares, satoshis — scales unverified) |
+| Whether values are cumulative or per-day | Not documented |
+| Deterministic test vectors | No packed input → expected decoded output mappings exist in-repo |
+
+Without every one of these items verified and documented, any packed decoder implementation would be based on assumptions. An incorrect bit layout would silently produce wrong field values in yield calculations, corrupting estimated yield figures in ways that would not be caught by tests written from the same incorrect assumptions.
+
+---
+
+#### Clarification on field-name references in existing tests
+
+The field names `dayPayoutTotal`, `dayStakeSharesTotal`, and `dayUnclaimedSatoshisTotal` appear in `tests/services/hexmining/raw-dailydata-observation-schema.test.ts` (PR #199). These are **not** a bit-layout specification. They appear as illustrative examples of what a human-readable decoded payload might look like in the bigint encoding policy documentation test. Specifically:
+
+- They show how viem-shaped bigint values would be serialized as base-10 decimal strings per the §11.8 bigint-safe policy.
+- They demonstrate the encoding rule with named fields as a readable example.
+- They are not derived from or verified against the actual HEX contract Solidity source.
+- They must not be used to infer bit positions, bit widths, masks, shifts, or field ordering.
+- No test in the repository asserts that any uint72 value from viem decodes to specific values for these named fields.
+
+---
+
+#### Guardrail
+
+No packed decoder, yield estimator implementation, APY calculation, pricing, valuation, PnL, DTO exposure, API route, frontend component, or UI work may proceed based on memory, assumptions, inferred layout, or any source not explicitly documented in this repository.
+
+Before packed decoding implementation resumes, the repository must contain a verified source for:
+
+- Packed uint72 bit layout (source cited or copied reference)
+- Field names
+- Bit widths for each field
+- Bit offsets for each field
+- Shift constants and mask constants
+- Units and scaling for each field (hearts, T-shares, satoshis — exact scales)
+- Cumulative vs per-day semantics
+- At least one deterministic test vector in the form:
+  - Packed uint72 decimal string input value
+  - Expected decoded field names
+  - Expected decoded bigint values for each field
+
+---
+
+#### Acceptance criteria for unblocking packed decoder work
+
+Phase 4C packed decoding can resume only after ALL of the following are met:
+
+1. A verified source for the HEX `dailyDataRange` uint72 packed bit layout has been obtained (e.g., HEX Solidity contract source, verified reference implementation, or authoritative protocol documentation).
+2. The exact bit layout is documented in this repo (in this section or in a dedicated `docs/hex-dailydata-packing-spec.md`), with the source cited.
+3. Field names are agreed and documented (`dayPayoutTotal`, `dayStakeSharesTotal`, `dayUnclaimedSatoshisTotal`, or corrected names if the verified source uses different names).
+4. Bit widths and bit offsets for each field are documented.
+5. Shift constants and mask constants are documented.
+6. Units and scaling for each field are documented.
+7. At least one deterministic test vector is documented: a packed uint72 decimal string input and expected decoded output for every field.
+8. Tests for the packed decoder can be written purely from the documented specification, without requiring knowledge external to the repo.
+9. No yield formula is implemented until packed decoding is verified and tested.
+10. Yield formula implementation must cite the same verified source for the calculation method.
+
+---
+
 ## 12. Proposed Next PR (updated)
 
 **Phase 4B is complete.** PRs #204, #205, and #206 delivered the full read boundary, persistence wiring, and gated operator route.
 
-**Immediate next PR: Phase 4C estimator-contract (§11.10 Step 3)**
+**Phase 4C is in progress and blocked.** PRs #208, #209, and #210 delivered the yield estimator contract, observation evidence provider, and canonical payload decoder. The next required step — packed uint72 field decoding — is blocked. See §11.13.
 
-Suggested title: `feat(hexmining): add dailyDataRange yield estimation`
+**Immediate next step: obtain and document verified dailyData uint72 bit-layout evidence**
 
-This is the correct next step because:
-- The `RawHexDailyDataObservation` persistence layer is complete (PR #199).
-- The read boundary and persistence wiring are complete (PRs #204–#206).
-- The yield type contracts are complete (PRs #195 and #196).
-- Persisted observations now exist in the database as ingestion evidence.
-- The only missing piece before yield can appear in the DTO is the estimator that reads persisted observations and applies the §11.4/§11.9 rules.
+Phase 4C packed decoder and yield estimator implementation work must not proceed until the bit layout is verified and documented in this repo. The next safe work item is:
 
-**Scope of the Phase 4C estimator-contract PR (Step 3 only):**
-- New yield estimator module in `src/services/hexmining/`.
-- Reads persisted `RawHexDailyDataObservation` rows from the database (does **not** call RPC directly).
-- Applies elapsed-days-only coverage rule: `rangeStartDay = lockedDay`, `rangeEndDay = min(currentDay, lockedDay + stakedDays - 1)`.
-- Applies canonical-selection policy (§11.8) when multiple observations cover the same range.
-- Models Big Pay Day with `bpdYieldStatus` / `bpdYieldHex` per §11.4 invariant #5.
-- Returns `yield.status: "estimated"` or `"unavailable"` with full provenance.
-- Full contract tests with mock DB reads and no live RPC calls.
+1. Obtain a verified source for the HEX `dailyDataRange` uint72 packed bit layout.
+2. Add a documented specification to this file (or a dedicated `docs/hex-dailydata-packing-spec.md`) with: field names, bit widths, bit offsets, shift/mask constants, units/scaling, cumulative vs per-day semantics, and at least one deterministic test vector.
+3. Once documented, open `feat(hexmining): add dailyData packed decoder` with the bit layout source cited in the PR body.
 
-**What the Phase 4C estimator-contract PR must NOT do:**
-- No API route changes or new routes (Step 4 scope).
-- No frontend changes, React hooks, or TanStack Query hooks (Step 5 scope).
+**Once unblocked — scope of the packed decoder PR:**
+- New `decodePackedDailyDataEntry(packedValue: bigint)` function in `src/services/hexmining/daily-data-packed-decoder.ts`.
+- Accepts a single packed uint72 bigint from `decodeDailyDataPayload` output.
+- Returns named bigint-safe fields (e.g. `dayPayoutTotal`, `dayStakeSharesTotal`, `dayUnclaimedSatoshisTotal`).
+- No yield formula. No APY. No pricing, valuation, or PnL.
+- Deterministic unit tests using documented test vectors.
+
+**What must NOT happen before the bit layout is verified and documented:**
+- No packed decoder implementation.
+- No yield formula or APY.
 - No pricing, valuation, or PnL.
+- No API route changes or new routes.
+- No frontend changes, React hooks, or TanStack Query hooks.
 - No new Prisma schema or migrations.
 - No live RPC calls from yield logic.
 - No `canonicalPayload` exposure in any DTO or API response.
 - No `valuation.status` or `pnl.status` changes (remain `"unsupported"` until Phase 7).
 
-**Prerequisite before opening the Phase 4C PR:**
-- Verify that route-produced observations exist in the database (run `POST /api/hexmining/observations` with `HEXMINING_OBSERVATION_ADMIN_ENABLED=true` and confirm rows in `rawHexDailyDataObservation`).
-- Do not begin yield estimation until at least one valid observation row exists, or the estimator will trivially return `"unavailable"` for every stake.
+See §11.13 for the full blocker record, acceptance criteria, and guardrail details.
 
 ---
 
@@ -1009,6 +1128,16 @@ This is the correct next step because:
 - `npm run lint` — passed, no ESLint errors.
 - `npm run typecheck` — passed, no type errors.
 - `npm run build` — passed, all routes compiled cleanly.
+
+**PR #207 validation (docs/hexmining-phase4b-evidence-closure — docs only):**
+- `git diff --check` — passed, no trailing whitespace.
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
+
+**This PR (docs/hexmining-dailydata-bit-layout-evidence — docs only):**
+- `git diff --check` — passed, no trailing whitespace.
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
 
 ---
 
@@ -1055,10 +1184,31 @@ This is the correct next step because:
 - **What changed:** `POST /api/hexmining/observations` gated admin route; `HexMiningReadClient` type refactored to `Pick<PublicClient, "readContract" | "getBlockNumber">`. 24 contract tests. No yield, no UI, no schema.
 - **PR status:** FEAT — route only
 
-**This PR (docs/hexmining-phase4b-evidence-closure):**
+**PR #207 (docs/hexmining-phase4b-evidence-closure):**
 - **Branch:** `docs/hexmining-phase4b-evidence-closure`
 - **Changed files:** `docs/v2-hexmining-roadmap.md` only
 - **What changed:** Document header and Phase completion table updated for Phase 4B complete; §11.1 extended with PRs #203–#206 and post-merge audit (1421 tests); §11.10 Step 2 marked complete; §11.12 repurposed as Phase 4B completion evidence record with delivered items, guardrails, and Phase 4C constraints; §12 updated to describe Phase 4C estimator-contract as the next PR; Final Status extended.
 - **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
-- **Merge requirement:** None blocking. Phase 4B is complete. Phase 4C (§11.10 Step 3) is fully constrained and ready for implementation.
+
+**PR #208 (feat/hexmining-yield-estimator-contract):**
+- **Changed files:** `src/services/hexmining/yield-estimator.ts` (new), `tests/services/hexmining/yield-estimator.test.ts` (new), `src/services/hexmining/types.ts` (updated)
+- **What changed:** `estimateHexMiningYield(args, deps)` yield estimator contract; `HexMiningYieldEstimateResult` discriminated union; injectable `fetchEvidence` dep; statuses: `estimated | evidence_available | insufficient_observations | invalid_observation | unavailable | unsupported`; no yield math, no RPC, no UI.
+- **PR status:** FEAT — service contract only
+
+**PR #209 (feat/hexmining-yield-evidence-provider):**
+- **Changed files:** `src/services/hexmining/observation-evidence-provider.ts` (new), `tests/services/hexmining/observation-evidence-provider.test.ts` (new), `src/services/hexmining/yield-estimator.ts` (updated to consume `ObservationEvidenceMetadata`)
+- **What changed:** `getObservationEvidenceForRange(args, deps)` evidence provider; `ObservationEvidenceMetadata` return type; chain guard; DB mock tests; no `canonicalPayload` exposure; no RPC.
+- **PR status:** FEAT — service only
+
+**PR #210 (feat/hexmining-dailydata-payload-decoder):**
+- **Changed files:** `src/services/hexmining/daily-data-payload-decoder.ts` (new), `tests/services/hexmining/daily-data-payload-decoder.test.ts` (new)
+- **What changed:** `decodeDailyDataPayload(canonicalPayload)` canonical payload decoder; `DecodeDailyDataPayloadResult` discriminated union; `DecodeDailyDataPayloadErrorCode` literal union; 31 tests. Returns `readonly bigint[]` — no packed uint72 decoding.
+- **PR status:** FEAT — service only
+
+**This PR (docs/hexmining-dailydata-bit-layout-evidence):**
+- **Branch:** `docs/hexmining-dailydata-bit-layout-evidence`
+- **Changed files:** `docs/v2-hexmining-roadmap.md` only
+- **What changed:** Document header and Phase completion table updated for Phase 4C in-progress/blocked; §11.1 extended with PRs #207–#210 and post-merge audit; §11.10 Step 3 updated with partial progress and blocker; §11.13 added — full blocker record for packed uint72 decoder (what is complete, what is blocked, why, clarification on field-name references, guardrail, acceptance criteria); §12 updated with blocker state and unblocking path; Final Status extended.
+- **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
+- **Merge requirement:** None blocking. Phase 4C packed decoder and yield work remain blocked pending verified dailyData uint72 bit-layout evidence added to this repo per §11.13 acceptance criteria.
 - **Recommendation: MERGE**
