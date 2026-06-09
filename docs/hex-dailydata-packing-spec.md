@@ -241,18 +241,21 @@ Verification:
 
 ---
 
-### Vector 4 — value exceeding uint72 must be rejected
+### Vector 4 — valid packed upper bound
+
+Each packed element is a `uint256` value with 200 significant bits (bits 0–199) and 56 bits of zero padding (bits 200–255). The packed value is **not** bounded by `uint72` — that is the width of one individual field, not the container.
 
 | Condition | Value |
 |---|---|
-| Input packed | `4722366482869645213696n` (= `2n**72n`, one above max uint72) |
-| Expected | Decoder must reject as out-of-range (> max uint256-packed value is not the issue; the value itself is valid for uint256, but a decoder that receives this as a pre-decoded bigint from `decodeDailyDataPayload` should validate that it is ≤ max uint72 = `4722366482869645213695n` **only if** the input was declared as uint72) |
+| Valid packed range | `0n` ≤ `packed` ≤ `(2n**200n) - 1n` |
+| Bits 200–255 | Must be zero — these are the padding bits |
+| `4722366482869645213696n` (= `2n**72n`) | ✅ Valid packed input — this value has `dayStakeSharesTotal = 1` (bit 72 set) and `dayPayoutTotal = 0`; it is NOT out-of-range for the packed uint256 |
 
-**Correction:** When the ABI is corrected to `uint256[]`, input values may legitimately span 200 bits. The decoder's validation boundary should be `packed ≤ (2n**200n) - 1n` for the packed uint256, or individual field validation after unpacking. This is an implementation decision for the packed decoder PR — documented here to avoid silent acceptance of negative or unreasonably large inputs.
+**Decoder validation boundary:** The packed decoder should reject negative bigints and values exceeding `(2n**200n) - 1n`. Rejecting values ≤ max uint72 would be incorrect — packed values legitimately use all 200 bits. Individual field values are bounded by their own types (`dayPayoutTotal` ≤ `2n**72n - 1n`, etc.) and can be validated after unpacking if needed.
 
 ---
 
-## 5. Critical ABI Discrepancy in Repository
+## 5. ABI Discrepancy in Repository
 
 **This is a blocking finding for packed decoder implementation.**
 
@@ -266,27 +269,51 @@ Verification:
 
 The actual on-chain function returns **`uint256[]`**, not `uint72[]` (verified by Source A above).
 
-### Impact
+### Verified runtime behavior — viem does not truncate
 
-When viem decodes a `uint256[]` ABI response using a `uint72[]` type declaration, it truncates each 32-byte ABI word to 72 bits. The result is that each returned BigInt retains only bits 0–71 of the packed value:
+The truncation impact was investigated locally with viem `decodeAbiParameters`. **Viem does not truncate** when decoding a `uint256[]`-encoded response through a `uint72[]` ABI declaration.
 
-| Field | Bits | With `uint72[]` ABI | With `uint256[]` ABI |
-|---|---|---|---|
-| `dayPayoutTotal` | 0–71 | ✅ preserved | ✅ preserved |
-| `dayStakeSharesTotal` | 72–143 | ❌ silently dropped | ✅ preserved |
-| `dayUnclaimedSatoshisTotal` | 144–199 | ❌ silently dropped | ✅ preserved |
+Verification (Node.js, viem installed in repo):
 
-**Consequence:** Every `RawHexDailyDataObservation` row currently in the database whose `canonicalPayload` was acquired via the existing `daily-data-reader.ts` code contains only `dayPayoutTotal` for each day. The `dayStakeSharesTotal` and `dayUnclaimedSatoshisTotal` values are lost and cannot be recovered from the stored payload.
+```typescript
+// packed = dayPayoutTotal=1000 | dayStakeSharesTotal=500<<72 | dayUnclaimedSatoshisTotal=7<<144
+const packed = 1000n | (500n << 72n) | (7n << 144n);
+// = 156105216389714361993111211149973353148711912n
 
-### Required fix (deferred to a separate PR — not in this doc PR)
+// Encode as uint256[] (real contract encoding)
+const encoded = encodeAbiParameters([{ type: 'uint256[]' }], [[packed]]);
+
+// Decode with wrong uint72[] ABI:
+const [r72]  = decodeAbiParameters([{ type: 'uint72[]'  }], encoded);
+// r72[0]  === 156105216389714361993111211149973353148711912n  (FULL value, not truncated)
+
+// Decode with correct uint256[] ABI:
+const [r256] = decodeAbiParameters([{ type: 'uint256[]' }], encoded);
+// r256[0] === 156105216389714361993111211149973353148711912n  (identical)
+```
+
+**Result:** `r72[0] === r256[0] === packed` — all three fields intact. Viem's `decodeNumber` reads the full 32-byte ABI word unconditionally and converts it to a BigInt without masking to the declared bit width. The `uint72` type annotation only affects TypeScript's type-level view; it does not mask the runtime value.
+
+**Consequence for stored data:** `canonicalPayload` rows ingested via the current `daily-data-reader.ts` contain correct full packed uint256 values. The stored data is not corrupted.
+
+### Why the ABI still must be fixed
+
+The ABI declaration is incorrect and must be corrected regardless of the runtime no-truncation finding:
+
+1. **Code correctness:** The declared return type is wrong. Any future viem version, ABI validator, or alternate decoder could behave differently when the declared type does not match the contract.
+2. **Type safety:** TypeScript infers `bigint[]` for both `uint72[]` and `uint256[]`, but the declared type is misleading to readers and static analysis tools.
+3. **Documentation accuracy:** Comments throughout the codebase that reference "uint72 packed" are incorrect — the values are packed `uint256`.
+4. **Interoperability risk:** External tools consuming the ABI (e.g. block explorers, indexers, wallet integrations) may apply their own masking or validation for `uint72` that would cause data loss.
+
+### Required fix
 
 1. Change the ABI declaration in `daily-data-reader.ts` from `uint72[]` to `uint256[]`.
-2. Re-acquire affected observation ranges after the fix is deployed — the stored payloads with the wrong ABI cannot be corrected; new observations must be ingested.
-3. The packed decoder implementation PR may only proceed after the ABI fix is merged and verified.
+2. Update the `rawDailyData` comment from "uint72 packed" to "uint256 packed".
+3. The packed decoder implementation PR should reference `docs/hex-dailydata-packing-spec.md` and use the `uint256[]` ABI.
 
 ### This is not a scope creep risk
 
-The ABI fix is a single line change in `daily-data-reader.ts`. It does not require schema changes. It does not require frontend changes. It should be a bounded, standalone PR.
+The ABI fix is a single-line change in `daily-data-reader.ts`. It does not require schema changes, re-acquisition of stored observations, or frontend changes.
 
 ---
 
@@ -300,12 +327,13 @@ The ABI fix is a single line change in `daily-data-reader.ts`. It does not requi
 | Are bit offsets verified? | ✅ Yes — 0 / 72 / 144 |
 | Are masks verified? | ✅ Yes — `(1<<72)-1` / `(1<<72)-1` / `(1<<56)-1` |
 | Are test vectors available? | ✅ Yes — see §4 above |
-| May the packed decoder PR be opened? | ❌ No — the ABI discrepancy in `daily-data-reader.ts` must be fixed first (§5) |
-| Is there a new blocker? | ✅ Yes — `uint72[]` ABI declaration must be corrected to `uint256[]` before stored observations contain complete data |
+| Does viem truncate with wrong `uint72[]` ABI? | ❌ No — verified locally; full BigInt returned for both ABI declarations |
+| Is stored `canonicalPayload` data corrupted? | ❌ No — viem returns full packed uint256 values regardless of ABI declaration |
+| May the packed decoder PR be opened? | ⚠️ Not yet — ABI declaration should be corrected first for correctness and interoperability safety (§5) |
 
 **Recommended immediate next PR:** `fix(hexmining): correct dailyDataRange ABI declaration from uint72[] to uint256[]`
 
-After that fix is merged and verified: `feat(hexmining): add dailyData packed decoder`
+After that fix is merged: `feat(hexmining): add dailyData packed decoder`
 
 ---
 

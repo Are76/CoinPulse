@@ -813,10 +813,10 @@ Phase 4C has begun. Three bounded PRs are merged:
 
 **Bit layout verified:** `docs/hex-dailydata-packing-spec.md` documents the verified uint256 packed layout from three independent sources (on-chain ABI, JamJomJim/HEX.sol gist, kbahr/HexUtilities.sol gist). Packed decoder implementation is now layout-unblocked.
 
-**Current blocker (ABI discrepancy):** `src/services/hexmining/daily-data-reader.ts` line 14 declares `returns (uint72[] list)` but the actual contract returns `uint256[]`. When viem decodes a `uint256[]` ABI response using a `uint72[]` type declaration, it truncates each 32-byte word to 72 bits — silently dropping `dayStakeSharesTotal` (bits 72–143) and `dayUnclaimedSatoshisTotal` (bits 144–199) from every stored observation. All existing `canonicalPayload` rows contain only `dayPayoutTotal`. See §11.13.
+**Current blocker (ABI discrepancy):** `src/services/hexmining/daily-data-reader.ts` line 14 declares `returns (uint72[] list)` but the actual contract returns `uint256[]`. The ABI declaration is factually incorrect. Verified locally: viem does not truncate — it returns the full BigInt for both `uint72[]` and `uint256[]` declarations (see `docs/hex-dailydata-packing-spec.md` §5). Stored `canonicalPayload` rows are correct and contain all three fields. The ABI must still be fixed for code correctness and interoperability safety before the packed decoder PR opens. See §11.13.
 
-**Remaining scope (once bit layout is verified and documented):**
-- Packed uint72 field decoder (`src/services/hexmining/daily-data-packed-decoder.ts`).
+**Remaining scope (once ABI fix is merged):**
+- Packed uint256 field decoder (`src/services/hexmining/daily-data-packed-decoder.ts`).
 - Yield formula consuming decoded fields per §11.4 and §11.9.
 - Elapsed-days-only coverage rule and canonical-selection policy (§11.8).
 - Big Pay Day modelling with `bpdYieldStatus` / `bpdYieldHex` per §11.4 invariant #5.
@@ -982,7 +982,7 @@ The following Phase 4C building blocks are merged and tested:
 | #209 | `getObservationEvidenceForRange(args, deps)` in `src/services/hexmining/observation-evidence-provider.ts`; queries persisted `RawHexDailyDataObservation` rows from the database; chain guard (369 only); returns `ObservationEvidenceMetadata` (never exposes `canonicalPayload`, `payloadHash`, or `rawDailyData`); `payloadSchemaValid` flag from internal payload decode; DB mock tests; no RPC |
 | #210 | `decodeDailyDataPayload(canonicalPayload)` in `src/services/hexmining/daily-data-payload-decoder.ts`; parses the persisted canonical payload shape `{ "schemaVersion": "v1", "dailyData": ["val0", "val1", ...] }`; validates schema version, root type, array structure; rejects numeric JSON values (§11.8 bigint-safe policy); returns `{ ok: true, dailyData: readonly bigint[], entryCount, warnings }` on success; **each `dailyData` entry is a raw packed uint256 bigint stored as a decimal string — no packed field decoding occurs in this PR** |
 
-**Key point:** `encodeDailyDataPayload` (PR #205, `daily-data-observation-service.ts`) stores the raw packed uint256 values received from viem directly as base-10 decimal strings. It does not pre-decode them. `decodeDailyDataPayload` (PR #210) parses the canonical payload and returns those packed bigints as-is. Unpacking each bigint into named fields is the responsibility of the packed decoder that this blocker note tracks. (Note: due to the ABI discrepancy documented in §11.13, currently stored values are truncated to 72 bits — only `dayPayoutTotal` is preserved. The fix is to correct the ABI declaration to `uint256[]`.)
+**Key point:** `encodeDailyDataPayload` (PR #205, `daily-data-observation-service.ts`) stores the raw packed uint256 values received from viem directly as base-10 decimal strings. It does not pre-decode them. `decodeDailyDataPayload` (PR #210) parses the canonical payload and returns those packed bigints as-is. Unpacking each bigint into named fields is the responsibility of the packed decoder that this blocker note tracks. (Note: viem returns the full packed uint256 value regardless of whether the ABI declares `uint72[]` or `uint256[]` — no truncation occurs at runtime. Stored `canonicalPayload` rows contain all three fields. See `docs/hex-dailydata-packing-spec.md` §5.)
 
 ---
 
@@ -1035,22 +1035,21 @@ Four deterministic test vectors are provided in `docs/hex-dailydata-packing-spec
 //                                                                        ^^^^^^ should be uint256[]
 ```
 
-When viem decodes a `uint256[]` ABI response using a `uint72[]` type declaration, it truncates each 32-byte ABI word to 72 bits. The impact per observation element:
+**Verified runtime behavior — viem does not truncate.** The truncation impact was investigated locally using viem `decodeAbiParameters` (see `docs/hex-dailydata-packing-spec.md` §5 for the full verification script). Viem's `decodeNumber` reads the full 32-byte ABI word without masking to the declared bit width. Both `uint72[]` and `uint256[]` return the same full BigInt value. Stored `canonicalPayload` rows are not corrupted.
 
-| Field | Bits | With `uint72[]` ABI (current) | With `uint256[]` ABI (correct) |
-|---|---|---|---|
-| `dayPayoutTotal` | 0–71 | ✅ preserved | ✅ preserved |
-| `dayStakeSharesTotal` | 72–143 | ❌ silently dropped | ✅ preserved |
-| `dayUnclaimedSatoshisTotal` | 144–199 | ❌ silently dropped | ✅ preserved |
+**The ABI must still be corrected for the following reasons:**
 
-**Consequence:** Every `RawHexDailyDataObservation` row currently in the database whose `canonicalPayload` was acquired via the existing `daily-data-reader.ts` code contains only `dayPayoutTotal` for each day. The `dayStakeSharesTotal` and `dayUnclaimedSatoshisTotal` values are lost and cannot be recovered from the stored payload.
+1. **Code correctness:** The declared return type is factually wrong. A future viem version, alternate decoder, or external tooling may apply `uint72` masking and cause data loss.
+2. **Type safety:** The `uint72[]` declaration misinforms TypeScript, code reviewers, and static analysis tools about the contract's true return type.
+3. **Comment accuracy:** Several comments reference "uint72 packed" values — these must be updated to "uint256 packed" to match the verified bit layout in `docs/hex-dailydata-packing-spec.md`.
+4. **Interoperability:** External tools consuming the ABI (block explorers, indexers, wallet integrations) may apply their own type-width masking.
 
 **Required fix (bounded — single line change, no schema changes):**
 
 1. Change line 14 in `daily-data-reader.ts` from `uint72[]` to `uint256[]`.
-2. Re-acquire affected observation ranges after the fix is deployed — stored payloads with the wrong ABI cannot be corrected.
-3. Update the comment on `rawDailyData` in `DailyDataObservation` (line 54) from "uint72 packed" to "uint256 packed".
-4. The packed decoder PR may only open after the ABI fix is merged and verified.
+2. Update the comment on `rawDailyData` in `DailyDataObservation` (line 54) from "uint72 packed" to "uint256 packed".
+3. No re-acquisition of stored observations is required — viem already returns the full packed value; existing `canonicalPayload` rows are correct.
+4. The packed decoder PR may open after the ABI fix is merged.
 
 This is not scope creep — it is a single-line correction with no schema, frontend, or migration changes.
 
@@ -1072,7 +1071,7 @@ The field names `dayPayoutTotal`, `dayStakeSharesTotal`, and `dayUnclaimedSatosh
 
 No packed decoder, yield estimator implementation, APY calculation, pricing, valuation, PnL, DTO exposure, API route, frontend component, or UI work may proceed until the ABI discrepancy is corrected in `daily-data-reader.ts`.
 
-The bit layout specification (`docs/hex-dailydata-packing-spec.md`) satisfies the layout evidence requirements from the original blocker. The remaining hard stop is the ABI fix: packed decoder implementation must not begin until `daily-data-reader.ts` declares `uint256[]` and any affected stored observations have been re-acquired.
+The bit layout specification (`docs/hex-dailydata-packing-spec.md`) satisfies the layout evidence requirements from the original blocker. The remaining hard stop is the ABI fix: packed decoder implementation must not begin until `daily-data-reader.ts` declares `uint256[]`. Stored observations do not need re-acquisition — viem returns the full packed uint256 value regardless of the ABI declaration (verified locally, see `docs/hex-dailydata-packing-spec.md` §5).
 
 ---
 
@@ -1096,7 +1095,7 @@ Original criteria status after this PR:
 **Remaining blocker before packed decoder PR may open:**
 
 - `daily-data-reader.ts` line 14 ABI declaration must be corrected from `uint72[]` to `uint256[]`.
-- Any `RawHexDailyDataObservation` rows ingested with the wrong ABI must be re-acquired after the fix.
+- No re-acquisition of stored observations required — viem already returns full packed uint256 values with either ABI declaration (verified, see `docs/hex-dailydata-packing-spec.md` §5).
 - The packed decoder PR must cite `docs/hex-dailydata-packing-spec.md` in the PR body.
 
 ---
@@ -1115,8 +1114,8 @@ fix(hexmining): correct dailyDataRange ABI declaration from uint72[] to uint256[
 
 - Single-line change: `daily-data-reader.ts` line 14, `uint72[]` → `uint256[]`.
 - Update the `rawDailyData` comment in `DailyDataObservation` from "uint72 packed" to "uint256 packed".
-- No schema changes. No frontend changes. No migration.
-- After merge: re-acquire any `RawHexDailyDataObservation` ranges ingested with the wrong ABI.
+- No schema changes. No frontend changes. No migration. No re-acquisition of stored observations.
+- Note: viem does not truncate with the wrong ABI (verified locally); existing `canonicalPayload` rows are correct. The fix is for code correctness and interoperability safety.
 
 **After ABI fix — packed decoder PR:**
 
