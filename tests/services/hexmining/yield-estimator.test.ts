@@ -215,34 +215,34 @@ describe("estimateHexMiningYield", () => {
       expect(result.warnings).toContain("hexmining-yield-packed-decode-failed");
     });
 
-    it("returns estimated when all packed entries are within valid range and formula runs", async () => {
-      // All spec §4 vectors are well within (2n**200n)-1n. Formula now implemented → estimated.
+    it("returns evidence_available when all packed entries are within valid range", async () => {
+      // All spec §4 vectors are well within (2n**200n)-1n.
       const deps = makeDeps();
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).not.toBeNull();
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
     });
   });
 
-  describe("estimated — formula implemented", () => {
-    it("returns estimated for valid non-invalidated evidence with valid payload", async () => {
+  describe("evidence available — formula deferred", () => {
+    it("returns evidence_available for valid non-invalidated evidence with valid payload", async () => {
       const deps = makeDeps();
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("estimated");
+      expect(result.status).toBe("evidence_available");
       expect(result.schemaVersion).toBe("v1");
-      expect(result.yieldHex).not.toBeNull();
+      expect(result.yieldHex).toBeNull();
       expect(result.provenance.observationId).toBe("obs-abc-123");
       expect(result.provenance.rangeStartDay).toBe(1000);
       expect(result.provenance.rangeEndDay).toBe(1199);
     });
 
-    it("propagates evidence warnings into estimated result", async () => {
+    it("propagates evidence warnings into evidence_available result", async () => {
       const deps = makeDeps(makeEvidence({ warnings: ["hexmining-some-upstream-warning"] }));
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("estimated");
+      expect(result.status).toBe("evidence_available");
       expect(result.warnings).toContain("hexmining-some-upstream-warning");
     });
   });
@@ -299,11 +299,7 @@ describe("estimateHexMiningYield", () => {
         fetchEvidence: vi.fn().mockRejectedValue(new Error("fail")),
       });
       const noEvidence = await estimateHexMiningYield(BASE_ARGS, makeDeps(null));
-      // evidence_available via injected formula returning bpd_not_implemented
-      const evidenceAvailable = await estimateHexMiningYield(BASE_ARGS, {
-        ...makeDeps(),
-        applyCalculation: vi.fn().mockReturnValue({ status: "bpd_not_implemented" as const }),
-      });
+      const evidenceAvailable = await estimateHexMiningYield(BASE_ARGS, makeDeps());
 
       expect(unsupported.yieldHex).toBeNull();
       expect(unavailable.yieldHex).toBeNull();
@@ -481,12 +477,12 @@ describe("estimateHexMiningYield", () => {
 
     // ── Test 8: existing evidence_available behavior remains deterministic ─────
 
-    it("default (no applyCalculation dep) returns estimated now that formula is implemented", async () => {
+    it("default (no applyCalculation dep) still returns evidence_available", async () => {
       const deps = makeDeps();
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).not.toBeNull();
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
       expect(result.provenance.observationId).toBe("obs-abc-123");
     });
 
@@ -498,225 +494,6 @@ describe("estimateHexMiningYield", () => {
 
       expect(result.status).toBe("insufficient_observations");
       expect(applyCalculation).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("yield formula — §8 test vectors", () => {
-    // Pack three fields into a uint256 per docs/hex-dailydata-packing-spec.md §2.
-    // Matches the on-chain layout: bits 0–71 payout, 72–143 shares, 144–199 sats.
-    function packEntry(payout: bigint, shares: bigint, sats: bigint = 0n): bigint {
-      return payout | (shares << 72n) | (sats << 144n);
-    }
-
-    function makePayload(...entries: bigint[]): string {
-      return JSON.stringify({
-        schemaVersion: "v1",
-        dailyData: entries.map((e) => e.toString()),
-      });
-    }
-
-    // ── Vector A — single day, exact division ────────────────────────────────
-    it("vector A: stakeShares=1000, payout=10000, totalShares=100000 → 100 hearts", async () => {
-      const packed = packEntry(10000n, 100000n);
-      const payload = makePayload(packed);
-      const deps = makeDeps(makeEvidence({ canonicalPayload: payload }));
-      const args = { ...BASE_ARGS, stakeShares: 1000n, rangeStartDay: 1000, rangeEndDay: 1000 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("100");
-    });
-
-    // ── Vector B — single day, floor truncation ───────────────────────────────
-    it("vector B: stakeShares=1, payout=10, totalShares=3 → 3 hearts (floor of 3.333)", async () => {
-      const packed = packEntry(10n, 3n);
-      const payload = makePayload(packed);
-      const deps = makeDeps(makeEvidence({ canonicalPayload: payload }));
-      const args = { ...BASE_ARGS, stakeShares: 1n, rangeStartDay: 1000, rangeEndDay: 1000 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("3");
-    });
-
-    // ── Vector C — 3 days, constant fields ───────────────────────────────────
-    it("vector C: stakeShares=500, 3 days constant payout=2000/shares=10000 → 300 hearts", async () => {
-      const entry = packEntry(2000n, 10000n);
-      const payload = makePayload(entry, entry, entry);
-      const deps = makeDeps(makeEvidence({ canonicalPayload: payload }));
-      const args = { ...BASE_ARGS, stakeShares: 500n, rangeStartDay: 1000, rangeEndDay: 1002 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("300");
-    });
-
-    // ── Vector D — 3 days, varying fields, zero-payout day ───────────────────
-    it("vector D: stakeShares=100, 3 days varying (including zero-payout) → 900 hearts", async () => {
-      const d1000 = packEntry(5000n, 1000n);
-      const d1001 = packEntry(8000n, 2000n, 75n); // sats=75n present but not used
-      const d1002 = packEntry(0n, 5000n);
-      const payload = makePayload(d1000, d1001, d1002);
-      const deps = makeDeps(makeEvidence({ canonicalPayload: payload }));
-      const args = { ...BASE_ARGS, stakeShares: 100n, rangeStartDay: 1000, rangeEndDay: 1002 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("900");
-    });
-
-    // ── Vector E — sole staker (100% of shares) ──────────────────────────────
-    it("vector E: stakeShares=dayStakeSharesTotal=5000, payout=12000 → 12000 hearts (full payout)", async () => {
-      const packed = packEntry(12000n, 5000n);
-      const payload = makePayload(packed);
-      const deps = makeDeps(makeEvidence({ canonicalPayload: payload }));
-      const args = { ...BASE_ARGS, stakeShares: 5000n, rangeStartDay: 1000, rangeEndDay: 1000 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("12000");
-    });
-
-    // ── Zero dayStakeSharesTotal contributes 0n ───────────────────────────────
-    it("zero dayStakeSharesTotal day contributes 0n — guard prevents divide-by-zero", async () => {
-      // Day 0: dayStakeSharesTotal=0 → contributes 0n. Day 1: gives 100n.
-      const d0 = packEntry(50000n, 0n);
-      const d1 = packEntry(10000n, 100000n);
-      const payload = makePayload(d0, d1);
-      const deps = makeDeps(makeEvidence({ canonicalPayload: payload }));
-      const args = { ...BASE_ARGS, stakeShares: 1000n, rangeStartDay: 1000, rangeEndDay: 1001 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("100");
-    });
-
-    // ── dayUnclaimedSatoshisTotal is not used in yield formula ───────────────
-    it("dayUnclaimedSatoshisTotal (sats=75n) does not affect yield — vector D day 1001 alone", async () => {
-      // payout=8000, shares=2000, sats=75, stakeShares=100 → (100*8000)/2000 = 400
-      const d1001 = packEntry(8000n, 2000n, 75n);
-      const payload = makePayload(d1001);
-      const deps = makeDeps(makeEvidence({ canonicalPayload: payload }));
-      const args = { ...BASE_ARGS, stakeShares: 100n, rangeStartDay: 1000, rangeEndDay: 1000 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("400");
-    });
-
-    // ── BPD guard: range containing day 353 ──────────────────────────────────
-    it("range spanning day 353 returns evidence_available — BPD not silently calculated", async () => {
-      const packed = packEntry(5000n, 1000n);
-      const payload = makePayload(packed);
-      const deps = makeDeps(
-        makeEvidence({ canonicalPayload: payload, rangeStartDay: 300, rangeEndDay: 400 }),
-      );
-      const args = { ...BASE_ARGS, rangeStartDay: 300, rangeEndDay: 400 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
-    });
-
-    it("range exactly at day 353 returns evidence_available (single-day BPD guard)", async () => {
-      const packed = packEntry(5000n, 1000n);
-      const payload = makePayload(packed);
-      const deps = makeDeps(
-        makeEvidence({ canonicalPayload: payload, rangeStartDay: 353, rangeEndDay: 353 }),
-      );
-      const args = { ...BASE_ARGS, rangeStartDay: 353, rangeEndDay: 353 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
-    });
-
-    it("range ending before day 353 (e.g. 350–352) is calculated normally", async () => {
-      const packed = packEntry(10000n, 100000n);
-      const payload = makePayload(packed, packed, packed); // 3 entries for days 350–352
-      const deps = makeDeps(
-        makeEvidence({ canonicalPayload: payload, rangeStartDay: 350, rangeEndDay: 352 }),
-      );
-      const args = { ...BASE_ARGS, stakeShares: 1000n, rangeStartDay: 350, rangeEndDay: 352 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      // 3 identical days each yielding 100n → 300n total
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("300");
-    });
-
-    // ── yieldHex is a bigint-safe decimal string ──────────────────────────────
-    it("yieldHex is a decimal string parseable back to the exact bigint, not hex-encoded", async () => {
-      const packed = packEntry(10000n, 100000n);
-      const payload = makePayload(packed);
-      const deps = makeDeps(makeEvidence({ canonicalPayload: payload }));
-      const args = { ...BASE_ARGS, stakeShares: 1000n, rangeStartDay: 1000, rangeEndDay: 1000 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("estimated");
-      if (result.yieldHex !== null) {
-        expect(result.yieldHex.startsWith("0x")).toBe(false);
-        expect(BigInt(result.yieldHex)).toBe(100n);
-      }
-    });
-
-    it("yieldHex survives uint72-scale stakeShares without Number precision loss", async () => {
-      const maxShares = 2n ** 72n - 1n;
-      // stakeShares === dayStakeSharesTotal → full payout (maxShares hearts)
-      const packed = packEntry(maxShares, maxShares);
-      const payload = makePayload(packed);
-      const deps = makeDeps(makeEvidence({ canonicalPayload: payload }));
-      const args = { ...BASE_ARGS, stakeShares: maxShares, rangeStartDay: 1000, rangeEndDay: 1000 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe(maxShares.toString());
-    });
-
-    // ── estimated result carries correct provenance ───────────────────────────
-    it("estimated result carries evidence provenance and schemaVersion", async () => {
-      const packed = packEntry(10000n, 100000n);
-      const payload = makePayload(packed);
-      const deps = makeDeps(makeEvidence({ canonicalPayload: payload, observationId: "obs-formula-v1" }));
-      const args = { ...BASE_ARGS, stakeShares: 1000n, rangeStartDay: 1000, rangeEndDay: 1000 };
-
-      const result = await estimateHexMiningYield(args, deps);
-
-      expect(result.status).toBe("estimated");
-      expect(result.schemaVersion).toBe("v1");
-      expect(result.provenance.observationId).toBe("obs-formula-v1");
-      expect(result.provenance.sourceFamily).toBe("HEXMINING");
-      expect(result.provenance.chainId).toBe(369);
-    });
-
-    // ── decoded fields never leak into estimated result ───────────────────────
-    it("estimated result does not expose decoded packed fields (dayPayoutTotal etc.)", async () => {
-      const packed = packEntry(10000n, 100000n);
-      const payload = makePayload(packed);
-      const deps = makeDeps(makeEvidence({ canonicalPayload: payload }));
-      const args = { ...BASE_ARGS, stakeShares: 1000n };
-
-      const result = await estimateHexMiningYield(args, deps);
-      const serialized = JSON.stringify(result);
-
-      expect(result.status).toBe("estimated");
-      expect(serialized).not.toContain("dayPayoutTotal");
-      expect(serialized).not.toContain("dayStakeSharesTotal");
-      expect(serialized).not.toContain("dayUnclaimedSatoshisTotal");
-      expect(serialized).not.toContain("canonicalPayload");
-      expect(serialized).not.toContain("dailyData");
     });
   });
 
