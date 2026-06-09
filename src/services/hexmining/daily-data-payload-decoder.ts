@@ -2,6 +2,17 @@ import "server-only";
 
 // ─── Result type ──────────────────────────────────────────────────────────────
 
+export type DecodeDailyDataPayloadErrorCode =
+  | "hexmining-payload-invalid-json"
+  | "hexmining-payload-numeric-json-value"
+  | "hexmining-payload-invalid-root"
+  | "hexmining-payload-missing-schema-version"
+  | "hexmining-payload-unsupported-schema-version"
+  | "hexmining-payload-missing-daily-data"
+  | "hexmining-payload-daily-data-not-array"
+  | `hexmining-payload-item-not-string-at-${number}`
+  | `hexmining-payload-item-invalid-at-${number}`;
+
 export type DecodeDailyDataPayloadResult =
   | {
       ok: true;
@@ -12,7 +23,7 @@ export type DecodeDailyDataPayloadResult =
     }
   | {
       ok: false;
-      code: string;
+      code: DecodeDailyDataPayloadErrorCode;
       warnings: string[];
     };
 
