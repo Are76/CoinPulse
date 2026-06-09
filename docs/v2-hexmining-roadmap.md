@@ -1,8 +1,8 @@
 # V2 HexMining Roadmap
 
-**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208, #209, #210 merged; packed uint72 decoder is blocked pending verified dailyData bit-layout evidence (see §11.13).
+**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208, #209, #210 merged; dailyData uint256 packed bit layout verified and documented (`docs/hex-dailydata-packing-spec.md`); blocked pending ABI fix in `daily-data-reader.ts` (`uint72[]` → `uint256[]`) — see §11.13.
 **Created:** 2026-06-06
-**Last updated:** 2026-06-09 (Phase 4C partial progress — PRs #208, #209, #210 merged; packed uint72 decoder blocked — see §11.13 for acceptance criteria)
+**Last updated:** 2026-06-09 (Phase 4C partial progress — PRs #208, #209, #210 merged; bit layout verified; new blocker: ABI discrepancy `uint72[]` → `uint256[]` in `daily-data-reader.ts` — see §11.13)
 
 ## Phase completion status
 
@@ -14,7 +14,7 @@
 | Phase 3 | HexMining page shell / unsupported valuation display | ✅ Complete — merged PRs #192, #193 |
 | Phase 4A | Observation persistence, status API, and operator surface | ✅ Complete — merged PRs #199–#202 |
 | Phase 4B | dailyDataRange read boundary, persistence wiring, and gated operator route | ✅ Complete — merged PRs #204, #205, #206 |
-| Phase 4C | Yield estimation and DTO wiring | ⚠️ In progress (blocked) — PRs #208, #209, #210 merged; packed uint72 decoder blocked pending verified dailyData bit-layout evidence (see §11.13) |
+| Phase 4C | Yield estimation and DTO wiring | ⚠️ In progress (blocked) — PRs #208, #209, #210 merged; bit layout verified (`docs/hex-dailydata-packing-spec.md`); blocked pending ABI fix in `daily-data-reader.ts` (`uint72[]` → `uint256[]`) — see §11.13 |
 | Phase 5 | Ended stake discovery | 🔲 Not started |
 | Phase 6 | HSI and HTT source families | 🔲 Not started |
 | Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
@@ -511,12 +511,15 @@ This section documents the decisions that must be resolved or explicitly framed 
 | #208 | `feat(hexmining): add Phase 4C yield estimator contract` | `src/services/hexmining/yield-estimator.ts` (new), `tests/services/hexmining/yield-estimator.test.ts` (new); `estimateHexMiningYield(args, deps)` function; `HexMiningYieldEstimateResult` discriminated union; statuses: `estimated \| evidence_available \| insufficient_observations \| invalid_observation \| unavailable \| unsupported`; injectable `fetchEvidence` dep; no RPC, no yield math, no UI |
 | #209 | `feat(hexmining): add yield observation evidence provider` | `src/services/hexmining/observation-evidence-provider.ts` (new), `tests/services/hexmining/observation-evidence-provider.test.ts` (new); `getObservationEvidenceForRange(args, deps)` queries persisted `RawHexDailyDataObservation` rows; returns `ObservationEvidenceMetadata` (no `canonicalPayload`/`payloadHash`/`rawDailyData` exposure); `payloadSchemaValid` flag from internal decode; chain guard (369 only); DB mock tests; no RPC |
 | #210 | `feat(hexmining): add dailyData payload decoder` | `src/services/hexmining/daily-data-payload-decoder.ts` (new), `tests/services/hexmining/daily-data-payload-decoder.test.ts` (new); `decodeDailyDataPayload(canonicalPayload)` parses `{ schemaVersion: "v1", dailyData: [...] }` canonical payload; rejects numeric JSON values (§11.8), invalid root, missing fields; returns `readonly bigint[]`; 31 tests; **no packed uint72 decoding — each entry remains a raw packed bigint** |
+| #211 | `docs(hexmining): record dailyData bit layout blocker` | `docs/v2-hexmining-roadmap.md` only; §11.13 added — full blocker record for packed decoder (what is complete, what is blocked, why, field-name clarification, guardrail, acceptance criteria); §12 updated with blocker state and unblocking path; Phase completion table and header updated for Phase 4C in-progress/blocked |
 
 Post-merge audit (2026-06-08, after PR #202): all 1354 tests pass, lint clean, typecheck clean, build clean, no guardrail violations.
 
 Post-merge audit (2026-06-08, after PR #206): all 1421 tests pass, lint clean, typecheck clean, build clean, no guardrail violations.
 
 Post-merge audit (2026-06-09, after PR #210): tests pass, lint clean, typecheck clean, build clean, no guardrail violations. Phase 4C partial — packed uint72 decoder blocked (see §11.13).
+
+Post-merge audit (2026-06-09, after PR #211): docs-only; lint clean, typecheck clean. Bit layout still unverified at this audit point (blocker record added, evidence PR pending).
 
 ---
 
@@ -808,10 +811,12 @@ Phase 4C has begun. Three bounded PRs are merged:
 - PR #209: observation evidence provider (`getObservationEvidenceForRange`) — reads persisted rows, returns `ObservationEvidenceMetadata`; no `canonicalPayload` exposure.
 - PR #210: canonical payload decoder (`decodeDailyDataPayload`) — parses `{ schemaVersion: "v1", dailyData: [...] }` to `readonly bigint[]`; no packed uint72 decoding.
 
-**Current blocker:** The next required step — decoding each raw packed uint72 bigint into named fields (`dayPayoutTotal`, `dayStakeSharesTotal`, `dayUnclaimedSatoshisTotal`) — is blocked because the dailyData uint72 bit layout is not verified in-repo. See §11.13 for the full blocker record and acceptance criteria.
+**Bit layout verified:** `docs/hex-dailydata-packing-spec.md` documents the verified uint256 packed layout from three independent sources (on-chain ABI, JamJomJim/HEX.sol gist, kbahr/HexUtilities.sol gist). Packed decoder implementation is now layout-unblocked.
 
-**Remaining scope (once bit layout is verified and documented):**
-- Packed uint72 field decoder (`src/services/hexmining/daily-data-packed-decoder.ts`).
+**Current blocker (ABI discrepancy):** `src/services/hexmining/daily-data-reader.ts` line 14 declares `returns (uint72[] list)` but the actual contract returns `uint256[]`. The ABI declaration is factually incorrect. Verified locally: viem does not truncate — it returns the full BigInt for both `uint72[]` and `uint256[]` declarations (see `docs/hex-dailydata-packing-spec.md` §5). Stored `canonicalPayload` rows are correct and contain all three fields. The ABI must still be fixed for code correctness and interoperability safety before the packed decoder PR opens. See §11.13.
+
+**Remaining scope (once ABI fix is merged):**
+- Packed uint256 field decoder (`src/services/hexmining/daily-data-packed-decoder.ts`).
 - Yield formula consuming decoded fields per §11.4 and §11.9.
 - Elapsed-days-only coverage rule and canonical-selection policy (§11.8).
 - Big Pay Day modelling with `bpdYieldStatus` / `bpdYieldHex` per §11.4 invariant #5.
@@ -963,7 +968,7 @@ Phase 4C may not begin with a UI or DTO-wiring PR. The first Phase 4C PR must be
 
 ### 11.13 Phase 4C partial progress and packed uint72 decoder blocker
 
-**Status: IN PROGRESS — PRs #208, #209, #210 merged. Packed decoder BLOCKED — bit layout not verified in-repo.**
+**Status: IN PROGRESS — PRs #208, #209, #210 merged. Bit layout VERIFIED (see `docs/hex-dailydata-packing-spec.md`). Packed decoder BLOCKED by ABI discrepancy — `daily-data-reader.ts` declares `uint72[]` but contract returns `uint256[]`.**
 
 ---
 
@@ -975,9 +980,9 @@ The following Phase 4C building blocks are merged and tested:
 |---|---|
 | #208 | `estimateHexMiningYield(args, deps)` in `src/services/hexmining/yield-estimator.ts`; injectable `fetchEvidence` dep; `HexMiningYieldEstimateResult` discriminated union with statuses `estimated \| evidence_available \| insufficient_observations \| invalid_observation \| unavailable \| unsupported`; no yield math, no RPC, no UI |
 | #209 | `getObservationEvidenceForRange(args, deps)` in `src/services/hexmining/observation-evidence-provider.ts`; queries persisted `RawHexDailyDataObservation` rows from the database; chain guard (369 only); returns `ObservationEvidenceMetadata` (never exposes `canonicalPayload`, `payloadHash`, or `rawDailyData`); `payloadSchemaValid` flag from internal payload decode; DB mock tests; no RPC |
-| #210 | `decodeDailyDataPayload(canonicalPayload)` in `src/services/hexmining/daily-data-payload-decoder.ts`; parses the persisted canonical payload shape `{ "schemaVersion": "v1", "dailyData": ["val0", "val1", ...] }`; validates schema version, root type, array structure; rejects numeric JSON values (§11.8 bigint-safe policy); returns `{ ok: true, dailyData: readonly bigint[], entryCount, warnings }` on success; **each `dailyData` entry is a raw packed uint72 bigint stored as a decimal string — no packed field decoding occurs in this PR** |
+| #210 | `decodeDailyDataPayload(canonicalPayload)` in `src/services/hexmining/daily-data-payload-decoder.ts`; parses the persisted canonical payload shape `{ "schemaVersion": "v1", "dailyData": ["val0", "val1", ...] }`; validates schema version, root type, array structure; rejects numeric JSON values (§11.8 bigint-safe policy); returns `{ ok: true, dailyData: readonly bigint[], entryCount, warnings }` on success; **each `dailyData` entry is a raw packed uint256 bigint stored as a decimal string — no packed field decoding occurs in this PR** |
 
-**Key point:** `encodeDailyDataPayload` (PR #205, `daily-data-observation-service.ts`) stores the raw packed uint72 values received from viem directly as base-10 decimal strings. It does not pre-decode them. `decodeDailyDataPayload` (PR #210) parses the canonical payload and returns those packed bigints as-is. Unpacking each bigint into named fields is the responsibility of the packed decoder that this blocker note tracks.
+**Key point:** `encodeDailyDataPayload` (PR #205, `daily-data-observation-service.ts`) stores the raw packed uint256 values received from viem directly as base-10 decimal strings. It does not pre-decode them. `decodeDailyDataPayload` (PR #210) parses the canonical payload and returns those packed bigints as-is. Unpacking each bigint into named fields is the responsibility of the packed decoder that this blocker note tracks. (Note: viem returns the full packed uint256 value regardless of whether the ABI declares `uint72[]` or `uint256[]` — no truncation occurs at runtime. Stored `canonicalPayload` rows contain all three fields. See `docs/hex-dailydata-packing-spec.md` §5.)
 
 ---
 
@@ -997,27 +1002,56 @@ That implementation attempt correctly stopped because the bit layout is not veri
 
 ---
 
-#### Why this step is blocked
+#### Bit layout — now verified
 
-**The repository does not currently contain a verified specification for the HEX `dailyData` uint72 packed bit layout.**
+`docs/hex-dailydata-packing-spec.md` was added in this PR. It documents the verified uint256 packed bit layout from three independent sources:
 
-The repo does not specify:
+| Source | Type | Finding |
+|---|---|---|
+| Source A — Blockscout on-chain ABI (chain 1, `get_contract_abi`) | **Authoritative** | `dailyDataRange` returns `uint256[]`; `dailyData` struct fields: `dayPayoutTotal (uint72)`, `dayStakeSharesTotal (uint72)`, `dayUnclaimedSatoshisTotal (uint56)` |
+| Source B — JamJomJim/HEX.sol gist | Corroborating | Packing code confirms `HEART_UINT_SIZE = 72` and `uint256[] memory list` return type: fields packed as `dayUnclaimedSatoshisTotal << 144 \| dayStakeSharesTotal << 72 \| dayPayoutTotal` |
+| Source C — kbahr/HexUtilities.sol gist | Corroborating | Unpack code confirms `HEARTS_UINT_SHIFT = 72`, `SATS_UINT_SHIFT = 56`, `HEARTS_MASK = (1<<72)-1`, `SATS_MASK = (1<<56)-1` — confirms all offsets and masks |
 
-| Missing specification | Detail |
-|---|---|
-| Which bits correspond to `dayPayoutTotal` | Bit offset and width unknown |
-| Which bits correspond to `dayStakeSharesTotal` | Bit offset and width unknown |
-| Which bits correspond to `dayUnclaimedSatoshisTotal` | Bit offset and width unknown |
-| Bit widths for each field | Not documented |
-| Bit offsets for each field | Not documented |
-| Bit order / LSB vs MSB interpretation | Not documented |
-| Shift constants | Not documented |
-| Mask constants | Not documented |
-| Units and scaling for each field | Not documented (e.g. hearts, T-shares, satoshis — scales unverified) |
-| Whether values are cumulative or per-day | Not documented |
-| Deterministic test vectors | No packed input → expected decoded output mappings exist in-repo |
+Verified bit layout (each element of the `uint256[]` return value):
 
-Without every one of these items verified and documented, any packed decoder implementation would be based on assumptions. An incorrect bit layout would silently produce wrong field values in yield calculations, corrupting estimated yield figures in ways that would not be caught by tests written from the same incorrect assumptions.
+| Field | Bit range | Width | Mask |
+|---|---|---|---|
+| `dayPayoutTotal` | bits 0–71 | 72 bits | `(2n**72n) - 1n` |
+| `dayStakeSharesTotal` | bits 72–143 | 72 bits | `(2n**72n) - 1n` |
+| `dayUnclaimedSatoshisTotal` | bits 144–199 | 56 bits | `(2n**56n) - 1n` |
+| (zero padding) | bits 200–255 | 56 bits | — |
+
+Four deterministic test vectors are provided in `docs/hex-dailydata-packing-spec.md` §4.
+
+---
+
+#### Why the packed decoder is still blocked — ABI discrepancy
+
+**`src/services/hexmining/daily-data-reader.ts` line 14 declares `uint72[]` but the contract returns `uint256[]`.**
+
+```typescript
+// WRONG — must be corrected before packed decoder can proceed:
+"function dailyDataRange(uint256 beginDay, uint256 endDay) view returns (uint72[] list)"
+//                                                                        ^^^^^^ should be uint256[]
+```
+
+**Verified runtime behavior — viem does not truncate.** The truncation impact was investigated locally using viem `decodeAbiParameters` (see `docs/hex-dailydata-packing-spec.md` §5 for the full verification script). Viem's `decodeNumber` reads the full 32-byte ABI word without masking to the declared bit width. Both `uint72[]` and `uint256[]` return the same full BigInt value. Stored `canonicalPayload` rows are not corrupted.
+
+**The ABI must still be corrected for the following reasons:**
+
+1. **Code correctness:** The declared return type is factually wrong. A future viem version, alternate decoder, or external tooling may apply `uint72` masking and cause data loss.
+2. **Type safety:** The `uint72[]` declaration misinforms TypeScript, code reviewers, and static analysis tools about the contract's true return type.
+3. **Comment accuracy:** Several comments reference "uint72 packed" values — these must be updated to "uint256 packed" to match the verified bit layout in `docs/hex-dailydata-packing-spec.md`.
+4. **Interoperability:** External tools consuming the ABI (block explorers, indexers, wallet integrations) may apply their own type-width masking.
+
+**Required fix (bounded — single line change, no schema changes):**
+
+1. Change line 14 in `daily-data-reader.ts` from `uint72[]` to `uint256[]`.
+2. Update the comment on `rawDailyData` in `DailyDataObservation` (line 54) from "uint72 packed" to "uint256 packed".
+3. No re-acquisition of stored observations is required — viem already returns the full packed value; existing `canonicalPayload` rows are correct.
+4. The packed decoder PR may open after the ABI fix is merged.
+
+This is not scope creep — it is a single-line correction with no schema, frontend, or migration changes.
 
 ---
 
@@ -1035,38 +1069,34 @@ The field names `dayPayoutTotal`, `dayStakeSharesTotal`, and `dayUnclaimedSatosh
 
 #### Guardrail
 
-No packed decoder, yield estimator implementation, APY calculation, pricing, valuation, PnL, DTO exposure, API route, frontend component, or UI work may proceed based on memory, assumptions, inferred layout, or any source not explicitly documented in this repository.
+No packed decoder, yield estimator implementation, APY calculation, pricing, valuation, PnL, DTO exposure, API route, frontend component, or UI work may proceed until the ABI discrepancy is corrected in `daily-data-reader.ts`.
 
-Before packed decoding implementation resumes, the repository must contain a verified source for:
-
-- Packed uint72 bit layout (source cited or copied reference)
-- Field names
-- Bit widths for each field
-- Bit offsets for each field
-- Shift constants and mask constants
-- Units and scaling for each field (hearts, T-shares, satoshis — exact scales)
-- Cumulative vs per-day semantics
-- At least one deterministic test vector in the form:
-  - Packed uint72 decimal string input value
-  - Expected decoded field names
-  - Expected decoded bigint values for each field
+The bit layout specification (`docs/hex-dailydata-packing-spec.md`) satisfies the layout evidence requirements from the original blocker. The remaining hard stop is the ABI fix: packed decoder implementation must not begin until `daily-data-reader.ts` declares `uint256[]`. Stored observations do not need re-acquisition — viem returns the full packed uint256 value regardless of the ABI declaration (verified locally, see `docs/hex-dailydata-packing-spec.md` §5).
 
 ---
 
 #### Acceptance criteria for unblocking packed decoder work
 
-Phase 4C packed decoding can resume only after ALL of the following are met:
+Original criteria status after this PR:
 
-1. A verified source for the HEX `dailyDataRange` uint72 packed bit layout has been obtained (e.g., HEX Solidity contract source, verified reference implementation, or authoritative protocol documentation).
-2. The exact bit layout is documented in this repo (in this section or in a dedicated `docs/hex-dailydata-packing-spec.md`), with the source cited.
-3. Field names are agreed and documented (`dayPayoutTotal`, `dayStakeSharesTotal`, `dayUnclaimedSatoshisTotal`, or corrected names if the verified source uses different names).
-4. Bit widths and bit offsets for each field are documented.
-5. Shift constants and mask constants are documented.
-6. Units and scaling for each field are documented.
-7. At least one deterministic test vector is documented: a packed uint72 decimal string input and expected decoded output for every field.
-8. Tests for the packed decoder can be written purely from the documented specification, without requiring knowledge external to the repo.
-9. No yield formula is implemented until packed decoding is verified and tested.
-10. Yield formula implementation must cite the same verified source for the calculation method.
+| Criterion | Status |
+|---|---|
+| 1. Verified source for `dailyDataRange` uint256 packed bit layout obtained | ✅ Met — `docs/hex-dailydata-packing-spec.md` §1 (Sources A, B, C) |
+| 2. Bit layout documented in-repo with source cited | ✅ Met — `docs/hex-dailydata-packing-spec.md` §2 |
+| 3. Field names documented (`dayPayoutTotal`, `dayStakeSharesTotal`, `dayUnclaimedSatoshisTotal`) | ✅ Met — verified from on-chain ABI (Source A) |
+| 4. Bit widths and offsets documented (0–71, 72–143, 144–199) | ✅ Met — `docs/hex-dailydata-packing-spec.md` §2 table |
+| 5. Shift constants and mask constants documented | ✅ Met — `HEARTS_MASK = (2n**72n)-1n`, `SATS_MASK = (2n**56n)-1n` |
+| 6. Units and scaling documented (hearts, stake share units, satoshis) | ✅ Met — `docs/hex-dailydata-packing-spec.md` §3 |
+| 7. At least one deterministic test vector documented | ✅ Met — four vectors in `docs/hex-dailydata-packing-spec.md` §4 |
+| 8. Tests can be written from the spec without external knowledge | ✅ Met — vectors are mechanically derivable |
+| 9. No yield formula until packed decoding verified and tested | ✅ Ongoing — no yield math exists yet |
+| 10. Yield formula cites the same verified source | ✅ Deferred (not implemented) |
+
+**Remaining blocker before packed decoder PR may open:**
+
+- `daily-data-reader.ts` line 14 ABI declaration must be corrected from `uint72[]` to `uint256[]`.
+- No re-acquisition of stored observations required — viem already returns full packed uint256 values with either ABI declaration (verified, see `docs/hex-dailydata-packing-spec.md` §5).
+- The packed decoder PR must cite `docs/hex-dailydata-packing-spec.md` in the PR body.
 
 ---
 
@@ -1074,24 +1104,34 @@ Phase 4C packed decoding can resume only after ALL of the following are met:
 
 **Phase 4B is complete.** PRs #204, #205, and #206 delivered the full read boundary, persistence wiring, and gated operator route.
 
-**Phase 4C is in progress and blocked.** PRs #208, #209, and #210 delivered the yield estimator contract, observation evidence provider, and canonical payload decoder. The next required step — packed uint72 field decoding — is blocked. See §11.13.
+**Phase 4C is in progress.** PRs #208, #209, and #210 delivered the yield estimator contract, observation evidence provider, and canonical payload decoder. The uint256 packed bit layout is now verified and documented in `docs/hex-dailydata-packing-spec.md`. The packed decoder is blocked pending one ABI fix.
 
-**Immediate next step: obtain and document verified dailyData uint72 bit-layout evidence**
+**Immediate next step: fix ABI declaration in `daily-data-reader.ts`**
 
-Phase 4C packed decoder and yield estimator implementation work must not proceed until the bit layout is verified and documented in this repo. The next safe work item is:
+```text
+fix(hexmining): correct dailyDataRange ABI declaration from uint72[] to uint256[]
+```
 
-1. Obtain a verified source for the HEX `dailyDataRange` uint72 packed bit layout.
-2. Add a documented specification to this file (or a dedicated `docs/hex-dailydata-packing-spec.md`) with: field names, bit widths, bit offsets, shift/mask constants, units/scaling, cumulative vs per-day semantics, and at least one deterministic test vector.
-3. Once documented, open `feat(hexmining): add dailyData packed decoder` with the bit layout source cited in the PR body.
+- Single-line change: `daily-data-reader.ts` line 14, `uint72[]` → `uint256[]`.
+- Update the `rawDailyData` comment in `DailyDataObservation` from "uint72 packed" to "uint256 packed".
+- No schema changes. No frontend changes. No migration. No re-acquisition of stored observations.
+- Note: viem does not truncate with the wrong ABI (verified locally); existing `canonicalPayload` rows are correct. The fix is for code correctness and interoperability safety.
 
-**Once unblocked — scope of the packed decoder PR:**
+**After ABI fix — packed decoder PR:**
+
+```text
+feat(hexmining): add dailyData packed decoder
+```
+
 - New `decodePackedDailyDataEntry(packedValue: bigint)` function in `src/services/hexmining/daily-data-packed-decoder.ts`.
-- Accepts a single packed uint72 bigint from `decodeDailyDataPayload` output.
-- Returns named bigint-safe fields (e.g. `dayPayoutTotal`, `dayStakeSharesTotal`, `dayUnclaimedSatoshisTotal`).
+- Accepts a single packed uint256 bigint from `decodeDailyDataPayload` output.
+- Returns named bigint-safe fields: `dayPayoutTotal`, `dayStakeSharesTotal`, `dayUnclaimedSatoshisTotal`.
+- Rejects negative bigints and values exceeding 200 significant bits.
+- Bit layout sourced from `docs/hex-dailydata-packing-spec.md` — cite in PR body.
+- Deterministic unit tests using the four test vectors in `docs/hex-dailydata-packing-spec.md` §4.
 - No yield formula. No APY. No pricing, valuation, or PnL.
-- Deterministic unit tests using documented test vectors.
 
-**What must NOT happen before the bit layout is verified and documented:**
+**What must NOT happen before the ABI fix is merged:**
 - No packed decoder implementation.
 - No yield formula or APY.
 - No pricing, valuation, or PnL.
@@ -1102,7 +1142,7 @@ Phase 4C packed decoder and yield estimator implementation work must not proceed
 - No `canonicalPayload` exposure in any DTO or API response.
 - No `valuation.status` or `pnl.status` changes (remain `"unsupported"` until Phase 7).
 
-See §11.13 for the full blocker record, acceptance criteria, and guardrail details.
+See §11.13 for the full blocker record, verification evidence, and acceptance criteria.
 
 ---
 
@@ -1134,7 +1174,12 @@ See §11.13 for the full blocker record, acceptance criteria, and guardrail deta
 - `npm run lint` — passed, no ESLint errors.
 - `npm run typecheck` — passed, no type errors.
 
-**This PR (docs/hexmining-dailydata-bit-layout-evidence — docs only):**
+**PR #211 (docs/hexmining-dailydata-bit-layout-evidence — docs only):**
+- `git diff --check` — passed, no trailing whitespace.
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
+
+**This PR (docs/hexmining-dailydata-bit-layout-evidence-2 — docs only):**
 - `git diff --check` — passed, no trailing whitespace.
 - `npm run lint` — passed, no ESLint errors.
 - `npm run typecheck` — passed, no type errors.
@@ -1205,10 +1250,16 @@ See §11.13 for the full blocker record, acceptance criteria, and guardrail deta
 - **What changed:** `decodeDailyDataPayload(canonicalPayload)` canonical payload decoder; `DecodeDailyDataPayloadResult` discriminated union; `DecodeDailyDataPayloadErrorCode` literal union; 31 tests. Returns `readonly bigint[]` — no packed uint72 decoding.
 - **PR status:** FEAT — service only
 
-**This PR (docs/hexmining-dailydata-bit-layout-evidence):**
+**PR #211 (docs/hexmining-dailydata-bit-layout-evidence) — merged:**
 - **Branch:** `docs/hexmining-dailydata-bit-layout-evidence`
 - **Changed files:** `docs/v2-hexmining-roadmap.md` only
 - **What changed:** Document header and Phase completion table updated for Phase 4C in-progress/blocked; §11.1 extended with PRs #207–#210 and post-merge audit; §11.10 Step 3 updated with partial progress and blocker; §11.13 added — full blocker record for packed uint72 decoder (what is complete, what is blocked, why, clarification on field-name references, guardrail, acceptance criteria); §12 updated with blocker state and unblocking path; Final Status extended.
 - **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
-- **Merge requirement:** None blocking. Phase 4C packed decoder and yield work remain blocked pending verified dailyData uint72 bit-layout evidence added to this repo per §11.13 acceptance criteria.
+
+**This PR (docs/hexmining-dailydata-bit-layout-evidence-2):**
+- **Branch:** `docs/hexmining-dailydata-bit-layout-evidence-2`
+- **Changed files:** `docs/hex-dailydata-packing-spec.md` (new), `docs/v2-hexmining-roadmap.md` (updated)
+- **What changed:** `docs/hex-dailydata-packing-spec.md` — full bit layout specification from three independent sources (on-chain ABI authoritative, two corroborating Solidity gists); verified field layout table; TypeScript unpacking formula; four deterministic test vectors; critical ABI discrepancy finding (§5); §6 summary table. `docs/v2-hexmining-roadmap.md` — §11.1 extended with PR #211 and post-merge audit; §11.10 Step 3 updated to reflect layout verified and new ABI blocker; §11.13 updated — status changed from "BLOCKED — bit layout not verified" to "LAYOUT VERIFIED — ABI discrepancy blocker"; "Why blocked" section replaced with layout verification evidence table and ABI discrepancy impact table; guardrail updated; acceptance criteria updated with met/unmet status per item; §12 changed from "obtain bit layout evidence" to "fix ABI declaration `uint72[]` → `uint256[]`" with next two bounded PR descriptions; Validation Notes and Final Status extended.
+- **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
+- **Merge requirement:** None blocking. Phase 4C packed decoder work remains blocked pending the ABI fix in `daily-data-reader.ts` (single line: `uint72[]` → `uint256[]`). Re-acquisition of affected observations also required after ABI fix.
 - **Recommendation: MERGE**
