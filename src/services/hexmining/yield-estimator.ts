@@ -1,16 +1,10 @@
 import "server-only";
 
+import type { ObservationEvidenceMetadata } from "@/services/hexmining/observation-evidence-provider";
+
+export type { ObservationEvidenceMetadata };
+
 const PULSECHAIN_CHAIN_ID = 369;
-
-// ─── Evidence type ────────────────────────────────────────────────────────────
-
-export type ObservationEvidence = {
-  observationId: string;
-  rangeStartDay: number;
-  rangeEndDay: number;
-  canonicalPayload: string;
-  warnings: string[];
-};
 
 // ─── Deps ─────────────────────────────────────────────────────────────────────
 
@@ -19,7 +13,7 @@ export type HexMiningYieldEstimatorDeps = {
     chainId: number;
     rangeStartDay: number;
     rangeEndDay: number;
-  }) => Promise<ObservationEvidence | null>;
+  }) => Promise<ObservationEvidenceMetadata | null>;
 };
 
 // ─── Args ─────────────────────────────────────────────────────────────────────
@@ -53,45 +47,19 @@ export type HexMiningYieldEstimateResult =
       warnings: string[];
     }
   | {
+      status: "evidence_available";
+      schemaVersion: "v1";
+      yieldHex: null;
+      provenance: HexMiningYieldEstimateProvenance;
+      warnings: string[];
+    }
+  | {
       status: "insufficient_observations" | "invalid_observation" | "unavailable" | "unsupported";
       schemaVersion: "v1";
       yieldHex: null;
       provenance: HexMiningYieldEstimateProvenance;
       warnings: string[];
     };
-
-// ─── Payload validation ───────────────────────────────────────────────────────
-
-function rejectNumericJsonValues(value: unknown): void {
-  if (typeof value === "number") throw new Error("numeric-value");
-  if (Array.isArray(value)) {
-    for (const item of value) rejectNumericJsonValues(item);
-    return;
-  }
-  if (value !== null && typeof value === "object") {
-    for (const v of Object.values(value as Record<string, unknown>)) {
-      rejectNumericJsonValues(v);
-    }
-  }
-}
-
-function validatePayloadShape(canonicalPayload: string): void {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(canonicalPayload);
-  } catch {
-    throw new Error("invalid-json");
-  }
-  rejectNumericJsonValues(parsed);
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    typeof (parsed as Record<string, unknown>).schemaVersion !== "string" ||
-    !Array.isArray((parsed as Record<string, unknown>).dailyData)
-  ) {
-    throw new Error("invalid-shape");
-  }
-}
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 
@@ -117,7 +85,7 @@ export async function estimateHexMiningYield(
   }
 
   // 2. Fetch evidence via injected provider (no RPC)
-  let evidence: ObservationEvidence | null;
+  let evidence: ObservationEvidenceMetadata | null;
   try {
     evidence = await deps.fetchEvidence({
       chainId: args.chainId,
@@ -157,10 +125,8 @@ export async function estimateHexMiningYield(
     };
   }
 
-  // 4. Validate payload shape
-  try {
-    validatePayloadShape(evidence.canonicalPayload);
-  } catch {
+  // 4. Observation invalidated
+  if (evidence.isInvalidated) {
     return {
       status: "invalid_observation",
       schemaVersion: "v1",
@@ -172,13 +138,30 @@ export async function estimateHexMiningYield(
         rangeStartDay: evidence.rangeStartDay,
         rangeEndDay: evidence.rangeEndDay,
       },
-      warnings: ["hexmining-yield-invalid-observation-payload"],
+      warnings: [...evidence.warnings, "hexmining-yield-observation-invalidated"],
     };
   }
 
-  // 5. Yield formula deferred to Phase 4C implementation PR
+  // 5. Payload schema invalid (provider validated internally — canonicalPayload never reaches here)
+  if (!evidence.payloadSchemaValid) {
+    return {
+      status: "invalid_observation",
+      schemaVersion: "v1",
+      yieldHex: null,
+      provenance: {
+        chainId: args.chainId,
+        sourceFamily: "HEXMINING",
+        observationId: evidence.observationId,
+        rangeStartDay: evidence.rangeStartDay,
+        rangeEndDay: evidence.rangeEndDay,
+      },
+      warnings: [...evidence.warnings, "hexmining-yield-invalid-observation-payload"],
+    };
+  }
+
+  // 6. Evidence validated — yield formula deferred to Phase 4C implementation PR
   return {
-    status: "insufficient_observations",
+    status: "evidence_available",
     schemaVersion: "v1",
     yieldHex: null,
     provenance: {
@@ -188,6 +171,6 @@ export async function estimateHexMiningYield(
       rangeStartDay: evidence.rangeStartDay,
       rangeEndDay: evidence.rangeEndDay,
     },
-    warnings: [...evidence.warnings, "hexmining-yield-calculation-not-implemented"],
+    warnings: evidence.warnings,
   };
 }
