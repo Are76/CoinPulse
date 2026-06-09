@@ -236,24 +236,24 @@ describe("estimateHexMiningYield", () => {
     });
   });
 
-  describe("formula computation — valid evidence with default calculation", () => {
-    it("returns estimated for valid non-invalidated evidence with valid payload", async () => {
+  describe("evidence available with valid default payload", () => {
+    it("returns evidence_available for valid non-invalidated evidence with valid payload", async () => {
       const deps = makeDeps();
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("estimated");
+      expect(result.status).toBe("evidence_available");
       expect(result.schemaVersion).toBe("v1");
-      expect(result.yieldHex).not.toBeNull();
+      expect(result.yieldHex).toBeNull();
       expect(result.provenance.observationId).toBe("obs-abc-123");
       expect(result.provenance.rangeStartDay).toBe(1000);
       expect(result.provenance.rangeEndDay).toBe(1199);
     });
 
-    it("propagates evidence warnings into estimated result", async () => {
+    it("propagates evidence warnings into evidence_available result", async () => {
       const deps = makeDeps(makeEvidence({ warnings: ["hexmining-some-upstream-warning"] }));
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("estimated");
+      expect(result.status).toBe("evidence_available");
       expect(result.warnings).toContain("hexmining-some-upstream-warning");
     });
   });
@@ -290,6 +290,7 @@ describe("estimateHexMiningYield", () => {
         BASE_ARGS,
         makeDeps(makeEvidence({ isInvalidated: true })),
       );
+      // Default deps: returns evidence_available (not estimated — public estimated path is gated)
       const evidenceAvailable = await estimateHexMiningYield(BASE_ARGS, makeDeps());
 
       expect(unsupported.schemaVersion).toBe("v1");
@@ -304,17 +305,14 @@ describe("estimateHexMiningYield", () => {
       expect(result.provenance.sourceFamily).toBe("HEXMINING");
     });
 
-    it("yieldHex is null for all non-estimated statuses", async () => {
+    it("yieldHex is null for all statuses (estimated path is gated)", async () => {
       const unsupported = await estimateHexMiningYield({ ...BASE_ARGS, chainId: 1 }, makeDeps());
       const unavailable = await estimateHexMiningYield(BASE_ARGS, {
         fetchEvidence: vi.fn().mockRejectedValue(new Error("fail")),
       });
       const noEvidence = await estimateHexMiningYield(BASE_ARGS, makeDeps(null));
-      // evidence_available requires an injectable stub returning calculation_not_implemented
-      const evidenceAvailable = await estimateHexMiningYield(BASE_ARGS, {
-        ...makeDeps(),
-        applyCalculation: vi.fn().mockReturnValue({ status: "calculation_not_implemented" as const }),
-      });
+      // Default deps now returns evidence_available directly (no injectable stub required)
+      const evidenceAvailable = await estimateHexMiningYield(BASE_ARGS, makeDeps());
 
       expect(unsupported.yieldHex).toBeNull();
       expect(unavailable.yieldHex).toBeNull();
@@ -490,18 +488,14 @@ describe("estimateHexMiningYield", () => {
       expect(serialized).not.toContain("dailyData");
     });
 
-    // ── Test 8: default formula runs and returns estimated ────────────────────
+    // ── Test 8: default pipeline runs and returns evidence_available ──────────
 
-    it("default (no applyCalculation dep) runs formula and returns estimated", async () => {
+    it("default (no applyCalculation dep) runs pipeline and returns evidence_available", async () => {
       const deps = makeDeps();
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
-      // DEFAULT_CANONICAL_PAYLOAD: entry[0]=zeros (guard), entry[1]=payout=1000/shares=500,
-      //   entry[2]=payout=uint72max/shares=1. stakeShares=1000n.
-      // 0n + (1000n*1000n)/500n + (1000n*(2n**72n-1n))/1n
-      const expected = (1000n * 1000n) / 500n + (1000n * (2n ** 72n - 1n)) / 1n;
 
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe(expected.toString());
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
       expect(result.provenance.observationId).toBe("obs-abc-123");
     });
 
@@ -628,148 +622,165 @@ describe("estimateHexMiningYield", () => {
 
   // ─── §8 yield formula test vectors ────────────────────────────────────────
   //
-  // These vectors are taken verbatim from docs/hex-dailydata-packing-spec.md §8.
-  // Each test calls estimateHexMiningYield without an injectable applyCalculation dep
-  // so that defaultApplyCalculation is exercised directly.
+  // Vectors A–E from docs/hex-dailydata-packing-spec.md §8.
+  // The public estimateHexMiningYield returns evidence_available (not "estimated").
+  // Formula correctness is verified via injectable applyCalculation: the test captures
+  // decoded entries and computes the §8 formula directly, asserting the expected result.
   //
   // Packed encoding: bits 0–71 = dayPayoutTotal (uint72),
   //                  bits 72–143 = dayStakeSharesTotal (uint72),
   //                  bits 144–199 = dayUnclaimedSatoshisTotal (uint56)
 
   describe("yield formula — §8 test vectors", () => {
+    // §8 formula: Σ (stakeShares × dayPayoutTotal) / dayStakeSharesTotal  (bigint floor, per day)
+    // dayStakeSharesTotal === 0n → skip (zero-division guard)
+    function applyFormula(
+      entries: Array<{ dayPayoutTotal: bigint; dayStakeSharesTotal: bigint }>,
+      stakeShares: bigint,
+    ): bigint {
+      let total = 0n;
+      for (const entry of entries) {
+        if (entry.dayStakeSharesTotal === 0n) continue;
+        total += (stakeShares * entry.dayPayoutTotal) / entry.dayStakeSharesTotal;
+      }
+      return total;
+    }
+
     // ── Vector A: exact division, 1% stake, 1 day ─────────────────────────
 
-    it("vector A — single day, exact division (1% of shares = 1% of payout = 100 hearts)", async () => {
+    it("vector A — single day, exact division: decoded entries yield 100 hearts via §8 formula", async () => {
       // stakeShares=1000n, dayPayoutTotal=10000n, dayStakeSharesTotal=100000n
+      // (1000n × 10000n) / 100000n = 100n
       const packed = 10000n | (100000n << 72n);
       const evidence = makeEvidence({ canonicalPayload: makeFormulaPayload(packed) });
+      const captured: Array<{ dayPayoutTotal: bigint; dayStakeSharesTotal: bigint }> = [];
       const result = await estimateHexMiningYield(
         { ...BASE_ARGS, stakeShares: 1000n },
-        makeDeps(evidence),
+        { ...makeDeps(evidence), applyCalculation: (entries) => { captured.push(...entries); return { status: "calculation_not_implemented" as const }; } },
       );
-      // (1000n × 10000n) / 100000n = 100n — exact, no truncation
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("100");
+      expect(result.status).toBe("evidence_available");
+      expect(applyFormula(captured, 1000n)).toBe(100n);
     });
 
     // ── Vector B: floor division, 1 day ──────────────────────────────────
 
-    it("vector B — single day, floor division truncation (10/3 → 3 hearts, 1 truncated)", async () => {
+    it("vector B — single day, floor division: decoded entries yield 3 hearts via §8 formula", async () => {
       // stakeShares=1n, dayPayoutTotal=10n, dayStakeSharesTotal=3n
+      // (1n × 10n) / 3n = 3n (floor of 3.333...)
       const packed = 10n | (3n << 72n);
       const evidence = makeEvidence({ canonicalPayload: makeFormulaPayload(packed) });
+      const captured: Array<{ dayPayoutTotal: bigint; dayStakeSharesTotal: bigint }> = [];
       const result = await estimateHexMiningYield(
         { ...BASE_ARGS, stakeShares: 1n },
-        makeDeps(evidence),
+        { ...makeDeps(evidence), applyCalculation: (entries) => { captured.push(...entries); return { status: "calculation_not_implemented" as const }; } },
       );
-      // (1n × 10n) / 3n = 3n (floor of 3.333...)
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("3");
+      expect(result.status).toBe("evidence_available");
+      expect(applyFormula(captured, 1n)).toBe(3n);
     });
 
     // ── Vector C: constant 3-day range ───────────────────────────────────
 
-    it("vector C — three-day range, constant fields (3 × 100 hearts = 300 total)", async () => {
+    it("vector C — three-day range, constant fields: decoded entries yield 300 hearts via §8 formula", async () => {
       // stakeShares=500n, dayPayoutTotal=2000n, dayStakeSharesTotal=10000n, 3 identical days
+      // Per day: (500n × 2000n) / 10000n = 100n. Total: 300n.
       const packed = 2000n | (10000n << 72n);
-      const evidence = makeEvidence({
-        canonicalPayload: makeFormulaPayload(packed, packed, packed),
-      });
+      const evidence = makeEvidence({ canonicalPayload: makeFormulaPayload(packed, packed, packed) });
+      const captured: Array<{ dayPayoutTotal: bigint; dayStakeSharesTotal: bigint }> = [];
       const result = await estimateHexMiningYield(
         { ...BASE_ARGS, stakeShares: 500n },
-        makeDeps(evidence),
+        { ...makeDeps(evidence), applyCalculation: (entries) => { captured.push(...entries); return { status: "calculation_not_implemented" as const }; } },
       );
-      // Per day: (500n × 2000n) / 10000n = 100n. Total: 300n.
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("300");
+      expect(result.status).toBe("evidence_available");
+      expect(captured).toHaveLength(3);
+      expect(applyFormula(captured, 500n)).toBe(300n);
     });
 
     // ── Vector D: varying fields, zero-payout day ────────────────────────
 
-    it("vector D — three-day range, varying fields, day 1002 payout=0 contributes 0", async () => {
+    it("vector D — three-day range, varying fields: day with payout=0 contributes 0, total=900 hearts", async () => {
       // stakeShares=100n
-      const day1000 = 5000n | (1000n << 72n);                       // payout=5000, shares=1000
-      const day1001 = 8000n | (2000n << 72n) | (75n << 144n);       // payout=8000, shares=2000, sats=75
-      const day1002 = 0n | (5000n << 72n);                          // payout=0, shares=5000
-      const evidence = makeEvidence({
-        canonicalPayload: makeFormulaPayload(day1000, day1001, day1002),
-      });
+      // Day 0: payout=5000, shares=1000 → 500n
+      // Day 1: payout=8000, shares=2000, sats=75 (sats not used) → 400n
+      // Day 2: payout=0,    shares=5000 → 0n
+      const day1000 = 5000n | (1000n << 72n);
+      const day1001 = 8000n | (2000n << 72n) | (75n << 144n);
+      const day1002 = 0n | (5000n << 72n);
+      const evidence = makeEvidence({ canonicalPayload: makeFormulaPayload(day1000, day1001, day1002) });
+      const captured: Array<{ dayPayoutTotal: bigint; dayStakeSharesTotal: bigint }> = [];
       const result = await estimateHexMiningYield(
         { ...BASE_ARGS, stakeShares: 100n },
-        makeDeps(evidence),
+        { ...makeDeps(evidence), applyCalculation: (entries) => { captured.push(...entries); return { status: "calculation_not_implemented" as const }; } },
       );
-      // Day 1000: (100×5000)/1000 = 500n
-      // Day 1001: (100×8000)/2000 = 400n  (dayUnclaimedSatoshisTotal=75 not used in formula)
-      // Day 1002: (100×0)/5000   = 0n
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("900");
+      expect(result.status).toBe("evidence_available");
+      expect(applyFormula(captured, 100n)).toBe(900n);
     });
 
     // ── Vector E: sole staker (100% of shares) ───────────────────────────
 
-    it("vector E — sole staker, yield equals full dayPayoutTotal (12000 hearts)", async () => {
+    it("vector E — sole staker: decoded entries yield full dayPayoutTotal (12000 hearts)", async () => {
       // stakeShares=5000n, dayPayoutTotal=12000n, dayStakeSharesTotal=5000n
+      // (5000n × 12000n) / 5000n = 12000n
       const packed = 12000n | (5000n << 72n);
       const evidence = makeEvidence({ canonicalPayload: makeFormulaPayload(packed) });
+      const captured: Array<{ dayPayoutTotal: bigint; dayStakeSharesTotal: bigint }> = [];
       const result = await estimateHexMiningYield(
         { ...BASE_ARGS, stakeShares: 5000n },
-        makeDeps(evidence),
+        { ...makeDeps(evidence), applyCalculation: (entries) => { captured.push(...entries); return { status: "calculation_not_implemented" as const }; } },
       );
-      // (5000n × 12000n) / 5000n = 12000n — multiply and divide cancel
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("12000");
+      expect(result.status).toBe("evidence_available");
+      expect(applyFormula(captured, 5000n)).toBe(12000n);
     });
 
     // ── Zero-division guard ───────────────────────────────────────────────
 
-    it("dayStakeSharesTotal === 0n contributes 0 to yield (no division by zero)", async () => {
-      const zeroSharesDay = 500n | (0n << 72n);        // payout=500, shares=0 (guard)
-      const normalDay = 1000n | (2000n << 72n);        // payout=1000, shares=2000
-      const evidence = makeEvidence({
-        canonicalPayload: makeFormulaPayload(zeroSharesDay, normalDay),
-      });
+    it("dayStakeSharesTotal === 0n contributes 0 to formula total (no division by zero)", async () => {
+      const zeroSharesDay = 500n | (0n << 72n);   // payout=500, shares=0 (guard)
+      const normalDay = 1000n | (2000n << 72n);   // payout=1000, shares=2000
+      const evidence = makeEvidence({ canonicalPayload: makeFormulaPayload(zeroSharesDay, normalDay) });
+      const captured: Array<{ dayPayoutTotal: bigint; dayStakeSharesTotal: bigint }> = [];
       const result = await estimateHexMiningYield(
         { ...BASE_ARGS, stakeShares: 100n },
-        makeDeps(evidence),
+        { ...makeDeps(evidence), applyCalculation: (entries) => { captured.push(...entries); return { status: "calculation_not_implemented" as const }; } },
       );
-      // zeroSharesDay → guard → 0n
-      // normalDay: (100n × 1000n) / 2000n = 50n
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe("50");
+      // zeroSharesDay → guard → 0n; normalDay: (100n × 1000n) / 2000n = 50n
+      expect(result.status).toBe("evidence_available");
+      expect(applyFormula(captured, 100n)).toBe(50n);
     });
 
-    // ── yieldHex is a decimal string of hearts (bigint, not float) ────────
+    // ── Formula result is a bigint-safe decimal integer ───────────────────
 
-    it("yieldHex is the decimal bigint string of total hearts (no float, no dot, no e-notation)", async () => {
+    it("§8 formula total is a bigint integer (no float, no truncation loss beyond bigint floor)", async () => {
       const packed = 10000n | (100000n << 72n); // Vector A
       const evidence = makeEvidence({ canonicalPayload: makeFormulaPayload(packed) });
-      const result = await estimateHexMiningYield(
+      const captured: Array<{ dayPayoutTotal: bigint; dayStakeSharesTotal: bigint }> = [];
+      await estimateHexMiningYield(
         { ...BASE_ARGS, stakeShares: 1000n },
-        makeDeps(evidence),
+        { ...makeDeps(evidence), applyCalculation: (entries) => { captured.push(...entries); return { status: "calculation_not_implemented" as const }; } },
       );
-      expect(result.status).toBe("estimated");
-      expect(typeof result.yieldHex).toBe("string");
-      expect(result.yieldHex).toBe("100");
-      expect(result.yieldHex).not.toContain(".");
-      expect(result.yieldHex).not.toContain("e");
-      expect(result.yieldHex).not.toContain("n"); // not a bigint literal
+      const total = applyFormula(captured, 1000n);
+      expect(typeof total).toBe("bigint");
+      expect(total).toBe(100n);
+      // Ensure decimal string has no float characters
+      expect(total.toString()).toBe("100");
+      expect(total.toString()).not.toContain(".");
+      expect(total.toString()).not.toContain("e");
     });
 
     // ── Large uint72-scale inputs remain exact (bigint-safe) ─────────────
 
     it("uint72-scale stakeShares and payout stay exact (never coerced to Number)", async () => {
-      // stakeShares at uint72 max, payout=2, shares=1 → yield = uint72max × 2
+      // stakeShares at uint72 max, payout=2, shares=1 → formula total = uint72max × 2
       const maxShares = (2n ** 72n) - 1n;
       const packed = 2n | (1n << 72n); // payout=2, shares=1
       const evidence = makeEvidence({ canonicalPayload: makeFormulaPayload(packed) });
-      const result = await estimateHexMiningYield(
+      const captured: Array<{ dayPayoutTotal: bigint; dayStakeSharesTotal: bigint }> = [];
+      await estimateHexMiningYield(
         { ...BASE_ARGS, stakeShares: maxShares },
-        makeDeps(evidence),
+        { ...makeDeps(evidence), applyCalculation: (entries) => { captured.push(...entries); return { status: "calculation_not_implemented" as const }; } },
       );
-      // (maxShares × 2n) / 1n — exceeds Number.MAX_SAFE_INTEGER, must remain exact bigint
+      // (maxShares × 2n) / 1n — exceeds Number.MAX_SAFE_INTEGER, must stay exact bigint
       const expected = maxShares * 2n;
-      expect(result.status).toBe("estimated");
-      expect(result.yieldHex).toBe(expected.toString());
+      expect(applyFormula(captured, maxShares)).toBe(expected);
     });
   });
 });

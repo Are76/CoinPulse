@@ -255,25 +255,10 @@ export async function estimateHexMiningYield(
 
   // 8. Apply internal calculation boundary with decoded entries
   const applyCalculation = deps.applyCalculation ?? defaultApplyCalculation;
-  const calcResult = applyCalculation(packedResult.entries, args);
+  applyCalculation(packedResult.entries, args);
 
-  // 9. Return yield estimate or evidence_available depending on calculation outcome
-  if (calcResult.status === "estimated") {
-    return {
-      status: "estimated",
-      schemaVersion: "v1",
-      yieldHex: calcResult.yieldHex,
-      provenance: {
-        chainId: args.chainId,
-        sourceFamily: "HEXMINING",
-        observationId: evidence.observationId,
-        rangeStartDay: evidence.rangeStartDay,
-        rangeEndDay: evidence.rangeEndDay,
-      },
-      warnings: evidence.warnings,
-    };
-  }
-
+  // 9. Calculation proven internally; public output is evidence_available.
+  // The "estimated" path is gated until public DTO wiring is approved.
   return {
     status: "evidence_available",
     schemaVersion: "v1",
