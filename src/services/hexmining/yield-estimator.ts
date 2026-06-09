@@ -1,5 +1,7 @@
 import "server-only";
 
+import { decodeDailyDataPayload } from "@/services/hexmining/daily-data-payload-decoder";
+import { decodePackedDailyDataRange } from "@/services/hexmining/daily-data-packed-decoder";
 import type { ObservationEvidenceMetadata } from "@/services/hexmining/observation-evidence-provider";
 
 export type { ObservationEvidenceMetadata };
@@ -8,12 +10,18 @@ const PULSECHAIN_CHAIN_ID = 369;
 
 // ─── Deps ─────────────────────────────────────────────────────────────────────
 
+// canonicalPayload is needed by the decode layer (steps 6–7) but is never
+// included in result types or surfaced to callers.
+type EvidenceWithPayload = ObservationEvidenceMetadata & {
+  canonicalPayload: string;
+};
+
 export type HexMiningYieldEstimatorDeps = {
   fetchEvidence: (args: {
     chainId: number;
     rangeStartDay: number;
     rangeEndDay: number;
-  }) => Promise<ObservationEvidenceMetadata | null>;
+  }) => Promise<EvidenceWithPayload | null>;
 };
 
 // ─── Args ─────────────────────────────────────────────────────────────────────
@@ -85,7 +93,7 @@ export async function estimateHexMiningYield(
   }
 
   // 2. Fetch evidence via injected provider (no RPC)
-  let evidence: ObservationEvidenceMetadata | null;
+  let evidence: EvidenceWithPayload | null;
   try {
     evidence = await deps.fetchEvidence({
       chainId: args.chainId,
@@ -142,7 +150,7 @@ export async function estimateHexMiningYield(
     };
   }
 
-  // 5. Payload schema invalid (provider validated internally — canonicalPayload never reaches here)
+  // 5. Payload schema invalid (provider pre-validation guard)
   if (!evidence.payloadSchemaValid) {
     return {
       status: "invalid_observation",
@@ -159,7 +167,43 @@ export async function estimateHexMiningYield(
     };
   }
 
-  // 6. Evidence validated — yield formula deferred to Phase 4C implementation PR
+  // 6. Decode canonicalPayload → bigint[]
+  const payloadResult = decodeDailyDataPayload(evidence.canonicalPayload);
+  if (!payloadResult.ok) {
+    return {
+      status: "invalid_observation",
+      schemaVersion: "v1",
+      yieldHex: null,
+      provenance: {
+        chainId: args.chainId,
+        sourceFamily: "HEXMINING",
+        observationId: evidence.observationId,
+        rangeStartDay: evidence.rangeStartDay,
+        rangeEndDay: evidence.rangeEndDay,
+      },
+      warnings: [...evidence.warnings, "hexmining-yield-payload-decode-failed"],
+    };
+  }
+
+  // 7. Decode packed uint256 entries — rejects values outside valid 200-bit range
+  const packedResult = decodePackedDailyDataRange(payloadResult.dailyData);
+  if (!packedResult.ok) {
+    return {
+      status: "invalid_observation",
+      schemaVersion: "v1",
+      yieldHex: null,
+      provenance: {
+        chainId: args.chainId,
+        sourceFamily: "HEXMINING",
+        observationId: evidence.observationId,
+        rangeStartDay: evidence.rangeStartDay,
+        rangeEndDay: evidence.rangeEndDay,
+      },
+      warnings: [...evidence.warnings, "hexmining-yield-packed-decode-failed"],
+    };
+  }
+
+  // 8. Evidence validated and decoded — yield formula deferred
   return {
     status: "evidence_available",
     schemaVersion: "v1",
