@@ -980,9 +980,9 @@ The following Phase 4C building blocks are merged and tested:
 |---|---|
 | #208 | `estimateHexMiningYield(args, deps)` in `src/services/hexmining/yield-estimator.ts`; injectable `fetchEvidence` dep; `HexMiningYieldEstimateResult` discriminated union with statuses `estimated \| evidence_available \| insufficient_observations \| invalid_observation \| unavailable \| unsupported`; no yield math, no RPC, no UI |
 | #209 | `getObservationEvidenceForRange(args, deps)` in `src/services/hexmining/observation-evidence-provider.ts`; queries persisted `RawHexDailyDataObservation` rows from the database; chain guard (369 only); returns `ObservationEvidenceMetadata` (never exposes `canonicalPayload`, `payloadHash`, or `rawDailyData`); `payloadSchemaValid` flag from internal payload decode; DB mock tests; no RPC |
-| #210 | `decodeDailyDataPayload(canonicalPayload)` in `src/services/hexmining/daily-data-payload-decoder.ts`; parses the persisted canonical payload shape `{ "schemaVersion": "v1", "dailyData": ["val0", "val1", ...] }`; validates schema version, root type, array structure; rejects numeric JSON values (§11.8 bigint-safe policy); returns `{ ok: true, dailyData: readonly bigint[], entryCount, warnings }` on success; **each `dailyData` entry is a raw packed uint72 bigint stored as a decimal string — no packed field decoding occurs in this PR** |
+| #210 | `decodeDailyDataPayload(canonicalPayload)` in `src/services/hexmining/daily-data-payload-decoder.ts`; parses the persisted canonical payload shape `{ "schemaVersion": "v1", "dailyData": ["val0", "val1", ...] }`; validates schema version, root type, array structure; rejects numeric JSON values (§11.8 bigint-safe policy); returns `{ ok: true, dailyData: readonly bigint[], entryCount, warnings }` on success; **each `dailyData` entry is a raw packed uint256 bigint stored as a decimal string — no packed field decoding occurs in this PR** |
 
-**Key point:** `encodeDailyDataPayload` (PR #205, `daily-data-observation-service.ts`) stores the raw packed uint72 values received from viem directly as base-10 decimal strings. It does not pre-decode them. `decodeDailyDataPayload` (PR #210) parses the canonical payload and returns those packed bigints as-is. Unpacking each bigint into named fields is the responsibility of the packed decoder that this blocker note tracks.
+**Key point:** `encodeDailyDataPayload` (PR #205, `daily-data-observation-service.ts`) stores the raw packed uint256 values received from viem directly as base-10 decimal strings. It does not pre-decode them. `decodeDailyDataPayload` (PR #210) parses the canonical payload and returns those packed bigints as-is. Unpacking each bigint into named fields is the responsibility of the packed decoder that this blocker note tracks. (Note: due to the ABI discrepancy documented in §11.13, currently stored values are truncated to 72 bits — only `dayPayoutTotal` is preserved. The fix is to correct the ABI declaration to `uint256[]`.)
 
 ---
 
@@ -1009,8 +1009,8 @@ That implementation attempt correctly stopped because the bit layout is not veri
 | Source | Type | Finding |
 |---|---|---|
 | Source A — Blockscout on-chain ABI (chain 1, `get_contract_abi`) | **Authoritative** | `dailyDataRange` returns `uint256[]`; `dailyData` struct fields: `dayPayoutTotal (uint72)`, `dayStakeSharesTotal (uint72)`, `dayUnclaimedSatoshisTotal (uint56)` |
-| Source B — JamJomJim/HEX.sol gist | Corroborating | Packing code: `v |= uint256(dayUnclaimedSatoshisTotal) << (72 * 2); v |= uint256(dayStakeSharesTotal) << 72; v |= uint256(dayPayoutTotal)` — confirms `HEART_UINT_SIZE = 72` and returns `uint256[] memory list` |
-| Source C — kbahr/HexUtilities.sol gist | Corroborating | Unpack code: `HEARTS_UINT_SHIFT = 72`, `SATS_UINT_SHIFT = 56`, `HEARTS_MASK = (1<<72)-1`, `SATS_MASK = (1<<56)-1` — confirms all offsets and masks |
+| Source B — JamJomJim/HEX.sol gist | Corroborating | Packing code confirms `HEART_UINT_SIZE = 72` and `uint256[] memory list` return type: fields packed as `dayUnclaimedSatoshisTotal << 144 \| dayStakeSharesTotal << 72 \| dayPayoutTotal` |
+| Source C — kbahr/HexUtilities.sol gist | Corroborating | Unpack code confirms `HEARTS_UINT_SHIFT = 72`, `SATS_UINT_SHIFT = 56`, `HEARTS_MASK = (1<<72)-1`, `SATS_MASK = (1<<56)-1` — confirms all offsets and masks |
 
 Verified bit layout (each element of the `uint256[]` return value):
 
@@ -1109,7 +1109,7 @@ Original criteria status after this PR:
 
 **Immediate next step: fix ABI declaration in `daily-data-reader.ts`**
 
-```
+```text
 fix(hexmining): correct dailyDataRange ABI declaration from uint72[] to uint256[]
 ```
 
@@ -1120,7 +1120,7 @@ fix(hexmining): correct dailyDataRange ABI declaration from uint72[] to uint256[
 
 **After ABI fix — packed decoder PR:**
 
-```
+```text
 feat(hexmining): add dailyData packed decoder
 ```
 

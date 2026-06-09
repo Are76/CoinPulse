@@ -1,7 +1,7 @@
 # HEX dailyData uint256 Packing Specification
 
 **Status:** Verified — authoritative on-chain ABI obtained; two independent corroborating sources.
-**Applies to:** `dailyDataRange(uint256 beginDay, uint256 endDay)` on the HEX contract at `0x2b591e99afe9f32eaa6214f7b7629768c40eeb39` (both Ethereum mainnet chain 1 and PulseChain chain 369 — same contract address, same code).
+**Applies to:** `dailyDataRange(uint256 beginDay, uint256 endDay)` on the HEX contract at `0x2b591e99afe9f32eaa6214f7b7629768c40eeb39` (Ethereum mainnet chain 1 verified; PulseChain chain 369 uses the same contract address — bytecode equivalence was not independently verified because PulseChain Blockscout was inaccessible during research, see §7).
 
 ---
 
@@ -198,7 +198,7 @@ Verification: `0n & HEARTS_MASK = 0n`, `(0n >> 72n) & HEARTS_MASK = 0n`, `(0n >>
 | `dayUnclaimedSatoshisTotal` | `0n` |
 
 Derivation:
-```
+```text
 packed = 1000n + (500n * 2n**72n)
        = 1000n + (500n * 4722366482869645213696n)
        = 1000n + 2361183241434822606848000n
@@ -206,7 +206,7 @@ packed = 1000n + (500n * 2n**72n)
 ```
 
 Verification:
-```
+```text
 2361183241434822606849000n & ((2n**72n) - 1n)         = 1000n  ✓
 (2361183241434822606849000n >> 72n) & ((2n**72n) - 1n) = 500n   ✓
 (2361183241434822606849000n >> 144n) & ((2n**56n) - 1n) = 0n    ✓
@@ -224,7 +224,7 @@ Verification:
 | `dayUnclaimedSatoshisTotal` | `0n` |
 
 Derivation:
-```
+```text
 packed = (2n**72n - 1n) + (1n * 2n**72n)
        = 2n * 2n**72n - 1n
        = 2n * 4722366482869645213696n - 1n
@@ -233,7 +233,7 @@ packed = (2n**72n - 1n) + (1n * 2n**72n)
 ```
 
 Verification:
-```
+```text
 9444732965739290427391n & ((2n**72n) - 1n)          = 4722366482869645213695n  ✓
 (9444732965739290427391n >> 72n) & ((2n**72n) - 1n)  = 1n                       ✓
 (9444732965739290427391n >> 144n) & ((2n**56n) - 1n) = 0n                       ✓
