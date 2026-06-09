@@ -232,9 +232,13 @@ describe("readDailyDataRangeObservation", () => {
   // ── 7. bigint shape preserved in rawDailyData ─────────────────────────────
 
   it("returns viem bigint values in rawDailyData without conversion", async () => {
-    // These are uint72-range bigints as viem would return from the contract
+    // Includes a value with bit 72 set (above uint72 max) to confirm the uint256[]
+    // ABI declaration preserves the full packed bigint — dayStakeSharesTotal and
+    // dayUnclaimedSatoshisTotal live above bit 72 and must not be truncated.
+    const ABOVE_UINT72 = 2n ** 72n; // 4722366482869645213696n — bit 72 set
     const VIEM_BIGINT_VALUES = [
-      4722366482869645213695n, // uint72 max
+      4722366482869645213695n, // uint72 max (all 72 lower bits set)
+      ABOVE_UINT72, // bit 72 set — proves uint256 range is preserved
       100000000000000000000n,
     ];
     const client: HexMiningReadClient = {
@@ -249,14 +253,16 @@ describe("readDailyDataRangeObservation", () => {
     const result = await readDailyDataRangeObservation({
       publicClient: client,
       rangeStartDay: 1000,
-      rangeEndDay: 1001,
+      rangeEndDay: 1002,
     });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.observation.rawDailyData).toEqual(VIEM_BIGINT_VALUES);
+      expect(result.observation.rawDailyData[1]).toBe(ABOVE_UINT72);
       expect(typeof result.observation.rawDailyData[0]).toBe("bigint");
       expect(typeof result.observation.rawDailyData[1]).toBe("bigint");
+      expect(typeof result.observation.rawDailyData[2]).toBe("bigint");
     }
   });
 

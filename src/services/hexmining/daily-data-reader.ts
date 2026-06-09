@@ -11,7 +11,7 @@ const PULSECHAIN_CHAIN_ID = 369;
 // Narrow ABI for the daily data reads used by this isolated module only.
 const PHEX_DAILY_DATA_ABI = parseAbi([
   "function currentDay() view returns (uint256)",
-  "function dailyDataRange(uint256 beginDay, uint256 endDay) view returns (uint72[] list)",
+  "function dailyDataRange(uint256 beginDay, uint256 endDay) view returns (uint256[] list)",
 ]);
 
 // ─── currentDay read ──────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ export type DailyDataObservation = {
   observedAtBlock: bigint;
   observedAt: Date;
   rpcEndpointLabel: string | null;
-  // Raw viem bigint array from dailyDataRange. Each element is a uint72 packed
+  // Raw viem bigint array from dailyDataRange. Each element is a uint256 packed
   // daily data value. Bigint-safe canonical encoding (§11.8) is applied at the
   // persistence boundary — this module returns the raw viem shape only.
   rawDailyData: readonly bigint[];
