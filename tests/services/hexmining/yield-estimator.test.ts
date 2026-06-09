@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import type { ObservationEvidenceMetadata } from "@/services/hexmining/observation-evidence-provider";
 import {
@@ -317,6 +317,181 @@ describe("estimateHexMiningYield", () => {
       expect(keys).not.toContain("apy");
       expect(keys).not.toContain("apr");
       expect(keys).not.toContain("estimatedYield");
+    });
+  });
+
+  describe("internal calculation boundary scaffold", () => {
+    // ── Test 1: decoded evidence reaches the calculation boundary ─────────────
+
+    it("calls applyCalculation with decoded entries when evidence is valid", async () => {
+      const applyCalculation: Mock = vi.fn().mockReturnValue({
+        status: "calculation_not_implemented" as const,
+      });
+      const deps = { ...makeDeps(), applyCalculation };
+
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(applyCalculation).toHaveBeenCalledOnce();
+    });
+
+    it("passes decoded entries with correct field values to applyCalculation", async () => {
+      const applyCalculation: Mock = vi.fn().mockReturnValue({
+        status: "calculation_not_implemented" as const,
+      });
+      const deps = { ...makeDeps(), applyCalculation };
+
+      await estimateHexMiningYield(BASE_ARGS, deps);
+
+      // DEFAULT_CANONICAL_PAYLOAD contains 3 entries: vectors 1, 2, 3 from §4
+      const [entries] = applyCalculation.mock.calls[0] as [
+        Array<{ dayPayoutTotal: bigint; dayStakeSharesTotal: bigint; dayUnclaimedSatoshisTotal: bigint }>,
+        unknown,
+      ];
+      expect(entries).toHaveLength(3);
+      // Vector 1 — zero packed value
+      expect(entries[0]!.dayPayoutTotal).toBe(0n);
+      expect(entries[0]!.dayStakeSharesTotal).toBe(0n);
+      expect(entries[0]!.dayUnclaimedSatoshisTotal).toBe(0n);
+      // Vector 2 — payout=1000, shares=500
+      expect(entries[1]!.dayPayoutTotal).toBe(1000n);
+      expect(entries[1]!.dayStakeSharesTotal).toBe(500n);
+      // Vector 3 — payout=uint72max, shares=1
+      expect(entries[2]!.dayPayoutTotal).toBe(2n ** 72n - 1n);
+      expect(entries[2]!.dayStakeSharesTotal).toBe(1n);
+    });
+
+    it("passes the original args to applyCalculation", async () => {
+      const applyCalculation: Mock = vi.fn().mockReturnValue({
+        status: "calculation_not_implemented" as const,
+      });
+      const deps = { ...makeDeps(), applyCalculation };
+
+      await estimateHexMiningYield(BASE_ARGS, deps);
+
+      const [, receivedArgs] = applyCalculation.mock.calls[0] as [unknown, typeof BASE_ARGS];
+      expect(receivedArgs.lockedDay).toBe(BASE_ARGS.lockedDay);
+      expect(receivedArgs.stakedDays).toBe(BASE_ARGS.stakedDays);
+      expect(receivedArgs.currentDay).toBe(BASE_ARGS.currentDay);
+      expect(receivedArgs.rangeStartDay).toBe(BASE_ARGS.rangeStartDay);
+      expect(receivedArgs.rangeEndDay).toBe(BASE_ARGS.rangeEndDay);
+    });
+
+    // ── Test 2: formula not implemented → non-estimated status ────────────────
+
+    it("calculation_not_implemented returns evidence_available, never estimated", async () => {
+      const applyCalculation: Mock = vi.fn().mockReturnValue({
+        status: "calculation_not_implemented" as const,
+      });
+      const deps = { ...makeDeps(), applyCalculation };
+
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.status).not.toBe("estimated");
+      expect(result.yieldHex).toBeNull();
+    });
+
+    it("insufficient_formula_evidence returns evidence_available, never estimated", async () => {
+      const applyCalculation: Mock = vi.fn().mockReturnValue({
+        status: "insufficient_formula_evidence" as const,
+      });
+      const deps = { ...makeDeps(), applyCalculation };
+
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.status).not.toBe("estimated");
+      expect(result.yieldHex).toBeNull();
+    });
+
+    // ── Test 3: invalid_observation still short-circuits before boundary ──────
+
+    it("does not call applyCalculation when observation is invalidated", async () => {
+      const applyCalculation: Mock = vi.fn();
+      const deps = {
+        ...makeDeps(makeEvidence({ isInvalidated: true })),
+        applyCalculation,
+      };
+
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("invalid_observation");
+      expect(applyCalculation).not.toHaveBeenCalled();
+    });
+
+    it("does not call applyCalculation when packed decode fails", async () => {
+      const applyCalculation: Mock = vi.fn();
+      const tooLarge = (2n ** 200n).toString();
+      const badPayload = JSON.stringify({ schemaVersion: "v1", dailyData: [tooLarge] });
+      const deps = {
+        ...makeDeps(makeEvidence({ canonicalPayload: badPayload })),
+        applyCalculation,
+      };
+
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("invalid_observation");
+      expect(applyCalculation).not.toHaveBeenCalled();
+    });
+
+    // ── Test 4: no yieldHex / APY / pricing fields ─────────────────────────────
+
+    it("never exposes yieldHex, APY, pricing, valuation, or PnL fields in result", async () => {
+      const applyCalculation: Mock = vi.fn().mockReturnValue({
+        status: "calculation_not_implemented" as const,
+      });
+      const deps = { ...makeDeps(), applyCalculation };
+
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+      const serialized = JSON.stringify(result);
+      const keys = Object.keys(result);
+
+      expect(result.yieldHex).toBeNull();
+      expect(serialized).not.toContain("apy");
+      expect(serialized).not.toContain("apr");
+      expect(serialized).not.toContain("estimatedYield");
+      expect(serialized).not.toContain("yieldUsd");
+      expect(keys).not.toContain("pricing");
+      expect(keys).not.toContain("valuation");
+      expect(keys).not.toContain("pnl");
+    });
+
+    it("decoded fields (dayPayoutTotal etc.) are not in the public result", async () => {
+      const applyCalculation: Mock = vi.fn().mockReturnValue({
+        status: "calculation_not_implemented" as const,
+      });
+      const deps = { ...makeDeps(), applyCalculation };
+
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+      const serialized = JSON.stringify(result);
+
+      expect(serialized).not.toContain("dayPayoutTotal");
+      expect(serialized).not.toContain("dayStakeSharesTotal");
+      expect(serialized).not.toContain("dayUnclaimedSatoshisTotal");
+      expect(serialized).not.toContain("canonicalPayload");
+      expect(serialized).not.toContain("dailyData");
+    });
+
+    // ── Test 8: existing evidence_available behavior remains deterministic ─────
+
+    it("default (no applyCalculation dep) still returns evidence_available", async () => {
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+      expect(result.provenance.observationId).toBe("obs-abc-123");
+    });
+
+    it("applyCalculation is not called when evidence is null", async () => {
+      const applyCalculation: Mock = vi.fn();
+      const deps = { ...makeDeps(null), applyCalculation };
+
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(applyCalculation).not.toHaveBeenCalled();
     });
   });
 });

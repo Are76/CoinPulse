@@ -1,12 +1,57 @@
 import "server-only";
 
 import { decodeDailyDataPayload } from "@/services/hexmining/daily-data-payload-decoder";
-import { decodePackedDailyDataRange } from "@/services/hexmining/daily-data-packed-decoder";
+import {
+  decodePackedDailyDataRange,
+  type DecodedDailyDataEntry,
+} from "@/services/hexmining/daily-data-packed-decoder";
 import type { ObservationEvidenceMetadata } from "@/services/hexmining/observation-evidence-provider";
 
 export type { ObservationEvidenceMetadata };
 
 const PULSECHAIN_CHAIN_ID = 369;
+
+// ─── Args ─────────────────────────────────────────────────────────────────────
+
+export type HexMiningYieldEstimateArgs = {
+  chainId: number;
+  stakeId: string;
+  lockedDay: number;
+  stakedDays: number;
+  currentDay: number;
+  rangeStartDay: number;
+  rangeEndDay: number;
+};
+
+// ─── Internal calculation boundary ───────────────────────────────────────────
+
+// Not exported — internal scaffold only. Never included in public result types.
+type YieldCalculationStatus =
+  | "calculation_not_implemented"
+  | "insufficient_formula_evidence";
+
+type YieldCalculationResult = {
+  status: YieldCalculationStatus;
+};
+
+// Default calculation boundary.
+// Yield formula is documented in docs/hex-dailydata-packing-spec.md §3:
+//   per-day contribution ≈ (stakeShares / dayStakeSharesTotal) * dayPayoutTotal
+//   summed across elapsed active days: lockedDay to min(currentDay, lockedDay+stakedDays-1)
+// (refs: §11.4 yield status policy, §11.9 minimum provenance requirements)
+//
+// Not implemented because:
+//   (a) stakeShares is not yet available in HexMiningYieldEstimateArgs (requires stakeLists wiring)
+//   (b) no deterministic test vectors for the full yield formula exist in-repo
+// Returns calculation_not_implemented until both prerequisites are met.
+function defaultApplyCalculation(
+  entries: readonly DecodedDailyDataEntry[],
+  args: HexMiningYieldEstimateArgs,
+): YieldCalculationResult {
+  void entries;
+  void args;
+  return { status: "calculation_not_implemented" };
+}
 
 // ─── Deps ─────────────────────────────────────────────────────────────────────
 
@@ -22,18 +67,11 @@ export type HexMiningYieldEstimatorDeps = {
     rangeStartDay: number;
     rangeEndDay: number;
   }) => Promise<EvidenceWithPayload | null>;
-};
-
-// ─── Args ─────────────────────────────────────────────────────────────────────
-
-export type HexMiningYieldEstimateArgs = {
-  chainId: number;
-  stakeId: string;
-  lockedDay: number;
-  stakedDays: number;
-  currentDay: number;
-  rangeStartDay: number;
-  rangeEndDay: number;
+  // Injectable for tests — defaults to defaultApplyCalculation.
+  applyCalculation?: (
+    entries: readonly DecodedDailyDataEntry[],
+    args: HexMiningYieldEstimateArgs,
+  ) => YieldCalculationResult;
 };
 
 // ─── Result ───────────────────────────────────────────────────────────────────
@@ -203,7 +241,12 @@ export async function estimateHexMiningYield(
     };
   }
 
-  // 8. Evidence validated and decoded — yield formula deferred
+  // 8. Apply internal calculation boundary with decoded entries
+  // calculation_not_implemented → evidence_available: formula deferred, not an error
+  const applyCalculation = deps.applyCalculation ?? defaultApplyCalculation;
+  void applyCalculation(packedResult.entries, args);
+
+  // 9. Evidence validated and decoded — yield formula deferred
   return {
     status: "evidence_available",
     schemaVersion: "v1",
