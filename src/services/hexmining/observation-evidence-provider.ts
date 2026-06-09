@@ -73,6 +73,12 @@ export type ObservationEvidenceMetadata = {
   warnings: string[];
 };
 
+// For internal yield estimation pipeline only.
+// Never return from API routes or include canonicalPayload in any DTO.
+export type EvidenceWithCanonicalPayload = ObservationEvidenceMetadata & {
+  canonicalPayload: string;
+};
+
 export type GetObservationEvidenceArgs = {
   chainId: number;
   rangeStartDay: number;
@@ -164,5 +170,60 @@ export async function getObservationEvidenceForRange(
     payloadSchemaValid: isPayloadSchemaValid(row.canonicalPayload),
     isInvalidated: invalidation !== null,
     warnings: row.warnings,
+  };
+}
+
+// Returns evidence with canonicalPayload for the yield estimation pipeline.
+// For internal use only — never expose canonicalPayload through any DTO or API response.
+export async function getObservationEvidenceWithPayloadForRange(
+  args: GetObservationEvidenceArgs,
+  deps: EvidenceProviderDeps = {},
+): Promise<EvidenceWithCanonicalPayload | null> {
+  if (args.chainId !== PULSECHAIN_CHAIN_ID) return null;
+
+  const db = deps.db ?? getDb();
+
+  const row = await db.rawHexDailyDataObservation.findFirst({
+    where: {
+      chainId: args.chainId,
+      sourceFamily: SourceFamily.HEXMINING,
+      rangeStartDay: args.rangeStartDay,
+      rangeEndDay: args.rangeEndDay,
+    },
+    select: {
+      id: true,
+      chainId: true,
+      sourceFamily: true,
+      rangeStartDay: true,
+      rangeEndDay: true,
+      observedAtBlock: true,
+      observedAt: true,
+      payloadVersion: true,
+      canonicalPayload: true,
+      warnings: true,
+    },
+    orderBy: { observedAtBlock: "desc" },
+  });
+
+  if (row === null) return null;
+
+  const invalidation = await db.rawHexDailyDataObservationInvalidation.findFirst({
+    where: { observationId: row.id },
+    select: { id: true },
+  });
+
+  return {
+    observationId: row.id,
+    chainId: row.chainId,
+    sourceFamily: "HEXMINING",
+    rangeStartDay: row.rangeStartDay,
+    rangeEndDay: row.rangeEndDay,
+    observedAtBlock: row.observedAtBlock.toString(),
+    observedAt: row.observedAt.toISOString(),
+    payloadVersion: row.payloadVersion,
+    payloadSchemaValid: isPayloadSchemaValid(row.canonicalPayload),
+    isInvalidated: invalidation !== null,
+    warnings: row.warnings,
+    canonicalPayload: row.canonicalPayload,
   };
 }

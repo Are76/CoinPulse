@@ -4,8 +4,10 @@ import { parseAbi, type PublicClient } from "viem";
 
 import { PHEX_ADDRESS, PHEX_DECIMALS } from "@/config/assets";
 import { Decimal } from "@/lib/decimal";
+import type { EvidenceWithCanonicalPayload } from "@/services/hexmining/observation-evidence-provider";
 import { PHEX_ASSET_ID } from "@/services/hexmining/types";
-import type { HexStakeDto, HexStakeListDto, HexStakeStatus } from "@/services/hexmining/types";
+import type { HexStakeDto, HexStakeListDto, HexStakeStatus, HexStakeYieldDto } from "@/services/hexmining/types";
+import { estimateHexMiningYield } from "@/services/hexmining/yield-estimator";
 import { classifyRpcFailure } from "@/services/rpc/rpc-failure-taxonomy";
 
 const PULSECHAIN_CHAIN_ID = 369;
@@ -23,7 +25,78 @@ export type ReadNativeHexStakesArgs = {
   walletAddress: string;
   chainId: number;
   asOf?: Date;
+  fetchYieldEvidence?: (args: {
+    chainId: number;
+    rangeStartDay: number;
+    rangeEndDay: number;
+  }) => Promise<EvidenceWithCanonicalPayload | null>;
 };
+
+async function resolveYieldDto(
+  fetchYieldEvidence: ReadNativeHexStakesArgs["fetchYieldEvidence"],
+  stakeShares: bigint,
+  lockedDay: number,
+  stakedDays: number,
+  stakeIdStr: string,
+  chainId: number,
+  currentDay: bigint | null,
+): Promise<{ dto: HexStakeYieldDto; warnings: string[] }> {
+  if (!fetchYieldEvidence) {
+    return {
+      dto: { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null },
+      warnings: [],
+    };
+  }
+
+  if (currentDay === null) {
+    return {
+      dto: { status: "unavailable", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null },
+      warnings: ["hexmining-yield-unavailable-no-current-day"],
+    };
+  }
+
+  // Pending stake: no elapsed days yet, yield is not calculable
+  if (currentDay < BigInt(lockedDay)) {
+    return {
+      dto: { status: "unavailable", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null },
+      warnings: [],
+    };
+  }
+
+  const rangeStartDay = lockedDay;
+  const rangeEndDay = Math.min(Number(currentDay), lockedDay + stakedDays - 1);
+
+  const result = await estimateHexMiningYield(
+    {
+      chainId,
+      stakeId: stakeIdStr,
+      stakeShares,
+      lockedDay,
+      stakedDays,
+      currentDay: Number(currentDay),
+      rangeStartDay,
+      rangeEndDay,
+    },
+    { fetchEvidence: fetchYieldEvidence },
+  );
+
+  if (result.status === "estimated") {
+    return {
+      dto: {
+        status: "estimated",
+        estimatedYieldHex: result.yieldHex,
+        bpdYieldStatus: "unknown",
+        bpdYieldHex: null,
+      },
+      warnings: result.warnings,
+    };
+  }
+
+  return {
+    dto: { status: "unavailable", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null },
+    warnings: result.warnings,
+  };
+}
 
 export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promise<HexStakeListDto> {
   const observedAt = (args.asOf ?? new Date()).toISOString();
@@ -127,6 +200,16 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
       const unlockedDayRaw = Number(raw[5]);
       const isAutoStake = raw[6];
 
+      const yieldData = await resolveYieldDto(
+        args.fetchYieldEvidence,
+        stakeShares,
+        lockedDay,
+        stakedDays,
+        stakeId.toString(),
+        PULSECHAIN_CHAIN_ID,
+        currentDay,
+      );
+
       stakes.push({
         schemaVersion: "v1",
         stakeId: stakeId.toString(),
@@ -153,7 +236,7 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
           markPrice: null,
           costBasisPolicy: null,
         },
-        yield: { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null },
+        yield: yieldData.dto,
         provenance: {
           chainId: PULSECHAIN_CHAIN_ID,
           walletAddress,
@@ -165,7 +248,7 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
           rpcEndpoint: null,
           warnings: [],
         },
-        warnings: ["hexmining-valuation-unsupported-v1"],
+        warnings: ["hexmining-valuation-unsupported-v1", ...yieldData.warnings],
       });
     } catch {
       isComplete = false;

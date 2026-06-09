@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { readNativeHexStakes } from "@/services/hexmining/reader";
 import type { HexMiningReadClient } from "@/services/hexmining/reader";
+import type { EvidenceWithCanonicalPayload } from "@/services/hexmining/observation-evidence-provider";
 import { PHEX_ASSET_ID } from "@/services/hexmining/types";
 
 // ─── Test constants ───────────────────────────────────────────────────────────
@@ -396,5 +397,209 @@ describe("readNativeHexStakes", () => {
     expect(result.stakes[1].stakeIndex).toBe(1);
     expect(result.stakes[2].stakeIndex).toBe(2);
     expect(result.isComplete).toBe(true);
+  });
+});
+
+// ─── Yield estimation wiring ──────────────────────────────────────────────────
+//
+// NOMINAL_STAKE: lockedDay=1000, stakedDays=5555, stakeShares=500_000_000_000n
+// DEFAULT_CURRENT_DAY=5000n → rangeStartDay=1000, rangeEndDay=min(5000,6554)=5000
+//
+// Test payload: 1 day with dayPayoutTotal=1_000_000_000n, dayStakeSharesTotal=2_000_000_000_000n
+// Expected yield = 500_000_000_000n * 1_000_000_000n / 2_000_000_000_000n = 250_000_000n → "250000000"
+
+function makeValidEvidence(
+  overrides: Partial<EvidenceWithCanonicalPayload> = {},
+): EvidenceWithCanonicalPayload {
+  const dayPayoutTotal = 1_000_000_000n;
+  const dayStakeSharesTotal = 2_000_000_000_000n;
+  const packed = dayPayoutTotal | (dayStakeSharesTotal << 72n);
+  return {
+    observationId: "obs-wiring-test",
+    chainId: 369,
+    sourceFamily: "HEXMINING",
+    rangeStartDay: 1000,
+    rangeEndDay: 5000,
+    observedAtBlock: "21000000",
+    observedAt: "2026-01-01T00:00:00.000Z",
+    payloadVersion: "v1",
+    payloadSchemaValid: true,
+    isInvalidated: false,
+    warnings: [],
+    canonicalPayload: JSON.stringify({ schemaVersion: "v1", dailyData: [packed.toString()] }),
+    ...overrides,
+  };
+}
+
+describe("yield estimation wiring", () => {
+  // ── W1. No fetchYieldEvidence → unsupported (backward compat) ─────────────
+
+  it("yield remains unsupported when fetchYieldEvidence is not provided", async () => {
+    const client = makeClient();
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+    });
+    expect(result.stakes[0].yield.status).toBe("unsupported");
+    expect(result.stakes[0].yield.estimatedYieldHex).toBeNull();
+  });
+
+  // ── W2. Estimated yield maps to DTO ───────────────────────────────────────
+
+  it("maps estimated yield result to HexStakeYieldDto correctly", async () => {
+    const client = makeClient();
+    const fetchYieldEvidence = vi.fn(async () => makeValidEvidence());
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      fetchYieldEvidence,
+    });
+    const stake = result.stakes[0];
+    expect(stake.yield.status).toBe("estimated");
+    if (stake.yield.status === "estimated") {
+      expect(stake.yield.estimatedYieldHex).toBe("250000000");
+      expect(stake.yield.bpdYieldStatus).toBe("unknown");
+      expect(stake.yield.bpdYieldHex).toBeNull();
+    }
+    expect(fetchYieldEvidence).toHaveBeenCalledWith({
+      chainId: 369,
+      rangeStartDay: 1000,
+      rangeEndDay: 5000,
+    });
+  });
+
+  // ── W3. No evidence (fetchYieldEvidence returns null) → unavailable ────────
+
+  it("yield is unavailable when fetchYieldEvidence returns null", async () => {
+    const client = makeClient();
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      fetchYieldEvidence: async () => null,
+    });
+    expect(result.stakes[0].yield.status).toBe("unavailable");
+  });
+
+  // ── W4. fetchYieldEvidence throws → unavailable ───────────────────────────
+
+  it("yield is unavailable when fetchYieldEvidence throws", async () => {
+    const client = makeClient();
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      fetchYieldEvidence: async () => {
+        throw new Error("db connection failed");
+      },
+    });
+    expect(result.stakes[0].yield.status).toBe("unavailable");
+  });
+
+  // ── W5. Pending stake → unavailable without calling fetchYieldEvidence ─────
+
+  it("yield is unavailable for pending stake and fetchYieldEvidence is never called", async () => {
+    // lockedDay=6000 > currentDay=5000 → pending
+    const fetchYieldEvidence = vi.fn(async () => makeValidEvidence());
+    const client = makeClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 1n;
+        if (functionName === "currentDay") return 5_000n;
+        if (functionName === "stakeLists")
+          return [42n, 100_000_000n, 500_000_000_000n, 6000, 365, 0, false];
+        throw new Error(`unexpected function: ${functionName}`);
+      },
+    });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      fetchYieldEvidence,
+    });
+    expect(result.stakes[0].yield.status).toBe("unavailable");
+    expect(fetchYieldEvidence).not.toHaveBeenCalled();
+  });
+
+  // ── W6. currentDay null → unavailable with warning ────────────────────────
+
+  it("yield is unavailable with warning when currentDay is unavailable", async () => {
+    const client = makeClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 1n;
+        if (functionName === "currentDay") throw new Error("RPC unavailable");
+        if (functionName === "stakeLists") return NOMINAL_STAKE;
+        throw new Error(`unexpected function: ${functionName}`);
+      },
+    });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      fetchYieldEvidence: async () => makeValidEvidence(),
+    });
+    expect(result.stakes[0].yield.status).toBe("unavailable");
+    expect(result.stakes[0].warnings).toContain("hexmining-yield-unavailable-no-current-day");
+  });
+
+  // ── W7. Estimator warnings merge into stake warnings ──────────────────────
+
+  it("merges yield estimator warnings into stake warnings", async () => {
+    const client = makeClient();
+    const evidenceWithWarning = makeValidEvidence({ warnings: ["test-observation-warning"] });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      fetchYieldEvidence: async () => evidenceWithWarning,
+    });
+    const stake = result.stakes[0];
+    // Estimator forwards evidence.warnings when status === "estimated"
+    expect(stake.warnings).toContain("test-observation-warning");
+    // Base stake warning still present
+    expect(stake.warnings).toContain("hexmining-valuation-unsupported-v1");
+  });
+
+  // ── W8. canonicalPayload never surfaced in DTO ─────────────────────────────
+
+  it("canonicalPayload is never present in any stake DTO field", async () => {
+    const client = makeClient();
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      fetchYieldEvidence: async () => makeValidEvidence(),
+    });
+    const stakeJson = JSON.stringify(result.stakes[0]);
+    expect(stakeJson).not.toContain("canonicalPayload");
+  });
+
+  // ── W9. rangeEndDay is capped at end-of-stake when overdue ────────────────
+
+  it("rangeEndDay is capped at lockedDay+stakedDays-1 for overdue stakes", async () => {
+    // lockedDay=1000, stakedDays=365 → endDay=1364; currentDay=2000 (overdue)
+    // rangeEndDay = min(2000, 1364) = 1364
+    const fetchYieldEvidence = vi.fn(async () => makeValidEvidence({ rangeEndDay: 1364 }));
+    const client = makeClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 1n;
+        if (functionName === "currentDay") return 2_000n;
+        if (functionName === "stakeLists")
+          return [42n, 100_000_000n, 500_000_000_000n, 1000, 365, 0, false];
+        throw new Error(`unexpected function: ${functionName}`);
+      },
+    });
+    await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      fetchYieldEvidence,
+    });
+    expect(fetchYieldEvidence).toHaveBeenCalledWith({
+      chainId: 369,
+      rangeStartDay: 1000,
+      rangeEndDay: 1364,
+    });
   });
 });

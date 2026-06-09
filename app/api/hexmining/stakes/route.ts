@@ -3,6 +3,7 @@ import "server-only";
 import { z, ZodError } from "zod";
 
 import { createPublicClientForChain } from "@/services/chains/public-client";
+import { getObservationEvidenceWithPayloadForRange } from "@/services/hexmining/observation-evidence-provider";
 import type { HexMiningReadClient } from "@/services/hexmining/reader";
 import { readNativeHexStakes } from "@/services/hexmining/reader";
 import {
@@ -28,6 +29,7 @@ export async function GET(request: Request) {
       publicClient,
       walletAddress: input.walletAddress,
       chainId: input.chainId,
+      fetchYieldEvidence: (evidenceArgs) => getObservationEvidenceWithPayloadForRange(evidenceArgs),
     });
     return Response.json({ data: stakes });
   } catch (error) {
