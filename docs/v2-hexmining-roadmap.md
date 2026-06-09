@@ -822,6 +822,8 @@ Phase 4C has begun. Three bounded PRs are merged:
 - Big Pay Day modelling with `bpdYieldStatus` / `bpdYieldHex` per §11.4 invariant #5.
 - Files in scope: `src/services/hexmining/`, `tests/services/hexmining/`.
 
+**Prerequisite resolved (PR #218):** Deterministic yield formula test vectors are now documented in `docs/hex-dailydata-packing-spec.md §8`. The yield formula implementation may proceed once unit tests using those vectors are written and pass.
+
 **Step 4 — Yield DTO wiring and API route update PR**
 `feat(hexmining): wire estimated yield fields into HexStakeDto and API route`
 - Update `HexStakeDto` yield field assembly in the reader/assembler.

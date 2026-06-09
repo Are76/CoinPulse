@@ -164,10 +164,10 @@ function decodePackedDailyDataEntry(packed: bigint) {
 | `dayStakeSharesTotal` | stake share units | Raw T-share related units. T-shares ≈ `stakeShares / 1e12` but exact scaling must be verified against contract source before use in yield calculations (see roadmap §2). |
 | `dayUnclaimedSatoshisTotal` | satoshis | Unclaimed BTC claim satoshis available for late-claim bonus. Zero after BPD (day 353). |
 
-**Yield calculation semantics (not implemented yet):**
-- Estimated yield for a stake on a given day ≈ `(stakeShares / dayStakeSharesTotal) * dayPayoutTotal`
-- This formula is not implemented in this document — it is deferred to the yield estimator PR.
-- BPD yield is handled separately (see roadmap §11.4 invariant #5).
+**Yield calculation semantics (see §8 for deterministic test vectors):**
+- Per-day yield for a stake: `(stakeShares × dayPayoutTotal) / dayStakeSharesTotal` (bigint floor division — multiply first)
+- Summed across elapsed active days: `lockedDay` to `min(currentDay, lockedDay + stakedDays - 1)`
+- BPD yield is handled separately and must never be silently included (see roadmap §11.4 invariant #5).
 
 ---
 
@@ -340,5 +340,202 @@ After that fix is merged: `feat(hexmining): add dailyData packed decoder`
 ## 7. Open Questions (not blocking this spec)
 
 - **T-share scaling:** `dayStakeSharesTotal` unit scaling (T-shares = stakeShares / 1e12 or different) must be verified before yield formula is implemented. The roadmap (§2) notes this as "must be verified against HEX contract source before implementation."
-- **Yield formula:** Not documented here. Deferred to the yield estimator PR after the packed decoder is complete and the ABI is fixed.
-- **BPD detection:** Day 353 BPD logic is deferred — see roadmap §11.4 invariant #5.
+- **Yield formula test vectors:** Now documented in §8. These are the in-repo deterministic vectors required before yield math may be implemented.
+- **BPD detection:** Day 353 BPD logic is deferred — see roadmap §11.4 invariant #5. No BPD vectors are included in §8.
+
+---
+
+## 8. Yield Formula Test Vectors
+
+**Purpose:** Deterministic unit-test vectors for the per-stake per-day yield contribution formula. These are arithmetic test cases only — not market prices, not APY estimates, not USD valuations.
+
+**No yield math may be added to `yield-estimator.ts` until deterministic tests using these vectors pass.**
+
+---
+
+### Formula
+
+Per-day yield contribution for a stake on day `d`:
+
+```
+perDayYield(d) = (stakeShares × dayPayoutTotal[d]) / dayStakeSharesTotal[d]
+```
+
+Total yield across elapsed active days `[rangeStartDay, rangeEndDay]` (inclusive):
+
+```
+totalYield = Σ perDayYield(d)  for d in [rangeStartDay, rangeEndDay]
+```
+
+---
+
+### Rounding policy
+
+- **Integer floor division.** The bigint `/` operator truncates toward zero (floor for positive values).
+- **Multiply first.** Always compute `stakeShares × dayPayoutTotal` before dividing by `dayStakeSharesTotal` to maximise precision. Dividing first (`stakeShares / dayStakeSharesTotal`) loses precision before the multiplication.
+- **Never use `Number`.** uint72 values exceed `Number.MAX_SAFE_INTEGER` (9007199254740991). All arithmetic must use `bigint`.
+- **Guard for zero shares.** If `dayStakeSharesTotal === 0n`, yield contribution for that day is `0n` (no stakers active; no payout).
+
+---
+
+### What is NOT included in these vectors
+
+- **Big Pay Day (day 353)** yield requires separate `bpdYieldStatus` modeling per roadmap §11.4 invariant #5. BPD yield must never be silently included in the per-day formula sum. None of the vectors below cover day 353.
+- **APY.** Not derivable from these vectors alone.
+- **Pricing, valuation, or PnL.** Not part of this formula.
+
+---
+
+### Vector A — single day, exact division (no truncation)
+
+| Field | Value |
+|---|---|
+| `stakeShares` | `1000n` |
+| `dayPayoutTotal` | `10000n` |
+| `dayStakeSharesTotal` | `100000n` |
+| `dayUnclaimedSatoshisTotal` | `0n` (not used in formula) |
+| Day range | `[1000, 1000]` — 1 day |
+
+**Derivation:**
+
+```
+stakeShares × dayPayoutTotal = 1000n × 10000n = 10000000n
+perDayYield  = 10000000n / 100000n             = 100n  (exact — no truncation)
+totalYield   = 100n hearts
+```
+
+This stake holds 1% of all shares (1000 / 100000) and receives exactly 1% of the day's payout.
+
+---
+
+### Vector B — single day, truncation occurs
+
+| Field | Value |
+|---|---|
+| `stakeShares` | `1n` |
+| `dayPayoutTotal` | `10n` |
+| `dayStakeSharesTotal` | `3n` |
+| `dayUnclaimedSatoshisTotal` | `0n` |
+| Day range | `[1000, 1000]` — 1 day |
+
+**Derivation:**
+
+```
+1n × 10n    = 10n
+perDayYield = 10n / 3n = 3n   (floor of 3.333... — 1 heart truncated)
+totalYield  = 3n hearts
+```
+
+This is the expected bigint floor-division result. The fractional heart is lost.
+
+---
+
+### Vector C — three-day range, constant fields across all days
+
+| Field | Value |
+|---|---|
+| `stakeShares` | `500n` |
+| `dayPayoutTotal` (all 3 days) | `2000n` |
+| `dayStakeSharesTotal` (all 3 days) | `10000n` |
+| `dayUnclaimedSatoshisTotal` (all 3 days) | `0n` |
+| Day range | `[1000, 1002]` — 3 days |
+
+**Derivation:**
+
+```
+Per day: (500n × 2000n) / 10000n = 1000000n / 10000n = 100n hearts
+Day 1000: 100n
+Day 1001: 100n
+Day 1002: 100n
+totalYield = 300n hearts
+```
+
+---
+
+### Vector D — three-day range, varying fields, zero-payout day
+
+| Day | `dayPayoutTotal` | `dayStakeSharesTotal` | `dayUnclaimedSatoshisTotal` | `stakeShares` |
+|---|---|---|---|---|
+| 1000 | `5000n` | `1000n` | `0n` | `100n` |
+| 1001 | `8000n` | `2000n` | `75n` | `100n` |
+| 1002 | `0n` | `5000n` | `0n` | `100n` |
+
+**Derivation:**
+
+```
+Day 1000: (100n × 5000n) / 1000n = 500000n / 1000n  = 500n hearts
+Day 1001: (100n × 8000n) / 2000n = 800000n / 2000n  = 400n hearts
+Day 1002: (100n ×    0n) / 5000n =      0n / 5000n  =   0n hearts  (zero-payout day)
+totalYield = 500n + 400n + 0n = 900n hearts
+```
+
+Day 1001's `dayUnclaimedSatoshisTotal = 75n` is present in the packed uint256 entry (see §2) but is not used by the per-day yield formula.
+
+---
+
+### Vector E — sole staker (100% of shares on that day)
+
+| Field | Value |
+|---|---|
+| `stakeShares` | `5000n` |
+| `dayPayoutTotal` | `12000n` |
+| `dayStakeSharesTotal` | `5000n` — this staker owns all shares |
+| `dayUnclaimedSatoshisTotal` | `0n` |
+| Day range | `[1000, 1000]` — 1 day |
+
+**Derivation:**
+
+```
+(5000n × 12000n) / 5000n = 60000000n / 5000n = 12000n hearts
+totalYield = 12000n hearts  (full payout — no other stakers)
+```
+
+When `stakeShares === dayStakeSharesTotal`, the result equals `dayPayoutTotal` exactly (the multiply and divide cancel).
+
+---
+
+### Elapsed-days range computation reference
+
+| Parameter | Source | Description |
+|---|---|---|
+| `lockedDay` | `stakeLists()` read | First day of the stake's active period |
+| `stakedDays` | `stakeLists()` read | Committed stake duration in days |
+| `currentDay` | `currentDay()` read | Current HEX protocol day |
+| `rangeStartDay` | computed | `= lockedDay` |
+| `rangeEndDay` | computed | `= min(currentDay, lockedDay + stakedDays - 1)` |
+
+`lockedDay + stakedDays` is the first day *after* the stake's committed duration; subtracting one gives the last day within the active period. Days beyond `currentDay` have no `dailyDataRange` data yet and are excluded.
+
+**Example:** `lockedDay = 1000`, `stakedDays = 365`, `currentDay = 1200`
+
+```
+rangeEndDay = min(1200, 1000 + 365 - 1) = min(1200, 1364) = 1200
+elapsed days: [1000, 1200] — 201 days counted
+```
+
+---
+
+### TypeScript reference implementation
+
+These functions implement the formula for use in unit tests. They produce the expected outputs for Vectors A–E when called with the corresponding inputs.
+
+```typescript
+function perDayYieldHearts(
+  stakeShares: bigint,
+  dayPayoutTotal: bigint,
+  dayStakeSharesTotal: bigint,
+): bigint {
+  if (dayStakeSharesTotal === 0n) return 0n;
+  return (stakeShares * dayPayoutTotal) / dayStakeSharesTotal;
+}
+
+function totalYieldHearts(
+  stakeShares: bigint,
+  entries: Array<{ dayPayoutTotal: bigint; dayStakeSharesTotal: bigint }>,
+): bigint {
+  let total = 0n;
+  for (const entry of entries) {
+    total += perDayYieldHearts(stakeShares, entry.dayPayoutTotal, entry.dayStakeSharesTotal);
+  }
+  return total;
+}
