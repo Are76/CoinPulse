@@ -27,30 +27,25 @@ export type HexMiningYieldEstimateArgs = {
 // ─── Internal calculation boundary ───────────────────────────────────────────
 
 // Not exported — internal scaffold only. Never included in public result types.
-type YieldCalculationStatus =
-  | "calculation_not_implemented"
-  | "insufficient_formula_evidence";
+type YieldCalculationResult =
+  | { status: "estimated"; yieldHex: string }
+  | { status: "calculation_not_implemented" | "insufficient_formula_evidence" };
 
-type YieldCalculationResult = {
-  status: YieldCalculationStatus;
-};
-
-// Default calculation boundary.
-// Yield formula is documented in docs/hex-dailydata-packing-spec.md §3:
-//   per-day contribution ≈ (stakeShares / dayStakeSharesTotal) * dayPayoutTotal
-//   summed across elapsed active days: lockedDay to min(currentDay, lockedDay+stakedDays-1)
-// (refs: §11.4 yield status policy, §11.9 minimum provenance requirements)
-//
-// Not implemented because:
-//   no deterministic test vectors for the full yield formula exist in-repo
-// Returns calculation_not_implemented until this prerequisite is met.
+// Yield formula from docs/hex-dailydata-packing-spec.md §8.
+// Per-day: (stakeShares × dayPayoutTotal) / dayStakeSharesTotal (bigint floor; multiply-first).
+// dayStakeSharesTotal === 0n → 0n contribution (no active stakers; guard against divide-by-zero).
+// BPD (day 353) is not detected at this layer — entries carry no day numbers.
+// Test vectors A–E in §8 must pass before this function may be changed.
 function defaultApplyCalculation(
   entries: readonly DecodedDailyDataEntry[],
   args: HexMiningYieldEstimateArgs,
 ): YieldCalculationResult {
-  void entries;
-  void args;
-  return { status: "calculation_not_implemented" };
+  let total = 0n;
+  for (const entry of entries) {
+    if (entry.dayStakeSharesTotal === 0n) continue;
+    total += (args.stakeShares * entry.dayPayoutTotal) / entry.dayStakeSharesTotal;
+  }
+  return { status: "estimated", yieldHex: total.toString() };
 }
 
 // ─── Deps ─────────────────────────────────────────────────────────────────────
@@ -259,11 +254,26 @@ export async function estimateHexMiningYield(
   }
 
   // 8. Apply internal calculation boundary with decoded entries
-  // calculation_not_implemented → evidence_available: formula deferred, not an error
   const applyCalculation = deps.applyCalculation ?? defaultApplyCalculation;
-  void applyCalculation(packedResult.entries, args);
+  const calcResult = applyCalculation(packedResult.entries, args);
 
-  // 9. Evidence validated and decoded — yield formula deferred
+  // 9. Return yield estimate or evidence_available depending on calculation outcome
+  if (calcResult.status === "estimated") {
+    return {
+      status: "estimated",
+      schemaVersion: "v1",
+      yieldHex: calcResult.yieldHex,
+      provenance: {
+        chainId: args.chainId,
+        sourceFamily: "HEXMINING",
+        observationId: evidence.observationId,
+        rangeStartDay: evidence.rangeStartDay,
+        rangeEndDay: evidence.rangeEndDay,
+      },
+      warnings: evidence.warnings,
+    };
+  }
+
   return {
     status: "evidence_available",
     schemaVersion: "v1",
