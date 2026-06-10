@@ -1212,4 +1212,245 @@ describe("estimateHexMiningYield", () => {
       expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
     });
   });
+
+  // ─── §11.9 provenance and formula-input audit trail ───────────────────────
+  //
+  // Verifies that the estimator boundary carries enough provenance to audit
+  // which observed daily-data range was accepted for internal calculation,
+  // per §11.9 minimum requirements:
+  //   chainId, sourceFamily, observationId, rangeStartDay, rangeEndDay (from evidence)
+  //
+  // The accepted formula-input coverage interval [lockedDay, elapsedEndDay]
+  // is proved correct through boundary acceptance/rejection tests rather than
+  // a new public DTO field (§11.14 step 4 is where full wiring lives).
+
+  describe("§11.9 provenance and formula-input audit trail", () => {
+    // ── Test 1: all required provenance fields present in evidence_available ──
+
+    it("evidence_available result carries all required provenance fields", async () => {
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+      expect(result.provenance.chainId).toBe(369);
+      expect(result.provenance.sourceFamily).toBe("HEXMINING");
+      expect(result.provenance.observationId).toBe("obs-abc-123");
+      expect(result.provenance.rangeStartDay).toBe(1000);
+      expect(result.provenance.rangeEndDay).toBe(1199);
+    });
+
+    // ── Test 2: provenance reflects accepted evidence range, not args range ──
+
+    it("provenance rangeStartDay/rangeEndDay reflect accepted evidence range, not args", async () => {
+      // Evidence covers a wider window than the required elapsed interval.
+      // Provenance must carry the evidence's own range, not args.rangeStartDay/rangeEndDay.
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 999, rangeEndDay: 1250 }));
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.provenance.rangeStartDay).toBe(999);
+      expect(result.provenance.rangeEndDay).toBe(1250);
+    });
+
+    // ── Test 3: active stake — elapsedEndDay is currentDay - 1 ────────────
+
+    it("active stake: evidence at exact elapsedEndDay=currentDay-1 is accepted with correct provenance", async () => {
+      // lockedDay=1000, stakedDays=365, currentDay=1050
+      // elapsedEndDay = min(1049, 1364) = 1049  (bounded by currentDay - 1)
+      const args: HexMiningYieldEstimateArgs = {
+        ...BASE_ARGS,
+        lockedDay: 1000,
+        stakedDays: 365,
+        currentDay: 1050,
+        rangeStartDay: 1000,
+        rangeEndDay: 1049,
+      };
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1049 }));
+      const result = await estimateHexMiningYield(args, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+      expect(result.provenance.rangeStartDay).toBe(1000);
+      expect(result.provenance.rangeEndDay).toBe(1049);
+    });
+
+    it("active stake: evidence ending one day short of elapsedEndDay is rejected", async () => {
+      // lockedDay=1000, stakedDays=365, currentDay=1050
+      // elapsedEndDay=1049; evidence ends at 1048 → coverage gap
+      const args: HexMiningYieldEstimateArgs = {
+        ...BASE_ARGS,
+        lockedDay: 1000,
+        stakedDays: 365,
+        currentDay: 1050,
+        rangeStartDay: 1000,
+        rangeEndDay: 1049,
+      };
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1048 }));
+      const result = await estimateHexMiningYield(args, deps);
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-insufficient-elapsed-day-coverage");
+      expect(result.provenance.observationId).toBe("obs-abc-123");
+      expect(result.provenance.rangeStartDay).toBe(1000);
+      expect(result.provenance.rangeEndDay).toBe(1048);
+    });
+
+    // ── Test 4: completed stake — elapsedEndDay is lockedDay + stakedDays - 1
+
+    it("completed stake: evidence at exact elapsedEndDay=lockedDay+stakedDays-1 is accepted with correct provenance", async () => {
+      // lockedDay=1000, stakedDays=100, currentDay=2000
+      // elapsedEndDay = min(1999, 1099) = 1099  (bounded by stake term)
+      const args: HexMiningYieldEstimateArgs = {
+        ...BASE_ARGS,
+        lockedDay: 1000,
+        stakedDays: 100,
+        currentDay: 2000,
+        rangeStartDay: 1000,
+        rangeEndDay: 1099,
+      };
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1099 }));
+      const result = await estimateHexMiningYield(args, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+      expect(result.provenance.rangeStartDay).toBe(1000);
+      expect(result.provenance.rangeEndDay).toBe(1099);
+    });
+
+    it("completed stake: evidence ending one day short is rejected", async () => {
+      // lockedDay=1000, stakedDays=100, currentDay=2000
+      // elapsedEndDay=1099; evidence ends at 1098 → gap
+      const args: HexMiningYieldEstimateArgs = {
+        ...BASE_ARGS,
+        lockedDay: 1000,
+        stakedDays: 100,
+        currentDay: 2000,
+        rangeStartDay: 1000,
+        rangeEndDay: 1099,
+      };
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1098 }));
+      const result = await estimateHexMiningYield(args, deps);
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-insufficient-elapsed-day-coverage");
+      expect(result.provenance.observationId).toBe("obs-abc-123");
+      expect(result.provenance.rangeStartDay).toBe(1000);
+      expect(result.provenance.rangeEndDay).toBe(1098);
+    });
+
+    // ── Test 5: BPD warning (PR #226) preserves all provenance fields ─────
+
+    it("BPD warning does not alter provenance fields", async () => {
+      // lockedDay=300, stakedDays=200, currentDay=400
+      // elapsedEndDay = min(399, 499) = 399; range [300, 399] includes BPD day 353
+      const args: HexMiningYieldEstimateArgs = {
+        ...BASE_ARGS,
+        lockedDay: 300,
+        stakedDays: 200,
+        currentDay: 400,
+        rangeStartDay: 300,
+        rangeEndDay: 399,
+      };
+      const deps = makeDeps(
+        makeEvidence({ rangeStartDay: 300, rangeEndDay: 399, observationId: "obs-bpd-provenance" }),
+      );
+      const result = await estimateHexMiningYield(args, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
+      expect(result.provenance.chainId).toBe(369);
+      expect(result.provenance.sourceFamily).toBe("HEXMINING");
+      expect(result.provenance.observationId).toBe("obs-bpd-provenance");
+      expect(result.provenance.rangeStartDay).toBe(300);
+      expect(result.provenance.rangeEndDay).toBe(399);
+    });
+
+    // ── Test 6: coverage failure carries evidence provenance ──────────────
+
+    it("coverage failure result carries evidence observationId and range in provenance", async () => {
+      // Evidence starts at 1001 — misses lockedDay=1000 → insufficient_observations
+      const deps = makeDeps(
+        makeEvidence({ rangeStartDay: 1001, rangeEndDay: 1199, observationId: "obs-cov-fail" }),
+      );
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-insufficient-elapsed-day-coverage");
+      expect(result.provenance.chainId).toBe(369);
+      expect(result.provenance.sourceFamily).toBe("HEXMINING");
+      expect(result.provenance.observationId).toBe("obs-cov-fail");
+      expect(result.provenance.rangeStartDay).toBe(1001);
+      expect(result.provenance.rangeEndDay).toBe(1199);
+    });
+
+    // ── Test 7: coverage failure does not call applyCalculation ──────────
+
+    it("coverage failure does not call applyCalculation", async () => {
+      const applyCalculation: Mock = vi.fn();
+      const deps = {
+        ...makeDeps(makeEvidence({ rangeStartDay: 1001, rangeEndDay: 1199 })),
+        applyCalculation,
+      };
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(applyCalculation).not.toHaveBeenCalled();
+    });
+
+    // ── Test 8: no-elapsed-days carries evidence provenance ───────────────
+
+    it("no-elapsed-days result carries evidence observationId and range in provenance", async () => {
+      // currentDay=1000 == lockedDay=1000 → no elapsed days
+      const deps = makeDeps(
+        makeEvidence({ observationId: "obs-no-elapsed", rangeStartDay: 1000, rangeEndDay: 1199 }),
+      );
+      const result = await estimateHexMiningYield({ ...BASE_ARGS, currentDay: 1000 }, deps);
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-no-elapsed-days");
+      expect(result.provenance.chainId).toBe(369);
+      expect(result.provenance.sourceFamily).toBe("HEXMINING");
+      expect(result.provenance.observationId).toBe("obs-no-elapsed");
+      expect(result.provenance.rangeStartDay).toBe(1000);
+      expect(result.provenance.rangeEndDay).toBe(1199);
+    });
+
+    // ── Test 9: no-elapsed-days does not call applyCalculation ───────────
+
+    it("no-elapsed-days does not call applyCalculation", async () => {
+      const applyCalculation: Mock = vi.fn();
+      const deps = { ...makeDeps(), applyCalculation };
+      const result = await estimateHexMiningYield({ ...BASE_ARGS, currentDay: 1000 }, deps);
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(applyCalculation).not.toHaveBeenCalled();
+    });
+
+    // ── Test 10: no estimated status, no non-null yieldHex in any scenario ─
+
+    it("evidence_available, coverage failure, and no-elapsed-days never expose estimated or non-null yieldHex", async () => {
+      const evidenceAvailable = await estimateHexMiningYield(BASE_ARGS, makeDeps());
+      const coverageFailure = await estimateHexMiningYield(
+        BASE_ARGS,
+        makeDeps(makeEvidence({ rangeStartDay: 1001, rangeEndDay: 1199 })),
+      );
+      const noElapsedDays = await estimateHexMiningYield(
+        { ...BASE_ARGS, currentDay: 1000 },
+        makeDeps(),
+      );
+
+      expect(evidenceAvailable.status).not.toBe("estimated");
+      expect(evidenceAvailable.yieldHex).toBeNull();
+      expect(coverageFailure.status).not.toBe("estimated");
+      expect(coverageFailure.yieldHex).toBeNull();
+      expect(noElapsedDays.status).not.toBe("estimated");
+      expect(noElapsedDays.yieldHex).toBeNull();
+    });
+  });
 });
