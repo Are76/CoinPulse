@@ -1,8 +1,8 @@
 # V2 HexMining Roadmap
 
-**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208–#221 merged; yield formula implemented (§8 test vectors A–E pass); public estimated yield intentionally gated: `estimateHexMiningYield` always returns `evidence_available` with `yieldHex: null` for valid evidence; `"estimated"` path requires a separate future DTO/API contract approval — see §11.14; EES/penalty gate resolved (Finding A — penalties included in `dayPayoutTotal`) — see §11.15.
+**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208–#228 merged; yield formula implemented (§8 test vectors A–E pass); elapsed-days coverage rule enforced at estimator boundary (PR #225); BPD attribution gate active at estimator boundary (PR #226); §11.9 provenance audit trail verified (PR #227); reader/route gated wiring contract-tested (PR #228); public estimated yield intentionally gated: `estimateHexMiningYield` always returns `evidence_available` with `yieldHex: null` for valid evidence; `"estimated"` path requires a separate future DTO/API contract approval — see §11.14; EES/penalty gate resolved (Finding A — penalties included in `dayPayoutTotal`) — see §11.15.
 **Created:** 2026-06-06
-**Last updated:** 2026-06-10 (§11.15 EES/penalty gate resolved — Finding A confirmed from on-chain verified HEX.sol; see `docs/hexmining-penalty-distribution-research.md`)
+**Last updated:** 2026-06-10 (PRs #225–#228: elapsed-days coverage rule, BPD attribution gate, §11.9 provenance audit trail, reader/route gated wiring contract tests — see §11.14 for remaining gate-lift prerequisites)
 
 ## Phase completion status
 
@@ -14,7 +14,7 @@
 | Phase 3 | HexMining page shell / unsupported valuation display | ✅ Complete — merged PRs #192, #193 |
 | Phase 4A | Observation persistence, status API, and operator surface | ✅ Complete — merged PRs #199–#202 |
 | Phase 4B | dailyDataRange read boundary, persistence wiring, and gated operator route | ✅ Complete — merged PRs #204, #205, #206 |
-| Phase 4C | Yield estimation and DTO wiring | ⚠️ In progress — PRs #208–#221 merged; yield formula implemented (§8 test vectors A–E); public estimated yield intentionally gated at `evidence_available` — see §11.14 |
+| Phase 4C | Yield estimation and DTO wiring | ⚠️ In progress — PRs #208–#228 merged; yield formula implemented (§8 test vectors A–E); elapsed-days coverage rule enforced (PR #225); BPD attribution gate active at estimator boundary (PR #226); §11.9 provenance verified (PR #227); reader/route gate contract-tested (PR #228); public estimated yield intentionally gated at `evidence_available` — see §11.14 |
 | Phase 5 | Ended stake discovery | 🔲 Not started |
 | Phase 6 | HSI and HTT source families | 🔲 Not started |
 | Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
@@ -521,6 +521,13 @@ This section documents the decisions that must be resolved or explicitly framed 
 | #218 | `docs(hexmining): add yield formula test vectors to packing spec` | `docs/hex-dailydata-packing-spec.md §8` (new section) — deterministic yield formula specification: per-day formula `(stakeShares × dayPayoutTotal) / dayStakeSharesTotal` (bigint floor, multiply-first, zero-division guard); five test vectors A–E covering single-day, multi-day, zero-shares guard, overflow-resistant multiply-first order, and large stakeShares; `docs/v2-hexmining-roadmap.md §11.10 Step 3` updated with "Prerequisite resolved (PR #218)" |
 | #220 | `feat(hexmining): implement deterministic yield formula (§8 test vectors)` | `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated); `defaultApplyCalculation` implements §8 formula — `Σ (stakeShares × dayPayoutTotal) / dayStakeSharesTotal` (bigint floor, multiply-first, `dayStakeSharesTotal === 0n` skip guard); §8 test vectors A–E verified via injectable `applyCalculation` |
 | #221 | `feat(hexmining): Phase 4C — wire yield estimate into HexStakeDto` (scope-corrected) | `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated); **public output gated**: `estimateHexMiningYield` always returns `evidence_available` with `yieldHex: null` for valid evidence; `applyCalculation` runs at step 8 (internal pipeline proof) but its return value is not used in public output; `"estimated"` and non-null `yieldHex` require a separate future DTO/API contract approval PR — see §11.14 |
+| #222 | `docs(hexmining): record Phase 4C yield-estimation gating decision` | `docs/v2-hexmining-roadmap.md` only; document header and Phase completion table updated; §11.1 extended with PRs #212–#221; §11.10 Step 3 updated with full PR delivery table; §11.14 added — gating decision record (decision, internal behavior, gate rationale, gate-lift prerequisites, review comment policy, internal evidence vs. public DTO distinction); §12 updated |
+| #223 | `docs(hexmining): add EES penalty-distribution verification gate before public estimated yield` | `docs/v2-hexmining-roadmap.md` (updated), `docs/hex-dailydata-packing-spec.md` (updated); §11.14 updated with 7th prerequisite (EES verification); §11.15 added — full penalty-distribution verification gate; §12 updated; packing spec §8 "What is NOT included" updated with EES open question |
+| #224 | `docs(hexmining): resolve EES penalty-distribution gate — Finding A confirmed from on-chain source` | `docs/hexmining-penalty-distribution-research.md` (new), `docs/v2-hexmining-roadmap.md` (updated), `docs/hex-dailydata-packing-spec.md` (updated); §11.14 item 7 marked RESOLVED; §11.15 status changed to RESOLVED (Finding A) with full resolution evidence, caveats, EES clarification, and scenario coverage; packing spec §8 EES entry resolved |
+| #225 | `test(hexmining): add elapsed-days coverage rule to yield-estimator boundary` | `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated); step 5.5 elapsed-days coverage enforced: `elapsedEndDay = min(currentDay − 1, lockedDay + stakedDays − 1)`; `currentDay ≤ lockedDay` guard returns `insufficient_observations` with `hexmining-yield-no-elapsed-days`; evidence range gap returns `insufficient_observations` with `hexmining-yield-insufficient-elapsed-day-coverage`; public output remains `evidence_available` with `yieldHex: null` |
+| #226 | `test(hexmining): add BPD attribution gate to yield-estimator boundary` | `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated); step 8.5 BPD attribution gate added: elapsed range including HEX protocol day 353 appends `hexmining-yield-bpd-attribution-unresolved` to result warnings; `const HEX_BPD_DAY = 353` constant added; public output remains `evidence_available` with `yieldHex: null` |
+| #227 | `test(hexmining): verify §11.9 provenance and formula-input audit trail` | `tests/services/hexmining/yield-estimator.test.ts` (updated, test-only); 12 new tests in "§11.9 provenance and formula-input audit trail" describe block verify all five §11.9 minimum provenance fields (`chainId`, `sourceFamily`, `observationId`, `rangeStartDay`, `rangeEndDay`) already present in `HexMiningYieldEstimateProvenance`; no source changes required |
+| #228 | `test(hexmining): reader/route gated wiring contract tests` | `tests/services/hexmining/reader.test.ts` (updated), `tests/api/hexmining-stakes-route-contract.test.ts` (updated); test-only; 5 new reader tests (BPD-era, overdue, unknown-day, multi-stake, serialized regression) and 4 new route contract tests (multi-stake, BPD warning pass-through, serialized regression, error-path no yield fields) verify gate preserved at reader and route layers; public output remains `evidence_available` / `yieldHex: null` |
 
 Post-merge audit (2026-06-08, after PR #202): all 1354 tests pass, lint clean, typecheck clean, build clean, no guardrail violations.
 
@@ -531,6 +538,8 @@ Post-merge audit (2026-06-09, after PR #210): tests pass, lint clean, typecheck 
 Post-merge audit (2026-06-09, after PR #211): docs-only; lint clean, typecheck clean. Bit layout still unverified at this audit point (blocker record added, evidence PR pending).
 
 Post-merge audit (2026-06-10, after PR #221): 1539 tests pass, lint clean, typecheck clean, build clean, no guardrail violations. Phase 4C formula implementation merged and gated — `estimateHexMiningYield` runs `applyCalculation` internally but public output is `evidence_available` (see §11.14).
+
+Post-merge audit (2026-06-10, after PR #228): 1586 tests pass, lint clean, typecheck clean, no guardrail violations. Phase 4C internal pipeline complete and gate-preserved at estimator, reader, and route layers — elapsed-days coverage (PR #225), BPD attribution gate (PR #226), provenance audit trail (PR #227), reader/route gate wiring tested (PR #228). See §11.14 for remaining gate-lift prerequisites.
 
 ---
 
@@ -833,13 +842,14 @@ Phase 4C formula pipeline is complete and merged. The following PRs have landed:
 | #218 | §8 yield formula test vectors documented in `docs/hex-dailydata-packing-spec.md` |
 | #220 | `defaultApplyCalculation` implements §8 formula — `Σ (stakeShares × dayPayoutTotal) / dayStakeSharesTotal`; §8 vectors A–E verified |
 | #221 | **public output gated** — `applyCalculation` runs internally at step 8 (pipeline proof) but result is not used in public output; public function always returns `evidence_available` with `yieldHex: null` |
+| #225 | **elapsed-days coverage rule** — step 5.5 added: `elapsedEndDay = min(currentDay − 1, lockedDay + stakedDays − 1)`; `currentDay ≤ lockedDay` → `insufficient_observations` (`hexmining-yield-no-elapsed-days`); evidence range gap check → `insufficient_observations` (`hexmining-yield-insufficient-elapsed-day-coverage`); public output unchanged |
+| #226 | **BPD attribution gate** — step 8.5 added: `const HEX_BPD_DAY = 353`; elapsed range includes day 353 → `hexmining-yield-bpd-attribution-unresolved` appended to warnings; gate is additive (no change to `evidence_available` status or `yieldHex: null`) |
+| #227 | **§11.9 provenance audit trail** — test-only; 12 tests verified all five §11.9 minimum provenance fields already present in `HexMiningYieldEstimateProvenance`; no source changes required |
+| #228 | **reader/route gated wiring contract tests** — test-only; 5 reader tests + 4 route contract tests verify gate preserved at reader layer (BPD-era, overdue, unknown-day, multi-stake, serialized regression) and route layer (multi-stake, BPD warning pass-through, serialized regression, error path) |
 
-**Current public behavior (after PR #221):** `estimateHexMiningYield` calls `applyCalculation(packedResult.entries, args)` internally at step 8 (the calculation runs and is proven via injectable dep in tests), then always returns `status: "evidence_available"`, `yieldHex: null` at step 9. The `"estimated"` and non-null `yieldHex` paths exist in the `HexMiningYieldEstimateResult` type for forward compatibility but are not currently returned by the function. See §11.14 for the gating decision record.
+**Current public behavior (after PR #228):** `estimateHexMiningYield` runs the §8 formula internally at step 8 (proven via injectable `applyCalculation` dep in tests), enforces elapsed-days coverage at step 5.5, appends BPD attribution warning at step 8.5 when applicable, and always returns `status: "evidence_available"`, `yieldHex: null` at step 9. The reader (`reader.ts`) hardcodes `yield: { status: "unsupported", ... }` and has no connection to `estimateHexMiningYield`. The route passes reader output through unchanged. The `"estimated"` and non-null `yieldHex` paths exist in the `HexMiningYieldEstimateResult` type for forward compatibility but are not returned publicly. See §11.14 for the gating decision record.
 
-**Remaining scope (Step 3 work not yet implemented):**
-- Elapsed-days-only coverage rule (range check against stake's `lockedDay` through `min(currentDay, lockedDay + stakedDays - 1)`).
-- Big Pay Day modelling with `bpdYieldStatus` / `bpdYieldHex` per §11.4 invariant #5.
-- These items are not blocked — they are deferred to a future PR that also lifts the public output gate (Step 4 or a Step 3 continuation PR with explicit DTO/API contract approval).
+**Remaining Step 3 scope:** All internal estimator-boundary gates — elapsed-days coverage rule, BPD attribution gate, §11.9 provenance audit trail, and reader/route gate-preservation contract tests — are now satisfied. The remaining work is Step 4: wiring estimated yield into `HexStakeDto` and the API route, satisfying gate-lift prerequisites 4–6 and 8–11 in §11.14.
 
 **Step 4 — Yield DTO wiring and API route update PR**
 `feat(hexmining): wire estimated yield fields into HexStakeDto and API route`
@@ -1185,21 +1195,26 @@ The following files must remain at their `origin/main` state (as of PR #221) unt
 | `src/services/hexmining/reader.ts` | `yield: { status: "unsupported", ... }` hardcoded; no `fetchYieldEvidence` dep |
 | `app/api/hexmining/stakes/route.ts` | No yield evidence fetch; calls `readNativeHexStakes` without yield wiring |
 | `src/services/hexmining/observation-evidence-provider.ts` | No `EvidenceWithCanonicalPayload` export; no `getObservationEvidenceWithPayloadForRange` |
-| `tests/services/hexmining/reader.test.ts` | 15 original tests only; no yield wiring tests |
+| `tests/services/hexmining/reader.test.ts` | Gate-preservation tests only — PR #228 added 5 new tests (yield gate describe block) verifying yield remains `"unsupported"` at reader layer; no yield wiring or estimated-yield assertions |
+| `tests/api/hexmining-stakes-route-contract.test.ts` | Gate-preservation tests only — PR #228 added 4 new tests verifying yield remains `"unsupported"` in route response; no estimated-yield DTO assertions |
 
 #### How to lift the gate
 
 A future PR may promote `"estimated"` into the public output **only** when all of the following are satisfied in that same PR:
 
-1. Elapsed-days-only coverage rule is enforced (`rangeStartDay = lockedDay`, `rangeEndDay = min(currentDay, lockedDay + stakedDays - 1)`).
-2. BPD attribution is modelled (`bpdYieldStatus`, `bpdYieldHex` per §11.4 invariant #5).
-3. All §11.9 provenance fields are populated.
-4. `HexStakeDto.yield` field assembly in `reader.ts` is updated.
-5. `GET /api/hexmining/stakes` route is updated.
-6. Contract tests cover the full estimated-yield DTO path.
+1. **Elapsed-days-only coverage rule** — ✅ **RESOLVED (PR #225).** `elapsedEndDay = min(currentDay − 1, lockedDay + stakedDays − 1)` enforced at step 5.5 of `estimateHexMiningYield`. `currentDay ≤ lockedDay` returns `insufficient_observations`; evidence range gap returns `insufficient_observations`.
+2. **BPD attribution gate** — ✅ **RESOLVED at estimator boundary (PR #226).** Step 8.5 appends `hexmining-yield-bpd-attribution-unresolved` warning when the elapsed range includes protocol day 353. Full `bpdYieldHex`/`bpdYieldStatus` field assembly in the public reader/route DTO is a remaining gate-lift requirement (see items 4–6 below).
+3. **§11.9 provenance fields** — ✅ **RESOLVED (PR #227).** Test-only PR verified all five minimum provenance fields (`chainId`, `sourceFamily`, `observationId`, `rangeStartDay`, `rangeEndDay`) are already present in `HexMiningYieldEstimateProvenance`. No source changes were required.
+4. `HexStakeDto.yield` field assembly in `reader.ts` is updated — including `bpdYieldHex`, `bpdYieldStatus`, and `estimatedYieldHex` wiring from `estimateHexMiningYield`.
+5. `GET /api/hexmining/stakes` route wires the `fetchEvidence` dep.
+6. Contract tests cover the full estimated-yield DTO path (non-null `estimatedYieldHex`, BPD field correlation, provenance completeness in assembled `HexStakeDto`).
 7. **HEX end-stake and EES penalty distribution behavior is verified** — ✅ **RESOLVED** (see §11.15 and `docs/hexmining-penalty-distribution-research.md`). Penalties from end-stake/EES are already included in `dayPayoutTotal` (50% of gross penalty, landing on a subsequent day). No separate modeling required.
+8. **Final public DTO/API shape approval for estimated yield** — the `HexStakeYieldDto` with `status: "estimated"` must be explicitly approved in the gate-lift PR. Current type definitions carry `"estimated"` as a valid union member but have not been approved for public API use.
+9. **Explicit contract tests for the public estimated-yield DTO path** — covering non-null `estimatedYieldHex`, BPD field correlation (`bpdYieldStatus: "applicable"` → non-null `bpdYieldHex`), and provenance completeness in the assembled `HexStakeDto`. PR #228 adds gate-preservation tests only; estimated-yield DTO contract tests require the gate to be lifted first.
+10. **Live-data fixture or opt-in integration verification** — confirms the formula produces plausible results against a known historical day range on PulseChain (chain ID 369) before the gate is lifted.
+11. **Final docs record approving the gate lift** — this roadmap must be updated with a gate-lifted record and gate-lift PR reference when the gate-lift PR is merged.
 
-These are Step 4 requirements (§11.10). No partial lift is permitted: the gate must remain in place until all seven conditions are met in a single approved PR. Item 7 is now resolved; items 1–6 remain open.
+These are Step 4 requirements (§11.10). No partial lift is permitted: the gate must remain in place until all eleven conditions are met in a single approved PR. Items 1, 3, 7 are resolved; item 2 is resolved at the estimator boundary; items 4–6, 8–11 remain open.
 
 #### On "do not discard the calculation result" review comments
 
@@ -1326,26 +1341,30 @@ This gate was resolved in PR #224 (`docs/hexmining-verify-penalty-distribution-a
 
 **Phase 4B is complete.** PRs #204, #205, and #206 delivered the full read boundary, persistence wiring, and gated operator route.
 
-**Phase 4C formula pipeline is complete and gated.** PRs #208–#221 have delivered the full yield estimation pipeline internally. The formula runs and is verified. The public output is intentionally gated at `evidence_available` — see §11.14.
+**Phase 4C internal pipeline is complete and gated.** PRs #208–#228 have delivered the full yield estimation pipeline, gate-preservation tests, and verification of all estimator-boundary gates. The formula runs internally and is verified. The public output is intentionally gated at `evidence_available` — see §11.14.
 
-**Immediate next step: EES penalty-distribution verification (§11.15) or Step 3 continuation / Step 4 — yield DTO wiring**
+**Gate-lift prerequisites now satisfied (see §11.14):**
 
-The gate-lift PR (exposing public `status: "estimated"`) must satisfy **all** of the following prerequisites. Two are new additions after PR #222:
+- ✅ Item 1 — Elapsed-days coverage rule enforced at estimator boundary (PR #225)
+- ✅ Item 2 — BPD attribution gate active at estimator boundary (PR #226); full bpdYieldHex/bpdYieldStatus in reader/route DTO still required for gate lift
+- ✅ Item 3 — §11.9 provenance fields verified present in estimator output (PR #227)
+- ✅ Item 7 — EES/penalty distribution verified (PR #224 — Finding A)
+
+**Immediate next step: Step 4 gate-lift PR**
+
+The gate-lift PR (exposing public `status: "estimated"`) must satisfy **all** remaining prerequisites — see §11.14 items 4–6, 8–11:
 
 ```text
 feat(hexmining): wire estimated yield fields into HexStakeDto and API route
 ```
 
-- **[NEW — §11.15]** EES/end-stake penalty distribution behavior verified: the PR must document whether `dayPayoutTotal` includes penalty redistribution or not, with cited evidence.
-- Elapsed-days-only coverage rule: compute `rangeStartDay = lockedDay`, `rangeEndDay = min(currentDay, lockedDay + stakedDays - 1)`.
-- BPD day-353 range check: set `bpdYieldStatus: "applicable" | "not_applicable"` and `bpdYieldHex` per §11.4 invariant #5.
-- All §11.9 provenance fields populated before `yield.status: "estimated"` is returned.
-- Update `HexStakeDto` yield field assembly in `reader.ts` to call `estimateHexMiningYield` and map result.
-- Update `GET /api/hexmining/stakes` route to wire `fetchEvidence` dep.
-- Contract tests for the full DTO including estimated yield fields.
+- Update `HexStakeDto.yield` field assembly in `reader.ts` to call `estimateHexMiningYield` and map result (including `bpdYieldHex`, `bpdYieldStatus`, and `estimatedYieldHex`).
+- Wire `fetchEvidence` dep into `GET /api/hexmining/stakes` route.
+- Contract tests for the full DTO including estimated yield fields (non-null `estimatedYieldHex`, BPD field correlation, provenance completeness).
+- Final public DTO/API shape approval for `HexStakeYieldDto` with `status: "estimated"`.
+- Live-data fixture or opt-in integration verification against a known historical day range on PulseChain.
+- Final docs record approving the gate lift (this document updated with gate-lifted record and PR reference).
 - `valuation.status` and `pnl.status` remain `"unsupported"` — unchanged.
-
-The EES verification is now resolved — see §11.15 and `docs/hexmining-penalty-distribution-research.md`. Gate-lift item 7 is satisfied.
 
 **What must NOT happen without a gate-lift PR:**
 - No direct change to steps 8–9 of `estimateHexMiningYield` to return `"estimated"` without all prerequisites above.
@@ -1420,8 +1439,29 @@ See §11.14 for the full gate-lift prerequisite list. See §11.15 for the EES pe
 - `npm run lint` — passed, no ESLint errors.
 - `npm run typecheck` — passed, no type errors.
 
-**This PR (docs/hexmining-verify-penalty-distribution-accounting — docs only):**
+**PR #224 (docs/hexmining-verify-penalty-distribution-accounting — docs only):**
 - `git diff --name-only` — `docs/v2-hexmining-roadmap.md`, `docs/hex-dailydata-packing-spec.md`, `docs/hexmining-penalty-distribution-research.md` only.
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
+
+**PR #225 (test/hexmining-elapsed-days-coverage-rule):**
+- `npm run test` — all tests passed. Elapsed-days coverage tests verified.
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
+
+**PR #226 (test/hexmining-bpd-attribution-gate):**
+- `npm run test` — 74 tests in yield-estimator.test.ts; all passed. BPD attribution gate tests (12 new) verified.
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
+
+**PR #227 (test/hexmining-yield-provenance-audit-trail — test only):**
+- `npm run test` — 86 tests in yield-estimator.test.ts; all passed. §11.9 provenance audit trail tests (12 new) verified.
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
+
+**PR #228 (test/hexmining-yield-reader-route-gated-wiring — test only):**
+- `git diff --name-only` — `tests/services/hexmining/reader.test.ts`, `tests/api/hexmining-stakes-route-contract.test.ts` only.
+- `npm run test` — 1586 tests, all passed (38 in targeted reader+route contract files; 1586 overall).
 - `npm run lint` — passed, no ESLint errors.
 - `npm run typecheck` — passed, no type errors.
 
@@ -1556,9 +1596,39 @@ See §11.14 for the full gate-lift prerequisite list. See §11.15 for the EES pe
 - **What changed:** §11.14 updated with 7th prerequisite (EES verification); §11.15 added — full penalty-distribution verification gate (open question, stake scenarios, gate rationale, resolution path); §12 updated; `docs/hex-dailydata-packing-spec.md §8` "What is NOT included" updated with EES open question.
 - **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
 
-**This PR (docs/hexmining-verify-penalty-distribution-accounting):**
+**PR #224 (docs/hexmining-verify-penalty-distribution-accounting) — merged:**
 - **Branch:** `docs/hexmining-verify-penalty-distribution-accounting`
 - **Changed files:** `docs/hexmining-penalty-distribution-research.md` (new), `docs/v2-hexmining-roadmap.md` (updated), `docs/hex-dailydata-packing-spec.md` (updated)
 - **What changed:** `docs/hexmining-penalty-distribution-research.md` — full research record: on-chain verified HEX.sol source (Blockscout chain 1); verbatim `_splitPenaltyProceeds`, `_dailyRoundCalc`, `_dailyRoundCalcAndStore` code; complete function trace; scenario coverage for all five required scenarios; Finding A confirmed; two accounting caveats documented; §8 formula implication. `docs/v2-hexmining-roadmap.md` — document header updated; §11.14 item 7 marked RESOLVED; §11.15 status changed to RESOLVED (Finding A) with full resolution evidence, caveats, EES clarification, scenario coverage, and resolution evidence record. `docs/hex-dailydata-packing-spec.md §8` — EES entry updated from open question to resolved (Finding A) with reference to research file.
 - **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
-- **Recommendation: MERGE**
+
+**PR #225 (test/hexmining-elapsed-days-coverage-rule) — merged:**
+- **Branch:** `test/hexmining-elapsed-days-coverage-rule`
+- **Changed files:** `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated)
+- **What changed:** Step 5.5 elapsed-days coverage enforced: `elapsedEndDay = min(currentDay − 1, lockedDay + stakedDays − 1)`; `currentDay ≤ lockedDay` guard returns `insufficient_observations` with `hexmining-yield-no-elapsed-days`; evidence range gap (`rangeStartDay > lockedDay` or `rangeEndDay < elapsedEndDay`) returns `insufficient_observations` with `hexmining-yield-insufficient-elapsed-day-coverage`; public output remains `evidence_available` with `yieldHex: null`. Tests cover both guard conditions and the nominal pass-through path.
+- **PR status:** SOURCE + TEST — `yield-estimator.ts` and `yield-estimator.test.ts` only; no reader, route, schema, or frontend changes.
+
+**PR #226 (test/hexmining-bpd-attribution-gate) — merged:**
+- **Branch:** `test/hexmining-bpd-attribution-gate`
+- **Changed files:** `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated)
+- **What changed:** Step 8.5 BPD attribution gate: `const HEX_BPD_DAY = 353` added; elapsed range including day 353 appends `hexmining-yield-bpd-attribution-unresolved` to result warnings; 12 new BPD attribution tests (range includes 353, excludes 353, boundary at 353, multi-day range, etc.); public output remains `evidence_available` with `yieldHex: null`. Gate satisfies §11.14 item 2 at estimator boundary; full `bpdYieldHex`/`bpdYieldStatus` reader/route assembly deferred to gate-lift PR.
+- **PR status:** SOURCE + TEST — `yield-estimator.ts` and `yield-estimator.test.ts` only; no reader, route, schema, or frontend changes.
+
+**PR #227 (test/hexmining-yield-provenance-audit-trail) — merged:**
+- **Branch:** `test/hexmining-yield-provenance-audit-trail`
+- **Changed files:** `tests/services/hexmining/yield-estimator.test.ts` only (test-only)
+- **What changed:** 12 new §11.9 provenance audit trail tests verify all five minimum provenance fields (`chainId`, `sourceFamily`, `observationId`, `rangeStartDay`, `rangeEndDay`) are present in `HexMiningYieldEstimateProvenance` across all result paths (estimated, evidence_available, invalid, insufficient, unavailable). No source changes required — existing provenance shape already satisfies §11.9 requirements.
+- **PR status:** TEST-ONLY — no source, schema, or config files changed.
+
+**PR #228 (test/hexmining-yield-reader-route-gated-wiring) — merged:**
+- **Branch:** `test/hexmining-yield-reader-route-gated-wiring`
+- **Changed files:** `tests/services/hexmining/reader.test.ts` (updated), `tests/api/hexmining-stakes-route-contract.test.ts` (updated)
+- **What changed:** 5 new reader tests in "yield gate — reader output never exposes estimated yield" describe block: BPD-era stake, overdue stake, currentDay-unavailable (stakeStatus unknown), multi-stake list, serialized regression. 4 new route contract tests: multi-stake yield gate, BPD attribution warning pass-through without yield computation, serialized regression, error-path no yield fields. All tests verify gate preserved at reader and route layers. No source files changed. Public output remains `evidence_available` / `yieldHex: null`.
+- **PR status:** TEST-ONLY — no source, schema, or config files changed.
+
+**This PR (docs/hexmining-yield-gate-status-after-228):**
+- **Branch:** `docs/hexmining-yield-gate-status-after-228`
+- **Changed files:** `docs/v2-hexmining-roadmap.md` only
+- **What changed:** Document header and Phase completion table updated for PRs #225–#228; §11.1 extended with PR entries for #222–#228 and post-merge audit (1586 tests); §11.10 Step 3 delivery table extended with #225–#228 entries; "Remaining scope" updated to reflect all estimator-boundary gates complete; §11.14 gate-lift prerequisites updated — items 1, 3 marked RESOLVED, item 2 marked RESOLVED at estimator boundary; items 8–11 added as new open gates; "Files that must NOT be changed" updated for reader/route test additions in PR #228; §12 updated with satisfied prerequisites and Step 4 gate-lift PR spec; Validation Notes and Final Status extended.
+- **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
+- **Public estimated yield exposed:** NO — `evidence_available` / `yieldHex: null` gate remains in place.
