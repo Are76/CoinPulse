@@ -1,8 +1,8 @@
 # V2 HexMining Roadmap
 
-**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208–#228 merged; yield formula implemented (§8 test vectors A–E pass); elapsed-days coverage rule enforced at estimator boundary (PR #225); BPD attribution gate active at estimator boundary (PR #226); §11.9 provenance audit trail verified (PR #227); reader/route gated wiring contract-tested (PR #228); public estimated yield intentionally gated: `estimateHexMiningYield` always returns `evidence_available` with `yieldHex: null` for valid evidence; `"estimated"` path requires a separate future DTO/API contract approval — see §11.14; EES/penalty gate resolved (Finding A — penalties included in `dayPayoutTotal`) — see §11.15.
+**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208–#228 merged; yield formula implemented (§8 test vectors A–E pass); elapsed-days coverage rule enforced at estimator boundary (PR #225); BPD attribution gate active at estimator boundary (PR #226); §11.9 provenance audit trail verified (PR #227); reader/route gated wiring contract-tested (PR #228); public estimated yield intentionally gated: `estimateHexMiningYield` always returns `evidence_available` with `yieldHex: null` for valid evidence; `"estimated"` path requires a separate future DTO/API contract approval — see §11.14; EES/penalty gate resolved (Finding A — penalties included in `dayPayoutTotal`) — see §11.15; proposed public `HexStakeYieldDto` contract documented in §11.16 (PROPOSED, not approved).
 **Created:** 2026-06-06
-**Last updated:** 2026-06-10 (PRs #225–#228: elapsed-days coverage rule, BPD attribution gate, §11.9 provenance audit trail, reader/route gated wiring contract tests — see §11.14 for remaining gate-lift prerequisites)
+**Last updated:** 2026-06-10 (PR #229: gate-status record after PRs #225–#228; PR docs/hexmining-estimated-yield-dto-contract: §11.16 proposed DTO contract — see §11.14 for remaining gate-lift prerequisites and §11.16 for open approval questions OQ-1–OQ-6)
 
 ## Phase completion status
 
@@ -1337,6 +1337,187 @@ This gate was resolved in PR #224 (`docs/hexmining-verify-penalty-distribution-a
 
 ---
 
+### 11.16 Proposed public HexStakeYieldDto contract
+
+**Status: PROPOSED — not approved, not implemented, not merged into any reader or route.** See §11.14 for the gate-lift prerequisites that must be satisfied before this contract can be implemented. See §11.14 open questions OQ-1 through OQ-6 for the explicit approvals required.
+
+---
+
+#### TypeScript shape (proposed)
+
+```typescript
+// Discriminated union on `status`
+export type HexStakeYieldDto =
+  | UnsupportedYieldDto
+  | UnavailableYieldDto
+  | EstimatedYieldDto;
+
+export interface UnsupportedYieldDto {
+  status: "unsupported";
+  estimatedYieldHex: null;
+  bpdYieldStatus: null;
+  bpdYieldHex: null;
+  provenance: null;
+  warnings: string[];
+}
+
+export interface UnavailableYieldDto {
+  status: "unavailable";
+  estimatedYieldHex: null;
+  bpdYieldStatus: "applicable" | "not_applicable" | "unknown";
+  bpdYieldHex: null;
+  provenance: HexStakeYieldProvenance | null;
+  warnings: string[];
+}
+
+export interface EstimatedYieldDto {
+  status: "estimated";
+  estimatedYieldHex: string;             // bigint decimal string, unit: hearts
+  bpdYieldStatus: "applicable" | "not_applicable" | "unknown";
+  bpdYieldHex: string | null;            // bigint decimal string, unit: hearts; non-null only when bpdYieldStatus: "applicable"
+  provenance: HexStakeYieldProvenance;   // required when estimated
+  warnings: string[];
+}
+
+export interface HexStakeYieldProvenance {
+  chainId: number;       // always 369 (PulseChain)
+  sourceFamily: string;  // always "hexmining-dailydata"
+  observationId: string; // UUID of the HexMiningObservation record used
+  rangeStartDay: number; // inclusive start of observation day range
+  rangeEndDay: number;   // inclusive end of observation day range (= elapsedEndDay)
+}
+```
+
+---
+
+#### Field-by-field contract
+
+**`status`** (discriminant)
+
+| Value | Public-facing | Description |
+|---|---|---|
+| `"unsupported"` | Yes | Current state — no yield estimation attempted (chain not supported, or gate not lifted) |
+| `"unavailable"` | Yes | Yield estimation attempted but evidence fetch failed, or insufficient observations |
+| `"estimated"` | Yes | Yield estimated from on-chain dailyData observations — gate-lift target |
+| `"exact"` | Yes | Reserved for Phase 5+ (finalized stake yield from on-chain receipt) — not in scope for Phase 4C |
+
+**Internal estimator statuses — must never appear in any public DTO, API response, or frontend-visible state:**
+
+| Internal status | Maps to public status | Notes |
+|---|---|---|
+| `"evidence_available"` | `"unavailable"` (see OQ-2) | Formula ran internally but gate is active; reader maps this to `"unavailable"` |
+| `"insufficient_observations"` | `"unavailable"` | Evidence range does not cover the elapsed period |
+| `"invalid_observation"` | `"unavailable"` | Payload decode failure |
+
+> `"evidence_available"` is an internal estimator boundary marker. It must NEVER appear in any public DTO or API response.
+
+---
+
+**`estimatedYieldHex`** (string | null)
+
+- Non-null only when `status: "estimated"`; null in all other variants
+- Unit: hearts (HEX smallest denomination; 1 HEX = 10^8 hearts)
+- Format: bigint decimal string (no decimals, no exponent notation, no currency symbol)
+- Value: cumulative yield accumulated from `lockedDay` through `elapsedEndDay = min(currentDay − 1, lockedDay + stakedDays − 1)`
+- Does NOT include BPD attribution yield — that is modeled separately in `bpdYieldHex`
+- See OQ-1 for unit/format approval
+
+---
+
+**`bpdYieldStatus`** (`"applicable"` | `"not_applicable"` | `"unknown"` | null)
+
+- Null only when `status: "unsupported"`; present in all other variants
+- `"applicable"`: stake was active on HEX BPD (day 353); BPD yield attribution is modeled in `bpdYieldHex`
+- `"not_applicable"`: stake was not active on day 353 (`lockedDay > 353` or `lockedDay + stakedDays ≤ 353`)
+- `"unknown"`: elapsed range includes day 353 but BPD attribution modeling is incomplete; `hexmining-yield-bpd-attribution-unresolved` warning is present; `bpdYieldHex` is null
+
+---
+
+**`bpdYieldHex`** (string | null)
+
+- Non-null ONLY when `bpdYieldStatus: "applicable"` AND `status: "estimated"`; null in all other cases
+- Unit: hearts (same as `estimatedYieldHex`); format: bigint decimal string
+- Represents additional yield attributed to BPD day 353, computed separately from the general per-day formula
+- When `bpdYieldStatus: "unknown"`: `bpdYieldHex` is null; general yield estimate may still be populated
+- Total yield for BPD-era stakes = `estimatedYieldHex + bpdYieldHex` (when both non-null)
+- Assembly of `bpdYieldHex` in reader.ts is deferred to the gate-lift PR (see §11.14 item 2)
+- See OQ-3 for null-vs-omitted approval
+
+---
+
+**`provenance`** (HexStakeYieldProvenance | null)
+
+- Non-null when `status: "estimated"`; present (or null) when `status: "unavailable"` if evidence was fetched; null when `status: "unsupported"`
+- Fields:
+  - `chainId`: always 369 — PulseChain only; this contract does not extend to other chains
+  - `sourceFamily`: always `"hexmining-dailydata"` — identifies the observation family
+  - `observationId`: UUID of the `HexMiningObservation` record; enables audit trail to raw persisted evidence
+  - `rangeStartDay`: inclusive start day of the observation range used
+  - `rangeEndDay`: inclusive end day of the observation range used — equals `elapsedEndDay`
+- Field names match the internal `HexMiningYieldEstimateProvenance` type; see OQ-4 for naming alignment approval
+
+---
+
+**`warnings`** (string[])
+
+- Always present (empty array when no warnings); never null or omitted
+- Pass-through from `HexMiningYieldEstimateResult.warnings` at reader boundary
+- Known public warning codes:
+  - `"hexmining-yield-bpd-attribution-unresolved"`: elapsed range includes day 353; BPD yield not yet modeled
+  - `"hexmining-yield-no-elapsed-days"`: `currentDay ≤ lockedDay`; no elapsed days to estimate
+  - `"hexmining-yield-insufficient-elapsed-day-coverage"`: observation range does not cover full elapsed period
+- Future internal-only warning codes added to the estimator must be explicitly filtered at the reader boundary if not intended for public consumption
+- See OQ-5 for pass-through policy approval
+
+---
+
+#### BPD attribution interaction with estimated yield
+
+BPD (Big Pay Day, HEX protocol day 353) yield is modeled separately from the general per-day yield formula (§8):
+
+- `estimatedYieldHex` = `Σ (stakeShares × dayPayoutTotal) / dayStakeSharesTotal` over `[rangeStartDay, elapsedEndDay]` (bigint floor, multiply-first) — the general formula includes day 353's `dayPayoutTotal` but does NOT separately attribute the BPD bonus
+- `bpdYieldHex` = the isolated BPD attribution bonus; computed separately via a mechanism deferred to the gate-lift PR
+- When both fields are non-null, total yield = `estimatedYieldHex + bpdYieldHex`
+
+When `bpdYieldStatus: "unknown"`, `bpdYieldHex` is null and `hexmining-yield-bpd-attribution-unresolved` signals to callers that the estimate is incomplete for this stake's BPD entitlement.
+
+---
+
+#### Open approval questions
+
+These questions must be explicitly resolved before implementation begins. Do NOT implement this contract until all six are answered.
+
+**OQ-1: `estimatedYieldHex` unit and format**
+Proposed: hearts as bigint decimal string (consistent with other token balance serialization in this codebase). Alternatives: HEX as decimal with 8 fixed decimal places; raw integer as JSON number (unsafe for large values). Approval required before reader assembly.
+
+**OQ-2: `evidence_available` → `"unavailable"` mapping**
+When the estimator returns `evidence_available` (gate active, formula ran internally), should the public DTO expose `status: "unavailable"` or remain `status: "unsupported"`?
+Default assumption: `"unavailable"` — evidence was fetched and processed; the gate is a deployment decision, not a capability absence. Alternative: keep `"unsupported"` until gate fully lifted (simpler for callers).
+
+**OQ-3: `bpdYieldHex` when `bpdYieldStatus: "unknown"`**
+Should `bpdYieldHex` be `null` (field present, null value) or omitted from the response body? Default assumption: null (field always present, preserves discriminated union shape).
+
+**OQ-4: Provenance field naming in public DTO vs. internal estimator**
+Proposed: use the same field names as `HexMiningYieldEstimateProvenance` (`chainId`, `sourceFamily`, `observationId`, `rangeStartDay`, `rangeEndDay`). Alternative: rename for public clarity (`observationRef`, `dayRange`, etc.). Default assumption: same names — they are already minimal and non-implementation-specific.
+
+**OQ-5: `warnings` pass-through policy**
+Should all current estimator warning codes pass through to the public DTO, or should a whitelist be maintained at the reader boundary? Default assumption: all current warning codes pass through; future internal-only codes must be explicitly filtered when added.
+
+**OQ-6: Schema version treatment**
+Should `HexStakeDto` bump its top-level `schemaVersion` when yield fields change from `"unsupported"` to `"estimated"`, or is a separate yield subobject version needed? Default assumption: top-level `schemaVersion` bump on `HexStakeDto` is sufficient.
+
+---
+
+#### Non-approval statement
+
+**This section is a PROPOSED CONTRACT only. It has not been approved for implementation.** No reader (`reader.ts`), route (`route.ts`), test, schema, or type file may be changed based solely on this section. Implementation may begin only after:
+
+1. All open questions OQ-1 through OQ-6 are explicitly resolved
+2. All remaining §11.14 gate-lift prerequisites (items 4–6, 8–11) are satisfied
+3. The gate-lift PR is approved per the spec in §12
+
+---
+
 ## 12. Proposed Next PR (updated)
 
 **Phase 4B is complete.** PRs #204, #205, and #206 delivered the full read boundary, persistence wiring, and gated operator route.
@@ -1352,16 +1533,17 @@ This gate was resolved in PR #224 (`docs/hexmining-verify-penalty-distribution-a
 
 **Immediate next step: Step 4 gate-lift PR**
 
-The gate-lift PR (exposing public `status: "estimated"`) must satisfy **all** remaining prerequisites — see §11.14 items 4–6, 8–11:
+The gate-lift PR (exposing public `status: "estimated"`) must satisfy **all** remaining prerequisites — see §11.14 items 4–6, 8–11. The implementation must follow the proposed public DTO contract in **§11.16** (pending approval of OQ-1 through OQ-6 before implementation begins):
 
 ```text
 feat(hexmining): wire estimated yield fields into HexStakeDto and API route
 ```
 
-- Update `HexStakeDto.yield` field assembly in `reader.ts` to call `estimateHexMiningYield` and map result (including `bpdYieldHex`, `bpdYieldStatus`, and `estimatedYieldHex`).
+- Resolve §11.16 open questions OQ-1 through OQ-6 before writing any reader or route code.
+- Update `HexStakeDto.yield` field assembly in `reader.ts` to call `estimateHexMiningYield` and map result per the §11.16 contract (including `bpdYieldHex`, `bpdYieldStatus`, `estimatedYieldHex`, `provenance`, and `warnings`).
 - Wire `fetchEvidence` dep into `GET /api/hexmining/stakes` route.
-- Contract tests for the full DTO including estimated yield fields (non-null `estimatedYieldHex`, BPD field correlation, provenance completeness).
-- Final public DTO/API shape approval for `HexStakeYieldDto` with `status: "estimated"`.
+- Contract tests for the full DTO including all §11.16 fields (non-null `estimatedYieldHex`, BPD field correlation, provenance completeness, `warnings` pass-through).
+- Final public DTO/API shape approval for `HexStakeYieldDto` with `status: "estimated"` (§11.14 item 8, §11.16 non-approval statement).
 - Live-data fixture or opt-in integration verification against a known historical day range on PulseChain.
 - Final docs record approving the gate lift (this document updated with gate-lifted record and PR reference).
 - `valuation.status` and `pnl.status` remain `"unsupported"` — unchanged.
@@ -1462,6 +1644,16 @@ See §11.14 for the full gate-lift prerequisite list. See §11.15 for the EES pe
 **PR #228 (test/hexmining-yield-reader-route-gated-wiring — test only):**
 - `git diff --name-only` — `tests/services/hexmining/reader.test.ts`, `tests/api/hexmining-stakes-route-contract.test.ts` only.
 - `npm run test` — 1586 tests, all passed (38 in targeted reader+route contract files; 1586 overall).
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
+
+**PR #229 (docs/hexmining-yield-gate-status-after-228 — docs only):**
+- `git diff --name-only` — `docs/v2-hexmining-roadmap.md` only.
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
+
+**This PR (docs/hexmining-estimated-yield-dto-contract — docs only):**
+- `git diff --name-only` — `docs/v2-hexmining-roadmap.md` only.
 - `npm run lint` — passed, no ESLint errors.
 - `npm run typecheck` — passed, no type errors.
 
@@ -1626,9 +1818,16 @@ See §11.14 for the full gate-lift prerequisite list. See §11.15 for the EES pe
 - **What changed:** 5 new reader tests in "yield gate — reader output never exposes estimated yield" describe block: BPD-era stake, overdue stake, currentDay-unavailable (stakeStatus unknown), multi-stake list, serialized regression. 4 new route contract tests: multi-stake yield gate, BPD attribution warning pass-through without yield computation, serialized regression, error-path no yield fields. All tests verify gate preserved at reader and route layers. No source files changed. Public output remains `evidence_available` / `yieldHex: null`.
 - **PR status:** TEST-ONLY — no source, schema, or config files changed.
 
-**This PR (docs/hexmining-yield-gate-status-after-228):**
+**PR #229 (docs/hexmining-yield-gate-status-after-228) — merged:**
 - **Branch:** `docs/hexmining-yield-gate-status-after-228`
 - **Changed files:** `docs/v2-hexmining-roadmap.md` only
 - **What changed:** Document header and Phase completion table updated for PRs #225–#228; §11.1 extended with PR entries for #222–#228 and post-merge audit (1586 tests); §11.10 Step 3 delivery table extended with #225–#228 entries; "Remaining scope" updated to reflect all estimator-boundary gates complete; §11.14 gate-lift prerequisites updated — items 1, 3 marked RESOLVED, item 2 marked RESOLVED at estimator boundary; items 8–11 added as new open gates; "Files that must NOT be changed" updated for reader/route test additions in PR #228; §12 updated with satisfied prerequisites and Step 4 gate-lift PR spec; Validation Notes and Final Status extended.
 - **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
 - **Public estimated yield exposed:** NO — `evidence_available` / `yieldHex: null` gate remains in place.
+
+**This PR (docs/hexmining-estimated-yield-dto-contract):**
+- **Branch:** `docs/hexmining-estimated-yield-dto-contract`
+- **Changed files:** `docs/v2-hexmining-roadmap.md` only
+- **What changed:** §11.16 added — proposed public `HexStakeYieldDto` contract with full TypeScript shape, per-field documentation (`status`, `estimatedYieldHex`, `bpdYieldStatus`, `bpdYieldHex`, `provenance`, `warnings`), status vocabulary (public vs. internal), BPD attribution interaction, provenance field mapping, and six open approval questions (OQ-1–OQ-6); non-approval statement explicit. Document header updated to reference §11.16 and open questions. §12 updated to require §11.16 contract resolution before gate-lift implementation. Validation Notes and Final Status extended.
+- **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
+- **Public estimated yield exposed:** NO — gate remains in place; §11.16 is a proposed contract only, not an approval.
