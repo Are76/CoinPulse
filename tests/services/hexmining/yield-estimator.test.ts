@@ -783,4 +783,222 @@ describe("estimateHexMiningYield", () => {
       expect(applyFormula(captured, maxShares)).toBe(expected);
     });
   });
+
+  // ─── Elapsed-days coverage rule ───────────────────────────────────────────
+  //
+  // Only days strictly before currentDay are finalized and available for yield
+  // calculation. Required coverage: [lockedDay, elapsedEndDay] (inclusive), where:
+  //   elapsedEndDay = Math.min(currentDay - 1, lockedDay + stakedDays - 1)
+  //
+  // If currentDay <= lockedDay: no elapsed days → insufficient_observations.
+  // If evidence.rangeStartDay > lockedDay OR evidence.rangeEndDay < elapsedEndDay:
+  //   coverage gap → insufficient_observations.
+
+  describe("elapsed-days coverage rule", () => {
+    // ── Test 1: full elapsed coverage → evidence_available ────────────────
+
+    it("full elapsed coverage returns evidence_available with yieldHex null", async () => {
+      // lockedDay=1000, stakedDays=365, currentDay=1200
+      // elapsedEndDay = min(1199, 1364) = 1199; evidence covers [1000, 1199] exactly
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1199 }));
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, stakedDays: 365, currentDay: 1200 },
+        deps,
+      );
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+      expect(result.schemaVersion).toBe("v1");
+    });
+
+    // ── Test 2: missing first elapsed day → insufficient_observations ──────
+
+    it("evidence starting after lockedDay returns insufficient_observations", async () => {
+      // elapsedEndDay = min(1199, 1364) = 1199
+      // evidence starts at 1001, missing lockedDay 1000
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1001, rangeEndDay: 1199 }));
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, stakedDays: 365, currentDay: 1200 },
+        deps,
+      );
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-insufficient-elapsed-day-coverage");
+    });
+
+    it("missing first elapsed day does not call applyCalculation", async () => {
+      const applyCalculation: Mock = vi.fn();
+      const deps = {
+        ...makeDeps(makeEvidence({ rangeStartDay: 1001, rangeEndDay: 1199 })),
+        applyCalculation,
+      };
+      await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, stakedDays: 365, currentDay: 1200 },
+        deps,
+      );
+
+      expect(applyCalculation).not.toHaveBeenCalled();
+    });
+
+    // ── Test 3: missing last elapsed day → insufficient_observations ───────
+
+    it("evidence ending before elapsedEndDay returns insufficient_observations", async () => {
+      // elapsedEndDay = min(1199, 1364) = 1199
+      // evidence ends at 1198, missing day 1199
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1198 }));
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, stakedDays: 365, currentDay: 1200 },
+        deps,
+      );
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-insufficient-elapsed-day-coverage");
+    });
+
+    it("missing last elapsed day does not call applyCalculation", async () => {
+      const applyCalculation: Mock = vi.fn();
+      const deps = {
+        ...makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1198 })),
+        applyCalculation,
+      };
+      await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, stakedDays: 365, currentDay: 1200 },
+        deps,
+      );
+
+      expect(applyCalculation).not.toHaveBeenCalled();
+    });
+
+    // ── Test 4: no elapsed days (currentDay <= lockedDay) → insufficient ───
+
+    it("currentDay equal to lockedDay returns insufficient_observations (no elapsed days)", async () => {
+      // currentDay=1000, lockedDay=1000 → currentDay <= lockedDay → no elapsed days
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, currentDay: 1000 },
+        deps,
+      );
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-no-elapsed-days");
+    });
+
+    it("currentDay before lockedDay returns insufficient_observations (stake not started)", async () => {
+      // currentDay=999, lockedDay=1000 → currentDay < lockedDay → no elapsed days
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, currentDay: 999 },
+        deps,
+      );
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-no-elapsed-days");
+    });
+
+    it("no-elapsed-days result carries evidence observationId in provenance", async () => {
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, currentDay: 1000 },
+        deps,
+      );
+
+      expect(result.provenance.observationId).toBe("obs-abc-123");
+      expect(result.provenance.chainId).toBe(369);
+    });
+
+    // ── Test 5: completed stake uses lockedDay + stakedDays - 1 as upper bound
+
+    it("completed stake: evidence covering [lockedDay, lockedDay+stakedDays-1] is accepted", async () => {
+      // lockedDay=1000, stakedDays=100, currentDay=2000
+      // elapsedEndDay = min(1999, 1099) = 1099 — capped at stake end
+      // evidence covers [1000, 1099] — exactly the completed stake term
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1099 }));
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, stakedDays: 100, currentDay: 2000, rangeStartDay: 1000, rangeEndDay: 1099 },
+        deps,
+      );
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+    });
+
+    it("completed stake: evidence ending at currentDay-1 is rejected if stake ended earlier", async () => {
+      // lockedDay=1000, stakedDays=100, currentDay=2000
+      // elapsedEndDay = min(1999, 1099) = 1099
+      // evidence ends at 1099 = correct; ending at 1098 (one day short of stake end) is rejected
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1098 }));
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, stakedDays: 100, currentDay: 2000, rangeStartDay: 1000, rangeEndDay: 1099 },
+        deps,
+      );
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.warnings).toContain("hexmining-yield-insufficient-elapsed-day-coverage");
+    });
+
+    // ── Test 6: active stake uses currentDay - 1 (not currentDay) ──────────
+
+    it("active stake: evidence ending at currentDay-1 is accepted (currentDay is not elapsed)", async () => {
+      // lockedDay=1000, stakedDays=365, currentDay=1050
+      // elapsedEndDay = min(1049, 1364) = 1049
+      // evidence covers [1000, 1049] — correct boundary
+      // If the guard required currentDay (1050), rangeEndDay=1049 would fail; it must not
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1049 }));
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, stakedDays: 365, currentDay: 1050, rangeStartDay: 1000, rangeEndDay: 1049 },
+        deps,
+      );
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+    });
+
+    // ── Test 7: off-by-one protection (inclusive start and end) ────────────
+
+    it("exact boundary [lockedDay, elapsedEndDay] is accepted (inclusive both ends)", async () => {
+      // lockedDay=1000, stakedDays=365, currentDay=1100
+      // elapsedEndDay = min(1099, 1364) = 1099
+      // evidence covers exactly [1000, 1099]
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1099 }));
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, stakedDays: 365, currentDay: 1100, rangeStartDay: 1000, rangeEndDay: 1099 },
+        deps,
+      );
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+    });
+
+    it("start at lockedDay+1 is rejected (must include lockedDay itself)", async () => {
+      // lockedDay=1000, stakedDays=365, currentDay=1100
+      // elapsedEndDay = min(1099, 1364) = 1099
+      // evidence starts at 1001 — off by one at the start
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1001, rangeEndDay: 1099 }));
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, stakedDays: 365, currentDay: 1100, rangeStartDay: 1000, rangeEndDay: 1099 },
+        deps,
+      );
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.warnings).toContain("hexmining-yield-insufficient-elapsed-day-coverage");
+    });
+
+    it("end at elapsedEndDay-1 is rejected (must include elapsedEndDay itself)", async () => {
+      // lockedDay=1000, stakedDays=365, currentDay=1100
+      // elapsedEndDay = min(1099, 1364) = 1099
+      // evidence ends at 1098 — off by one at the end
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1098 }));
+      const result = await estimateHexMiningYield(
+        { ...BASE_ARGS, lockedDay: 1000, stakedDays: 365, currentDay: 1100, rangeStartDay: 1000, rangeEndDay: 1099 },
+        deps,
+      );
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.warnings).toContain("hexmining-yield-insufficient-elapsed-day-coverage");
+    });
+  });
 });

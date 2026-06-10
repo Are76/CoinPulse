@@ -217,6 +217,44 @@ export async function estimateHexMiningYield(
     };
   }
 
+  // 5.5. Elapsed-days coverage check
+  // HEX currentDay is the active (not-yet-finalized) day; only days strictly before it are elapsed.
+  // Required range: [lockedDay, elapsedEndDay] inclusive, where
+  //   elapsedEndDay = min(currentDay − 1, lockedDay + stakedDays − 1).
+  const elapsedEndDay = Math.min(args.currentDay - 1, args.lockedDay + args.stakedDays - 1);
+
+  if (args.currentDay <= args.lockedDay) {
+    return {
+      status: "insufficient_observations",
+      schemaVersion: "v1",
+      yieldHex: null,
+      provenance: {
+        chainId: args.chainId,
+        sourceFamily: "HEXMINING",
+        observationId: evidence.observationId,
+        rangeStartDay: evidence.rangeStartDay,
+        rangeEndDay: evidence.rangeEndDay,
+      },
+      warnings: [...evidence.warnings, "hexmining-yield-no-elapsed-days"],
+    };
+  }
+
+  if (evidence.rangeStartDay > args.lockedDay || evidence.rangeEndDay < elapsedEndDay) {
+    return {
+      status: "insufficient_observations",
+      schemaVersion: "v1",
+      yieldHex: null,
+      provenance: {
+        chainId: args.chainId,
+        sourceFamily: "HEXMINING",
+        observationId: evidence.observationId,
+        rangeStartDay: evidence.rangeStartDay,
+        rangeEndDay: evidence.rangeEndDay,
+      },
+      warnings: [...evidence.warnings, "hexmining-yield-insufficient-elapsed-day-coverage"],
+    };
+  }
+
   // 6. Decode canonicalPayload → bigint[]
   const payloadResult = decodeDailyDataPayload(evidence.canonicalPayload);
   if (!payloadResult.ok) {
