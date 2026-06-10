@@ -381,7 +381,7 @@ totalYield = Σ perDayYield(d)  for d in [rangeStartDay, rangeEndDay]
 ### What is NOT included in these vectors
 
 - **Big Pay Day (day 353)** yield requires separate `bpdYieldStatus` modeling per roadmap §11.4 invariant #5. BPD yield must never be silently included in the per-day formula sum. None of the vectors below cover day 353.
-- **End-stake and emergency-end-stake (EES) penalty distributions.** Whether penalties from end-stake and EES operations are already reflected in the observed `dayPayoutTotal` values (i.e., redistributed to remaining stakers through the daily data fields) or require separate modeling is an open accounting question that has not been verified against the HEX contract. The vectors in this section assume `dayPayoutTotal` as observed — they do not resolve this question. Public estimated yield must not be exposed until this behavior is verified. See roadmap §11.15.
+- **End-stake and emergency-end-stake (EES) penalty distributions.** ✅ **Resolved (Finding A)** — penalties from end-stake and EES operations are already included in `dayPayoutTotal` of a subsequent day (50% of gross penalty, via `globals.stakePenaltyTotal` → `_dailyRoundCalc`). No separate modeling is required. The vectors in this section are consistent with this finding. See `docs/hexmining-penalty-distribution-research.md` and roadmap §11.15 for the full evidence record.
 - **APY.** Not derivable from these vectors alone.
 - **Pricing, valuation, or PnL.** Not part of this formula.
 

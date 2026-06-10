@@ -1,8 +1,8 @@
 # V2 HexMining Roadmap
 
-**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208–#221 merged; yield formula implemented (§8 test vectors A–E pass); public estimated yield intentionally gated: `estimateHexMiningYield` always returns `evidence_available` with `yieldHex: null` for valid evidence; `"estimated"` path requires a separate future DTO/API contract approval AND end-stake/EES penalty distribution verification — see §11.14 and §11.15.
+**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208–#221 merged; yield formula implemented (§8 test vectors A–E pass); public estimated yield intentionally gated: `estimateHexMiningYield` always returns `evidence_available` with `yieldHex: null` for valid evidence; `"estimated"` path requires a separate future DTO/API contract approval — see §11.14; EES/penalty gate resolved (Finding A — penalties included in `dayPayoutTotal`) — see §11.15.
 **Created:** 2026-06-06
-**Last updated:** 2026-06-10 (Phase 4C penalty-distribution gate added — end-stake/EES penalty behavior must be verified before public estimated yield can be exposed; see §11.15)
+**Last updated:** 2026-06-10 (§11.15 EES/penalty gate resolved — Finding A confirmed from on-chain verified HEX.sol; see `docs/hexmining-penalty-distribution-research.md`)
 
 ## Phase completion status
 
@@ -1197,9 +1197,9 @@ A future PR may promote `"estimated"` into the public output **only** when all o
 4. `HexStakeDto.yield` field assembly in `reader.ts` is updated.
 5. `GET /api/hexmining/stakes` route is updated.
 6. Contract tests cover the full estimated-yield DTO path.
-7. **HEX end-stake and EES penalty distribution behavior is verified** — the implementation must determine whether EES/end-stake penalties are already reflected in the observed `dayPayoutTotal` values or require separate modeling before any `yieldHex` value is surfaced publicly. See §11.15.
+7. **HEX end-stake and EES penalty distribution behavior is verified** — ✅ **RESOLVED** (see §11.15 and `docs/hexmining-penalty-distribution-research.md`). Penalties from end-stake/EES are already included in `dayPayoutTotal` (50% of gross penalty, landing on a subsequent day). No separate modeling required.
 
-These are Step 4 requirements (§11.10). No partial lift is permitted: the gate must remain in place until all seven conditions are met in a single approved PR.
+These are Step 4 requirements (§11.10). No partial lift is permitted: the gate must remain in place until all seven conditions are met in a single approved PR. Item 7 is now resolved; items 1–6 remain open.
 
 #### On "do not discard the calculation result" review comments
 
@@ -1213,33 +1213,62 @@ The `docs/hex-dailydata-packing-spec.md §8` formula documentation and test vect
 
 ### 11.15 HEX end-stake / EES penalty-distribution verification gate
 
-**Status: OPEN — verification required before public estimated yield can be exposed.**
+**Status: RESOLVED — Finding A: penalty redistribution is already included in `dayPayoutTotal`. No separate modeling required.**
+
+Full research record: `docs/hexmining-penalty-distribution-research.md`
 
 ---
 
-#### Gate summary
+#### Resolution summary
 
-Public estimated yield must remain gated until HEX end-stake and emergency-end-stake (EES) penalty distribution behavior is verified against the HEX contract and accounting model. The implementation must determine whether penalties are already reflected in observed daily payout/daily data fields or require separate modeling. Until then, the §8 formula is internal calculation evidence only and must not be treated as a complete public accounting model.
+The gate opened in PR #223 is now resolved. The on-chain verified HEX contract source (`HEX.sol`, Blockscout chain 1, `0x2b591e99afe9f32eaa6214f7b7629768c40eeb39`, compiler v0.5.13, 2952 lines) was inspected in full. The penalty accounting path is unambiguous:
 
----
+1. Every `stakeEnd` call (whether early, on-time, or late) computes `cappedPenalty` via `_stakePerformance`.
+2. `_splitPenaltyProceeds` splits the penalty 50/50: 50% minted to `ORIGIN_ADDR`, 50% added to `globals.stakePenaltyTotal`.
+3. The next time `_dailyDataUpdate` runs (triggered by any subsequent HEX transaction), `_dailyRoundCalc` sweeps `globals.stakePenaltyTotal` into `rs._payoutTotal` and resets it to zero.
+4. `_dailyRoundCalcAndStore` writes `rs._payoutTotal` to `dailyData[day].dayPayoutTotal` — the same field returned by `dailyDataRange`.
 
-#### Open accounting question
-
-HEX yield is not only simple daily inflation payout to active stakers. When a stake is ended early (EES — emergency end stake), the protocol applies a penalty. Part of that penalty is returned to the HEX ecosystem and may be redistributed to remaining stakers.
-
-**The open question is:** Are EES and end-stake penalty distributions already included in the `dayPayoutTotal` values returned by `dailyDataRange`, or do they represent a separate distribution channel that the §8 formula does not capture?
-
-This is not yet verified. The answer requires inspection of the HEX contract payout logic (`dailyData` accumulation path) to determine:
-
-- Whether `dayPayoutTotal` accumulates penalty redistribution amounts alongside regular daily inflation.
-- Whether `dayStakeSharesTotal` is the correct denominator for penalty-derived payout (i.e., whether penalties are distributed pro-rata to all active stakers by share count, as implied by the formula).
-- Whether any penalty redistribution occurs outside the `dailyDataRange` path entirely and thus requires a separate accounting entry.
-
-**This PR does not resolve the question.** It records the verification requirement.
+**There is no separate accounting channel.** All penalty redistribution to stakers flows through `dayPayoutTotal`. The §8 formula captures it automatically.
 
 ---
 
-#### Why this gate exists
+#### Two accounting caveats (contract-confirmed, not bugs)
+
+**Caveat 1 — 50% split:** Only 50% of gross `cappedPenalty` reaches stakers via `dayPayoutTotal`. The other 50% is minted to `ORIGIN_ADDR` and never enters the staker payout pool. The formula reads the observed `dayPayoutTotal`, which contains only the staker portion. Nothing extra to add.
+
+**Caveat 2 — Next-day timing:** Because `_dailyDataUpdateAuto` freezes daily data **before** `_splitPenaltyProceeds` runs, a penalty from a stake ending on day D lands in the `dayPayoutTotal` of some day D+k (k ≥ 1). A staker holding through day D+k receives a share of that redistribution; one whose stake ended before D+k does not. This is correct protocol behavior. The formula reads whatever `dayPayoutTotal` was recorded, which already reflects this timing correctly.
+
+---
+
+#### "Emergency End Stake" clarification
+
+The on-chain verified `HEX.sol` contains **no function named `emergencyEndStake`**. There is one public stake-closing entry point: `stakeEnd`. Community usage of "EES" refers to calling `stakeEnd` before the committed term completes, which takes the early-exit branch (`_calcPayoutAndEarlyPenalty`). The penalty mechanism is mechanically identical to overdue-stake penalty — both flow through `_splitPenaltyProceeds`.
+
+---
+
+#### Original open accounting question
+
+HEX yield is not only simple daily inflation payout to active stakers. When a stake is ended early (EES — emergency end stake), the protocol applies a penalty. Part of that penalty is returned to the HEX ecosystem and redistributed to remaining stakers.
+
+**The question was:** Are EES and end-stake penalty distributions already included in the `dayPayoutTotal` values returned by `dailyDataRange`, or do they represent a separate distribution channel that the §8 formula does not capture?
+
+**Answer (Finding A):** Yes — penalty redistribution (50% of gross penalty) is already included in `dayPayoutTotal` of a subsequent day. No separate distribution channel exists. The §8 formula requires no modification to account for penalties.
+
+---
+
+#### Scenario coverage
+
+| Scenario | Finding |
+|---|---|
+| Normal active stake | `dayPayoutTotal` includes standard inflation. §8 formula correct. |
+| Overdue stake (late penalty) | 50% of late penalty enters a subsequent day's `dayPayoutTotal` via `globals.stakePenaltyTotal`. §8 formula captures it. |
+| Normal ended stake | Same late-penalty path if applicable. §8 formula captures via `dayPayoutTotal`. |
+| Early-ended stake ("EES") | Same `_splitPenaltyProceeds` path. 50% enters a subsequent day's `dayPayoutTotal`. §8 formula captures it. |
+| Zero-share / zero-distribution | `dayStakeSharesTotal === 0n` guard in `defaultApplyCalculation` correct. Confirmed by contract. |
+
+---
+
+#### Why this gate existed
 
 The §8 formula computes:
 
@@ -1247,11 +1276,9 @@ The §8 formula computes:
 perDayYield(d) = (stakeShares × dayPayoutTotal[d]) / dayStakeSharesTotal[d]
 ```
 
-This formula is arithmetically correct for any observed `dayPayoutTotal` value. However, if `dayPayoutTotal` does not include penalty redistribution amounts, or if those amounts flow through a different accounting channel, the formula underestimates the true yield. Surfacing a partial yield figure as `status: "estimated"` — without documenting what it excludes — is a material accounting misrepresentation.
+This formula is arithmetically correct for any observed `dayPayoutTotal` value. The gate existed to verify whether `dayPayoutTotal` included penalty redistribution amounts or whether those flowed through a separate channel. A partial yield figure surfaced as `status: "estimated"` — without documenting what it excludes — would be a material accounting misrepresentation.
 
-Conversely, if penalty redistribution is already fully included in `dayPayoutTotal`, the §8 formula may be complete for public yield reporting (subject to the other gate conditions in §11.14). In that case, a future PR can document the verification evidence and lift this gate alongside the others.
-
-**The gate exists because the answer is not yet known.** It must not be assumed.
+**The gate is now resolved.** The contract source confirms penalties flow into `dayPayoutTotal`. The §8 formula is complete for the staker payout pool (subject to the two caveats above and the other gate conditions in §11.14).
 
 ---
 
@@ -1284,17 +1311,14 @@ This gate only blocks the final step of surfacing `status: "estimated"` and a no
 
 ---
 
-#### How to resolve this gate
+#### Resolution evidence
 
-A future PR that intends to lift this gate must include:
+This gate was resolved in PR #224 (`docs/hexmining-verify-penalty-distribution-accounting`). The full research record is in `docs/hexmining-penalty-distribution-research.md`, which includes:
 
-1. A cited reference to the authoritative HEX contract source (on-chain ABI or verified Solidity equivalent) showing how `dayPayoutTotal` is accumulated.
-2. Explicit documentation of whether EES/end-stake penalties are included in `dayPayoutTotal`, with the evidence cited.
-3. If penalties are **included**: document this as a confirmed prerequisite met, with evidence.
-4. If penalties are **not included** or are **partially included**: document the gap and the additional modeling required before public yield can be exposed.
-5. Update §11.15 status from "OPEN" to "RESOLVED" (or "RESOLVED — separate modeling required") with the evidence record.
-
-This resolution may be documented in a separate docs PR or bundled with the gate-lift implementation PR (Step 4). Either is acceptable, but the evidence must be on `main` before `status: "estimated"` may be returned publicly.
+1. On-chain verified HEX.sol source from Blockscout (chain 1, `0x2b591e99afe9f32eaa6214f7b7629768c40eeb39`)
+2. Verbatim Solidity code for the complete penalty accounting path: `_splitPenaltyProceeds` → `globals.stakePenaltyTotal` → `_dailyRoundCalc` → `dailyData[day].dayPayoutTotal`
+3. Scenario coverage for all five required scenarios (normal stake, overdue, ended, EES, zero-share)
+4. Two accounting caveats documented: 50% split to `ORIGIN_ADDR`; next-day timing
 
 ---
 
@@ -1321,7 +1345,7 @@ feat(hexmining): wire estimated yield fields into HexStakeDto and API route
 - Contract tests for the full DTO including estimated yield fields.
 - `valuation.status` and `pnl.status` remain `"unsupported"` — unchanged.
 
-The EES verification may be resolved in a dedicated preceding docs PR and referenced by the gate-lift PR, or bundled into the gate-lift PR itself. Either approach is acceptable, but the evidence must be on `main` before `status: "estimated"` is returned publicly.
+The EES verification is now resolved — see §11.15 and `docs/hexmining-penalty-distribution-research.md`. Gate-lift item 7 is satisfied.
 
 **What must NOT happen without a gate-lift PR:**
 - No direct change to steps 8–9 of `estimateHexMiningYield` to return `"estimated"` without all prerequisites above.
@@ -1391,8 +1415,13 @@ See §11.14 for the full gate-lift prerequisite list. See §11.15 for the EES pe
 - `npm run lint` — passed, no ESLint errors.
 - `npm run typecheck` — passed, no type errors.
 
-**This PR (docs/hexmining-penalty-distribution-gate — docs only):**
+**PR #223 (docs/hexmining-penalty-distribution-gate — docs only):**
 - `git diff --name-only` — `docs/v2-hexmining-roadmap.md`, `docs/hex-dailydata-packing-spec.md` only.
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
+
+**This PR (docs/hexmining-verify-penalty-distribution-accounting — docs only):**
+- `git diff --name-only` — `docs/v2-hexmining-roadmap.md`, `docs/hex-dailydata-packing-spec.md`, `docs/hexmining-penalty-distribution-research.md` only.
 - `npm run lint` — passed, no ESLint errors.
 - `npm run typecheck` — passed, no type errors.
 
@@ -1521,9 +1550,15 @@ See §11.14 for the full gate-lift prerequisite list. See §11.15 for the EES pe
 - **What changed:** Document header and Phase completion table updated for current Phase 4C gating state; §11.1 extended with PRs #212–#221 and post-merge audit (1539 tests); §11.10 Step 3 updated with full PR delivery table and current gating state; §11.13 updated with resolved-criteria note; §11.14 added — yield-estimation gating decision record (decision, internal behavior, gate rationale, gate-lift prerequisites, review comment policy, internal evidence vs. public DTO distinction); §12 updated with gate-lift prerequisites as the next PR spec; Validation Notes and Final Status extended.
 - **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
 
-**This PR (docs/hexmining-penalty-distribution-gate):**
+**PR #223 (docs/hexmining-penalty-distribution-gate) — merged:**
 - **Branch:** `docs/hexmining-penalty-distribution-gate`
 - **Changed files:** `docs/v2-hexmining-roadmap.md` (updated), `docs/hex-dailydata-packing-spec.md` (updated)
-- **What changed:** `docs/v2-hexmining-roadmap.md` — document header updated to mention EES gate; §11.14 "How to lift the gate" updated with 7th prerequisite (EES verification); §11.15 added — full penalty-distribution verification gate record (open accounting question, stake scenarios, gate rationale, resolution path); §12 updated with EES gate as prerequisite for next PR; Validation Notes and Final Status extended. `docs/hex-dailydata-packing-spec.md §8` — "What is NOT included" updated to record EES/end-stake penalty distributions as an open question with roadmap §11.15 reference.
+- **What changed:** §11.14 updated with 7th prerequisite (EES verification); §11.15 added — full penalty-distribution verification gate (open question, stake scenarios, gate rationale, resolution path); §12 updated; `docs/hex-dailydata-packing-spec.md §8` "What is NOT included" updated with EES open question.
+- **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
+
+**This PR (docs/hexmining-verify-penalty-distribution-accounting):**
+- **Branch:** `docs/hexmining-verify-penalty-distribution-accounting`
+- **Changed files:** `docs/hexmining-penalty-distribution-research.md` (new), `docs/v2-hexmining-roadmap.md` (updated), `docs/hex-dailydata-packing-spec.md` (updated)
+- **What changed:** `docs/hexmining-penalty-distribution-research.md` — full research record: on-chain verified HEX.sol source (Blockscout chain 1); verbatim `_splitPenaltyProceeds`, `_dailyRoundCalc`, `_dailyRoundCalcAndStore` code; complete function trace; scenario coverage for all five required scenarios; Finding A confirmed; two accounting caveats documented; §8 formula implication. `docs/v2-hexmining-roadmap.md` — document header updated; §11.14 item 7 marked RESOLVED; §11.15 status changed to RESOLVED (Finding A) with full resolution evidence, caveats, EES clarification, scenario coverage, and resolution evidence record. `docs/hex-dailydata-packing-spec.md §8` — EES entry updated from open question to resolved (Finding A) with reference to research file.
 - **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
 - **Recommendation: MERGE**
