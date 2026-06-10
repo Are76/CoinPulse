@@ -419,4 +419,103 @@ describe("GET /api/hexmining/stakes route contract", () => {
     expect(stake.provenance.stakeSource).toBe("native");
     expect(stake.warnings).toContain("hexmining-valuation-unsupported-v1");
   });
+
+  // ── Yield gate — route must never expose estimated yield ──────────────────
+
+  // Coverage item 4: every stake in a multi-stake successful response must carry
+  // only the gated "unsupported" yield, not "estimated" or "evidence_available".
+  it("yield gate preserved for every stake when route response contains multiple stakes", async () => {
+    const base = makeSingleStakeDto();
+    const second: HexStakeDto = { ...base.stakes[0], stakeId: "99", stakeIndex: 1 };
+    const fixture: HexStakeListDto = {
+      ...base,
+      stakes: [base.stakes[0], second],
+      totalCount: 2,
+    };
+    createPublicClientForChain.mockReturnValue({});
+    readNativeHexStakes.mockResolvedValue(fixture);
+
+    const { GET } = await import("../../app/api/hexmining/stakes/route");
+    const response = await GET(
+      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.stakes).toHaveLength(2);
+    for (const stake of body.data.stakes) {
+      expect(stake.yield.status).toBe("unsupported");
+      expect(stake.yield.estimatedYieldHex).toBeNull();
+      expect(stake.yield.bpdYieldHex).toBeNull();
+      expect(stake.yield.bpdYieldStatus).toBeNull();
+    }
+  });
+
+  // Coverage item 3: if the reader passes a BPD attribution warning through to the stake,
+  // the route must preserve it in warnings but still not compute yield (yield stays gated).
+  it("route preserves BPD attribution warning from reader output but does not compute yield", async () => {
+    const base = makeSingleStakeDto();
+    const stakeWithBpdWarning: HexStakeDto = {
+      ...base.stakes[0],
+      warnings: [...base.stakes[0].warnings, "hexmining-yield-bpd-attribution-unresolved"],
+    };
+    const fixture: HexStakeListDto = { ...base, stakes: [stakeWithBpdWarning] };
+    createPublicClientForChain.mockReturnValue({});
+    readNativeHexStakes.mockResolvedValue(fixture);
+
+    const { GET } = await import("../../app/api/hexmining/stakes/route");
+    const response = await GET(
+      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const stake = body.data.stakes[0];
+    // Warning must be preserved in the pass-through
+    expect(stake.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
+    // Yield stays gated: route must not compute yield because a BPD warning is present
+    expect(stake.yield.status).toBe("unsupported");
+    expect(stake.yield.estimatedYieldHex).toBeNull();
+    expect(stake.yield.bpdYieldHex).toBeNull();
+  });
+
+  // Coverage item 6: regression — serialized yield block must never contain
+  // "estimated" status or non-null estimatedYieldHex anywhere in the response.
+  it("regression: serialized route response yield block does not expose estimated status or non-null estimatedYieldHex", async () => {
+    const fixture = makeSingleStakeDto();
+    createPublicClientForChain.mockReturnValue({});
+    readNativeHexStakes.mockResolvedValue(fixture);
+
+    const { GET } = await import("../../app/api/hexmining/stakes/route");
+    const response = await GET(
+      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const stake = body.data.stakes[0];
+    const yieldSerialized = JSON.stringify(stake.yield);
+    expect(yieldSerialized).not.toContain('"estimated"');
+    expect(yieldSerialized).not.toContain('"evidence_available"');
+    const parsed = JSON.parse(yieldSerialized) as { estimatedYieldHex: unknown };
+    expect(parsed.estimatedYieldHex).toBeNull();
+  });
+
+  // Coverage item 5: when the reader throws (backend/evidence unavailable), the route
+  // must return a sanitized error and must not invent or leak any yield fields.
+  it("error response body does not contain yield, estimatedYieldHex, or yieldHex fields", async () => {
+    createPublicClientForChain.mockReturnValue({});
+    readNativeHexStakes.mockRejectedValue(new Error("backend unavailable"));
+
+    const { GET } = await import("../../app/api/hexmining/stakes/route");
+    const response = await GET(
+      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+    );
+
+    expect(response.status).toBe(500);
+    const bodyText = await response.text();
+    expect(bodyText).not.toContain("estimatedYieldHex");
+    expect(bodyText).not.toContain('"yieldHex"');
+    expect(bodyText).not.toContain('"estimated"');
+  });
 });

@@ -397,4 +397,125 @@ describe("readNativeHexStakes", () => {
     expect(result.stakes[2].stakeIndex).toBe(2);
     expect(result.isComplete).toBe(true);
   });
+
+  // ── Yield gate — gated estimator result preserved at reader layer ──────────
+
+  describe("yield gate — reader output never exposes estimated yield", () => {
+    // 16. BPD-era stake: elapsed range spans protocol day 353 (Big Pay Day).
+    // Reader has no estimator connection — yield must remain unsupported regardless.
+    it("yield gate preserved for BPD-era stake whose elapsed range spans protocol day 353", async () => {
+      const client = makeClient({
+        readContract: async ({ functionName }: MockReadContractArgs) => {
+          if (functionName === "stakeCount") return 1n;
+          if (functionName === "currentDay") return 400n;
+          // lockedDay=300, stakedDays=200 → elapsed range [300, 399] includes BPD day 353
+          if (functionName === "stakeLists")
+            return [42n, 100_000_000n, 500_000_000_000n, 300, 200, 0, false];
+          throw new Error(`unexpected function: ${functionName}`);
+        },
+      });
+      const result = await readNativeHexStakes({
+        publicClient: client,
+        walletAddress: WALLET,
+        chainId: CHAIN_ID,
+      });
+      const stake = result.stakes[0];
+      expect(stake.yield.status).toBe("unsupported");
+      expect(stake.yield.estimatedYieldHex).toBeNull();
+      expect(stake.yield.bpdYieldHex).toBeNull();
+      expect(stake.yield.bpdYieldStatus).toBeNull();
+    });
+
+    // 17. Overdue stake: elapsed days are fully resolved but yield must stay gated.
+    it("yield gate preserved for overdue stake where currentDay exceeds locked end day", async () => {
+      const client = makeClient({
+        readContract: async ({ functionName }: MockReadContractArgs) => {
+          if (functionName === "stakeCount") return 1n;
+          if (functionName === "currentDay") return 2000n;
+          // overdue: currentDay(2000) >= lockedDay(1000) + stakedDays(365) = 1365
+          if (functionName === "stakeLists")
+            return [42n, 100_000_000n, 500_000_000_000n, 1000, 365, 0, false];
+          throw new Error(`unexpected function: ${functionName}`);
+        },
+      });
+      const result = await readNativeHexStakes({
+        publicClient: client,
+        walletAddress: WALLET,
+        chainId: CHAIN_ID,
+      });
+      expect(result.stakes[0].stakeStatus).toBe("overdue");
+      const stake = result.stakes[0];
+      expect(stake.yield.status).toBe("unsupported");
+      expect(stake.yield.estimatedYieldHex).toBeNull();
+      expect(stake.yield.bpdYieldHex).toBeNull();
+      expect(stake.yield.bpdYieldStatus).toBeNull();
+    });
+
+    // 18. currentDay unavailable: stakeStatus unknown, but yield gate must still hold.
+    it("yield gate preserved when currentDay is unavailable and stakeStatus is unknown", async () => {
+      const client = makeClient({
+        readContract: async ({ functionName }: MockReadContractArgs) => {
+          if (functionName === "stakeCount") return 1n;
+          if (functionName === "currentDay") throw new Error("RPC unavailable");
+          if (functionName === "stakeLists") return NOMINAL_STAKE;
+          throw new Error(`unexpected function: ${functionName}`);
+        },
+      });
+      const result = await readNativeHexStakes({
+        publicClient: client,
+        walletAddress: WALLET,
+        chainId: CHAIN_ID,
+      });
+      expect(result.stakes[0].stakeStatus).toBe("unknown");
+      const stake = result.stakes[0];
+      expect(stake.yield.status).toBe("unsupported");
+      expect(stake.yield.estimatedYieldHex).toBeNull();
+      expect(stake.yield.bpdYieldHex).toBeNull();
+      expect(stake.yield.bpdYieldStatus).toBeNull();
+    });
+
+    // 19. Multi-stake: yield gate preserved across every stake in the list.
+    it("yield gate preserved for every stake in a multi-stake response", async () => {
+      let callCount = 0;
+      const client = makeClient({
+        readContract: async ({ functionName }: MockReadContractArgs) => {
+          if (functionName === "stakeCount") return 3n;
+          if (functionName === "currentDay") return DEFAULT_CURRENT_DAY;
+          if (functionName === "stakeLists") {
+            const idx = callCount++;
+            return [BigInt(idx + 10), 100_000_000n, 500_000_000_000n, 1000, 5555, 0, false];
+          }
+          throw new Error(`unexpected function: ${functionName}`);
+        },
+      });
+      const result = await readNativeHexStakes({
+        publicClient: client,
+        walletAddress: WALLET,
+        chainId: CHAIN_ID,
+      });
+      expect(result.stakes).toHaveLength(3);
+      for (const stake of result.stakes) {
+        expect(stake.yield.status).toBe("unsupported");
+        expect(stake.yield.estimatedYieldHex).toBeNull();
+        expect(stake.yield.bpdYieldHex).toBeNull();
+        expect(stake.yield.bpdYieldStatus).toBeNull();
+      }
+    });
+
+    // 20. Regression: serialized yield block must not contain "estimated" or non-null estimatedYieldHex.
+    it("regression: serialized stake yield block contains no estimated status and no non-null estimatedYieldHex", async () => {
+      const client = makeClient();
+      const result = await readNativeHexStakes({
+        publicClient: client,
+        walletAddress: WALLET,
+        chainId: CHAIN_ID,
+      });
+      const stake = result.stakes[0];
+      const yieldSerialized = JSON.stringify(stake.yield);
+      expect(yieldSerialized).not.toContain('"estimated"');
+      expect(yieldSerialized).not.toContain('"evidence_available"');
+      const parsed = JSON.parse(yieldSerialized) as { estimatedYieldHex: unknown };
+      expect(parsed.estimatedYieldHex).toBeNull();
+    });
+  });
 });
