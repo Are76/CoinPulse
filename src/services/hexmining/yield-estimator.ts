@@ -10,6 +10,7 @@ import type { ObservationEvidenceMetadata } from "@/services/hexmining/observati
 export type { ObservationEvidenceMetadata };
 
 const PULSECHAIN_CHAIN_ID = 369;
+const HEX_BPD_DAY = 353;
 
 // ─── Args ─────────────────────────────────────────────────────────────────────
 
@@ -295,6 +296,15 @@ export async function estimateHexMiningYield(
   const applyCalculation = deps.applyCalculation ?? defaultApplyCalculation;
   applyCalculation(packedResult.entries, args);
 
+  // 8.5. BPD attribution gate
+  // HEX Big Pay Day occurred on protocol day 353. If the elapsed range includes
+  // day 353, the observed dayPayoutTotal for that day may contain BPD bonus yield
+  // that is not yet separated from standard inflation payout per §11.4 invariant #5.
+  const bpdWarnings: string[] =
+    args.lockedDay <= HEX_BPD_DAY && elapsedEndDay >= HEX_BPD_DAY
+      ? ["hexmining-yield-bpd-attribution-unresolved"]
+      : [];
+
   // 9. Calculation proven internally; public output is evidence_available.
   // The "estimated" path is gated until public DTO wiring is approved.
   return {
@@ -308,6 +318,6 @@ export async function estimateHexMiningYield(
       rangeStartDay: evidence.rangeStartDay,
       rangeEndDay: evidence.rangeEndDay,
     },
-    warnings: evidence.warnings,
+    warnings: [...evidence.warnings, ...bpdWarnings],
   };
 }

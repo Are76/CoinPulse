@@ -1001,4 +1001,215 @@ describe("estimateHexMiningYield", () => {
       expect(result.warnings).toContain("hexmining-yield-insufficient-elapsed-day-coverage");
     });
   });
+
+  // ─── BPD attribution gate ─────────────────────────────────────────────────
+  //
+  // HEX Big Pay Day (BPD) is protocol day 353. Stakes active during day 353
+  // received a one-time bonus payout that is packed into dayPayoutTotal for that
+  // day — it is not separately identified by the §8 formula. Until BPD yield is
+  // explicitly modeled per §11.4 invariant #5, any elapsed range that includes
+  // day 353 must carry "hexmining-yield-bpd-attribution-unresolved" in warnings.
+  //
+  // The check is based on the elapsed range [lockedDay, elapsedEndDay]:
+  //   elapsedEndDay = min(currentDay − 1, lockedDay + stakedDays − 1)
+  // If lockedDay <= 353 <= elapsedEndDay, the BPD warning is added.
+
+  describe("BPD attribution gate", () => {
+    // Shared scenario: lockedDay=300, stakedDays=200, currentDay=400
+    // elapsedEndDay = min(399, 499) = 399; range [300, 399] includes BPD day 353.
+    const BPD_ARGS: HexMiningYieldEstimateArgs = {
+      ...BASE_ARGS,
+      lockedDay: 300,
+      stakedDays: 200,
+      currentDay: 400,
+      rangeStartDay: 300,
+      rangeEndDay: 399,
+    };
+
+    function makeBpdEvidence(overrides: Partial<Parameters<typeof makeEvidence>[0]> = {}) {
+      return makeEvidence({ rangeStartDay: 300, rangeEndDay: 399, ...overrides });
+    }
+
+    // ── Test 1: BPD-spanning range → evidence_available with BPD warning ─
+
+    it("stake spanning BPD day 353 returns evidence_available with bpd-attribution-unresolved warning", async () => {
+      const deps = makeDeps(makeBpdEvidence());
+      const result = await estimateHexMiningYield(BPD_ARGS, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
+    });
+
+    // ── Test 2: non-BPD range → no BPD warning ────────────────────────
+
+    it("stake not spanning BPD day 353 returns evidence_available without BPD warning", async () => {
+      // BASE_ARGS: lockedDay=1000, so BPD day 353 is far before this stake
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield(BASE_ARGS, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+      expect(result.warnings).not.toContain("hexmining-yield-bpd-attribution-unresolved");
+    });
+
+    // ── Test 3: public status is never "estimated" for BPD-spanning range ─
+
+    it("BPD-spanning range never returns estimated status or non-null yieldHex", async () => {
+      const deps = makeDeps(makeBpdEvidence());
+      const result = await estimateHexMiningYield(BPD_ARGS, deps);
+
+      expect(result.status).not.toBe("estimated");
+      expect(result.yieldHex).toBeNull();
+    });
+
+    // ── Test 4: applyCalculation is called internally for BPD-spanning range ─
+
+    it("BPD-spanning range still calls applyCalculation internally, result not surfaced publicly", async () => {
+      const applyCalculation: Mock = vi.fn().mockReturnValue({
+        status: "calculation_not_implemented" as const,
+      });
+      const deps = { ...makeDeps(makeBpdEvidence()), applyCalculation };
+      const result = await estimateHexMiningYield(BPD_ARGS, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.yieldHex).toBeNull();
+      expect(applyCalculation).toHaveBeenCalledOnce();
+      expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
+    });
+
+    // ── Test 5: coverage failure short-circuits before BPD check ─────────
+
+    it("coverage failure for BPD-spanning range short-circuits without BPD warning", async () => {
+      // Evidence starts at 301, missing lockedDay=300 → insufficient_observations
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 301, rangeEndDay: 399 }));
+      const result = await estimateHexMiningYield(BPD_ARGS, deps);
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.warnings).toContain("hexmining-yield-insufficient-elapsed-day-coverage");
+      expect(result.warnings).not.toContain("hexmining-yield-bpd-attribution-unresolved");
+    });
+
+    // ── Test 6: no-elapsed-days for BPD-spanning stake → no BPD warning ──
+
+    it("no-elapsed-days short-circuit for BPD-spanning stake does not include BPD warning", async () => {
+      // currentDay=300 == lockedDay=300: no elapsed days → short-circuits at step 5.5
+      const deps = makeDeps();
+      const result = await estimateHexMiningYield({ ...BPD_ARGS, currentDay: 300 }, deps);
+
+      expect(result.status).toBe("insufficient_observations");
+      expect(result.warnings).toContain("hexmining-yield-no-elapsed-days");
+      expect(result.warnings).not.toContain("hexmining-yield-bpd-attribution-unresolved");
+    });
+
+    // ── Test 7: stake starting exactly on BPD day 353 → BPD warning ─────
+
+    it("stake starting exactly on BPD day 353 includes BPD warning", async () => {
+      // lockedDay=353, stakedDays=100, currentDay=460
+      // elapsedEndDay = min(459, 452) = 452; range [353, 452] includes day 353
+      const args: HexMiningYieldEstimateArgs = {
+        ...BASE_ARGS,
+        lockedDay: 353,
+        stakedDays: 100,
+        currentDay: 460,
+        rangeStartDay: 353,
+        rangeEndDay: 459,
+      };
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 353, rangeEndDay: 459 }));
+      const result = await estimateHexMiningYield(args, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
+    });
+
+    // ── Test 8: stake ending exactly on BPD day 353 → BPD warning ───────
+
+    it("stake ending exactly on BPD day 353 includes BPD warning", async () => {
+      // lockedDay=300, stakedDays=54, stakeEndDay = 300 + 54 − 1 = 353
+      // currentDay=400, elapsedEndDay = min(399, 353) = 353; range [300, 353] includes day 353
+      const args: HexMiningYieldEstimateArgs = {
+        ...BASE_ARGS,
+        lockedDay: 300,
+        stakedDays: 54,
+        currentDay: 400,
+        rangeStartDay: 300,
+        rangeEndDay: 399,
+      };
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 300, rangeEndDay: 399 }));
+      const result = await estimateHexMiningYield(args, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
+    });
+
+    // ── Test 9: stake ending one day before BPD (day 352) → no warning ──
+
+    it("stake whose elapsed range ends on day 352 does not include BPD warning", async () => {
+      // lockedDay=300, stakedDays=53, stakeEndDay = 300 + 53 − 1 = 352
+      // currentDay=400, elapsedEndDay = min(399, 352) = 352; range [300, 352] excludes day 353
+      const args: HexMiningYieldEstimateArgs = {
+        ...BASE_ARGS,
+        lockedDay: 300,
+        stakedDays: 53,
+        currentDay: 400,
+        rangeStartDay: 300,
+        rangeEndDay: 399,
+      };
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 300, rangeEndDay: 399 }));
+      const result = await estimateHexMiningYield(args, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.warnings).not.toContain("hexmining-yield-bpd-attribution-unresolved");
+    });
+
+    // ── Test 10: stake starting one day after BPD (day 354) → no warning ─
+
+    it("stake starting one day after BPD day 354 does not include BPD warning", async () => {
+      // lockedDay=354, elapsedEndDay = min(459, 453) = 453; range [354, 453] excludes day 353
+      const args: HexMiningYieldEstimateArgs = {
+        ...BASE_ARGS,
+        lockedDay: 354,
+        stakedDays: 100,
+        currentDay: 460,
+        rangeStartDay: 354,
+        rangeEndDay: 459,
+      };
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 354, rangeEndDay: 459 }));
+      const result = await estimateHexMiningYield(args, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.warnings).not.toContain("hexmining-yield-bpd-attribution-unresolved");
+    });
+
+    // ── Test 11: elapsed range has not yet reached BPD → no warning ─────
+
+    it("stake that spans BPD but elapsed range has not yet reached day 353 has no BPD warning", async () => {
+      // lockedDay=300, stakedDays=200, currentDay=350
+      // elapsedEndDay = min(349, 499) = 349; range [300, 349] has not yet reached day 353
+      const args: HexMiningYieldEstimateArgs = {
+        ...BASE_ARGS,
+        lockedDay: 300,
+        stakedDays: 200,
+        currentDay: 350,
+        rangeStartDay: 300,
+        rangeEndDay: 349,
+      };
+      const deps = makeDeps(makeEvidence({ rangeStartDay: 300, rangeEndDay: 349 }));
+      const result = await estimateHexMiningYield(args, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.warnings).not.toContain("hexmining-yield-bpd-attribution-unresolved");
+    });
+
+    // ── Test 12: upstream evidence warnings preserved alongside BPD warning ─
+
+    it("BPD warning is appended to upstream evidence warnings, not a replacement", async () => {
+      const deps = makeDeps(makeBpdEvidence({ warnings: ["hexmining-some-upstream-warning"] }));
+      const result = await estimateHexMiningYield(BPD_ARGS, deps);
+
+      expect(result.status).toBe("evidence_available");
+      expect(result.warnings).toContain("hexmining-some-upstream-warning");
+      expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
+    });
+  });
 });
