@@ -1,8 +1,8 @@
 # V2 HexMining Roadmap
 
-**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208, #209, #210 merged; dailyData uint256 packed bit layout verified and documented (`docs/hex-dailydata-packing-spec.md`); blocked pending ABI fix in `daily-data-reader.ts` (`uint72[]` → `uint256[]`) — see §11.13.
+**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208–#221 merged; yield formula implemented (§8 test vectors A–E pass); public estimated yield intentionally gated: `estimateHexMiningYield` always returns `evidence_available` with `yieldHex: null` for valid evidence; `"estimated"` path requires a separate future DTO/API contract approval — see §11.14.
 **Created:** 2026-06-06
-**Last updated:** 2026-06-09 (Phase 4C partial progress — PRs #208, #209, #210 merged; bit layout verified; new blocker: ABI discrepancy `uint72[]` → `uint256[]` in `daily-data-reader.ts` — see §11.13)
+**Last updated:** 2026-06-10 (Phase 4C gating decision — PRs #220 and #221 merged; yield formula runs internally but public output is gated at `evidence_available`; see §11.14)
 
 ## Phase completion status
 
@@ -14,7 +14,7 @@
 | Phase 3 | HexMining page shell / unsupported valuation display | ✅ Complete — merged PRs #192, #193 |
 | Phase 4A | Observation persistence, status API, and operator surface | ✅ Complete — merged PRs #199–#202 |
 | Phase 4B | dailyDataRange read boundary, persistence wiring, and gated operator route | ✅ Complete — merged PRs #204, #205, #206 |
-| Phase 4C | Yield estimation and DTO wiring | ⚠️ In progress (blocked) — PRs #208, #209, #210 merged; bit layout verified (`docs/hex-dailydata-packing-spec.md`); blocked pending ABI fix in `daily-data-reader.ts` (`uint72[]` → `uint256[]`) — see §11.13 |
+| Phase 4C | Yield estimation and DTO wiring | ⚠️ In progress — PRs #208–#221 merged; yield formula implemented (§8 test vectors A–E); public estimated yield intentionally gated at `evidence_available` — see §11.14 |
 | Phase 5 | Ended stake discovery | 🔲 Not started |
 | Phase 6 | HSI and HTT source families | 🔲 Not started |
 | Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
@@ -512,6 +512,15 @@ This section documents the decisions that must be resolved or explicitly framed 
 | #209 | `feat(hexmining): add yield observation evidence provider` | `src/services/hexmining/observation-evidence-provider.ts` (new), `tests/services/hexmining/observation-evidence-provider.test.ts` (new); `getObservationEvidenceForRange(args, deps)` queries persisted `RawHexDailyDataObservation` rows; returns `ObservationEvidenceMetadata` (no `canonicalPayload`/`payloadHash`/`rawDailyData` exposure); `payloadSchemaValid` flag from internal decode; chain guard (369 only); DB mock tests; no RPC |
 | #210 | `feat(hexmining): add dailyData payload decoder` | `src/services/hexmining/daily-data-payload-decoder.ts` (new), `tests/services/hexmining/daily-data-payload-decoder.test.ts` (new); `decodeDailyDataPayload(canonicalPayload)` parses `{ schemaVersion: "v1", dailyData: [...] }` canonical payload; rejects numeric JSON values (§11.8), invalid root, missing fields; returns `readonly bigint[]`; 31 tests; **no packed uint72 decoding — each entry remains a raw packed bigint** |
 | #211 | `docs(hexmining): record dailyData bit layout blocker` | `docs/v2-hexmining-roadmap.md` only; §11.13 added — full blocker record for packed decoder (what is complete, what is blocked, why, field-name clarification, guardrail, acceptance criteria); §12 updated with blocker state and unblocking path; Phase completion table and header updated for Phase 4C in-progress/blocked |
+| #212 | `docs(hexmining): record verified dailyData uint256 packed bit layout and ABI discrepancy` | `docs/hex-dailydata-packing-spec.md` (new), `docs/v2-hexmining-roadmap.md` (updated) — full bit layout specification from three independent sources (on-chain ABI authoritative, JamJomJim/HEX.sol, kbahr/HexUtilities.sol); verified field layout table; TypeScript unpack formula; four deterministic test vectors; ABI discrepancy finding (§5); §11.13 updated with layout verified/ABI blocker |
+| #213 | `fix(hexmining): correct dailyDataRange ABI from uint72[] to uint256[]` | `src/services/hexmining/daily-data-reader.ts` line 14: `uint72[]` → `uint256[]`; `rawDailyData` comment updated; ABI discrepancy resolved; no schema, no test logic, no re-acquisition required |
+| #214 | `feat(hexmining): add dailyData packed uint256 entry decoder` | `src/services/hexmining/daily-data-packed-decoder.ts` (new), `tests/services/hexmining/daily-data-packed-decoder.test.ts` (new); `decodePackedDailyDataRange(packedValues: readonly bigint[])` returning `DecodedDailyDataEntry[]` with `dayPayoutTotal`, `dayStakeSharesTotal`, `dayUnclaimedSatoshisTotal` bigint fields; rejects negative or out-of-200-bit-range values; bit layout from `docs/hex-dailydata-packing-spec.md §2`; no yield math |
+| #215 | `feat(hexmining): wire payload and packed decoders into yield estimator` | `src/services/hexmining/yield-estimator.ts` (updated); wires `decodeDailyDataPayload` (step 6) and `decodePackedDailyDataRange` (step 7) into `estimateHexMiningYield` pipeline; `EvidenceWithPayload` type carries `canonicalPayload` internally (never surfaced); `yield-estimator.test.ts` updated with decoder wiring tests |
+| #216 | `feat(hexmining): add internal yield calculation boundary scaffold` | `src/services/hexmining/yield-estimator.ts` (updated); `defaultApplyCalculation` internal function scaffold (returns `calculation_not_implemented`); `YieldCalculationResult` internal type (`estimated \| calculation_not_implemented \| insufficient_formula_evidence`); injectable `applyCalculation` dep in `HexMiningYieldEstimatorDeps`; `yield-estimator.test.ts` updated |
+| #217 | `feat(hexmining): wire stakeShares into HexMiningYieldEstimateArgs` | `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated); `stakeShares: bigint` added to `HexMiningYieldEstimateArgs`; `stakeShares <= 0n` validation guard (returns `invalid_observation` with `hexmining-yield-invalid-stake-shares` warning) |
+| #218 | `docs(hexmining): add yield formula test vectors to packing spec` | `docs/hex-dailydata-packing-spec.md §8` (new section) — deterministic yield formula specification: per-day formula `(stakeShares × dayPayoutTotal) / dayStakeSharesTotal` (bigint floor, multiply-first, zero-division guard); five test vectors A–E covering single-day, multi-day, zero-shares guard, overflow-resistant multiply-first order, and large stakeShares; `docs/v2-hexmining-roadmap.md §11.10 Step 3` updated with "Prerequisite resolved (PR #218)" |
+| #220 | `feat(hexmining): implement deterministic yield formula (§8 test vectors)` | `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated); `defaultApplyCalculation` implements §8 formula — `Σ (stakeShares × dayPayoutTotal) / dayStakeSharesTotal` (bigint floor, multiply-first, `dayStakeSharesTotal === 0n` skip guard); §8 test vectors A–E verified via injectable `applyCalculation` |
+| #221 | `feat(hexmining): Phase 4C — wire yield estimate into HexStakeDto` (scope-corrected) | `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated); **public output gated**: `estimateHexMiningYield` always returns `evidence_available` with `yieldHex: null` for valid evidence; `applyCalculation` runs at step 8 (internal pipeline proof) but its return value is not used in public output; `"estimated"` and non-null `yieldHex` require a separate future DTO/API contract approval PR — see §11.14 |
 
 Post-merge audit (2026-06-08, after PR #202): all 1354 tests pass, lint clean, typecheck clean, build clean, no guardrail violations.
 
@@ -520,6 +529,8 @@ Post-merge audit (2026-06-08, after PR #206): all 1421 tests pass, lint clean, t
 Post-merge audit (2026-06-09, after PR #210): tests pass, lint clean, typecheck clean, build clean, no guardrail violations. Phase 4C partial — packed uint72 decoder blocked (see §11.13).
 
 Post-merge audit (2026-06-09, after PR #211): docs-only; lint clean, typecheck clean. Bit layout still unverified at this audit point (blocker record added, evidence PR pending).
+
+Post-merge audit (2026-06-10, after PR #221): 1539 tests pass, lint clean, typecheck clean, build clean, no guardrail violations. Phase 4C formula implementation merged and gated — `estimateHexMiningYield` runs `applyCalculation` internally but public output is `evidence_available` (see §11.14).
 
 ---
 
@@ -804,25 +815,31 @@ No step may be skipped. No yield calculation reaches production before Step 3 (P
 - No yield calculation, no APY, no pricing, valuation, PnL, no schema/migration, no frontend.
 - `canonicalPayload`, `rawDailyData`, and `payloadHash` are never exposed through any DTO or API response.
 
-**Step 3 — Yield estimation PR (Phase 4C) — PARTIAL PROGRESS / BLOCKED**
+**Step 3 — Yield estimation PR (Phase 4C) — FORMULA IMPLEMENTED / PUBLIC OUTPUT GATED**
 
-Phase 4C has begun. Three bounded PRs are merged:
-- PR #208: yield estimator contract (`estimateHexMiningYield`) — statuses, deps, provenance; no yield math.
-- PR #209: observation evidence provider (`getObservationEvidenceForRange`) — reads persisted rows, returns `ObservationEvidenceMetadata`; no `canonicalPayload` exposure.
-- PR #210: canonical payload decoder (`decodeDailyDataPayload`) — parses `{ schemaVersion: "v1", dailyData: [...] }` to `readonly bigint[]`; no packed uint72 decoding.
+Phase 4C formula pipeline is complete and merged. The following PRs have landed:
 
-**Bit layout verified:** `docs/hex-dailydata-packing-spec.md` documents the verified uint256 packed layout from three independent sources (on-chain ABI, JamJomJim/HEX.sol gist, kbahr/HexUtilities.sol gist). Packed decoder implementation is now layout-unblocked.
+| PR | What was delivered |
+|---|---|
+| #208 | yield estimator contract (`estimateHexMiningYield`) — statuses, deps, provenance; no yield math |
+| #209 | observation evidence provider (`getObservationEvidenceForRange`) — reads persisted rows, returns `ObservationEvidenceMetadata`; no `canonicalPayload` exposure |
+| #210 | canonical payload decoder (`decodeDailyDataPayload`) — parses `{ schemaVersion: "v1", dailyData: [...] }` to `readonly bigint[]` |
+| #212 | bit layout specification in `docs/hex-dailydata-packing-spec.md`; ABI discrepancy record |
+| #213 | ABI fix — `daily-data-reader.ts` `uint72[]` → `uint256[]` |
+| #214 | packed uint256 entry decoder (`decodePackedDailyDataRange`) — `DecodedDailyDataEntry[]` |
+| #215 | decoder wiring — payload decode (step 6) and packed decode (step 7) wired into `estimateHexMiningYield` |
+| #216 | internal calculation boundary scaffold — injectable `applyCalculation` dep; `YieldCalculationResult` type |
+| #217 | `stakeShares: bigint` added to `HexMiningYieldEstimateArgs`; `stakeShares <= 0n` guard |
+| #218 | §8 yield formula test vectors documented in `docs/hex-dailydata-packing-spec.md` |
+| #220 | `defaultApplyCalculation` implements §8 formula — `Σ (stakeShares × dayPayoutTotal) / dayStakeSharesTotal`; §8 vectors A–E verified |
+| #221 | **public output gated** — `applyCalculation` runs internally at step 8 (pipeline proof) but result is not used in public output; public function always returns `evidence_available` with `yieldHex: null` |
 
-**Current blocker (ABI discrepancy):** `src/services/hexmining/daily-data-reader.ts` line 14 declares `returns (uint72[] list)` but the actual contract returns `uint256[]`. The ABI declaration is factually incorrect. Verified locally: viem does not truncate — it returns the full BigInt for both `uint72[]` and `uint256[]` declarations (see `docs/hex-dailydata-packing-spec.md` §5). Stored `canonicalPayload` rows are correct and contain all three fields. The ABI must still be fixed for code correctness and interoperability safety before the packed decoder PR opens. See §11.13.
+**Current public behavior (after PR #221):** `estimateHexMiningYield` calls `applyCalculation(packedResult.entries, args)` internally at step 8 (the calculation runs and is proven via injectable dep in tests), then always returns `status: "evidence_available"`, `yieldHex: null` at step 9. The `"estimated"` and non-null `yieldHex` paths exist in the `HexMiningYieldEstimateResult` type for forward compatibility but are not currently returned by the function. See §11.14 for the gating decision record.
 
-**Remaining scope (once ABI fix is merged):**
-- Packed uint256 field decoder (`src/services/hexmining/daily-data-packed-decoder.ts`).
-- Yield formula consuming decoded fields per §11.4 and §11.9.
-- Elapsed-days-only coverage rule and canonical-selection policy (§11.8).
+**Remaining scope (Step 3 work not yet implemented):**
+- Elapsed-days-only coverage rule (range check against stake's `lockedDay` through `min(currentDay, lockedDay + stakedDays - 1)`).
 - Big Pay Day modelling with `bpdYieldStatus` / `bpdYieldHex` per §11.4 invariant #5.
-- Files in scope: `src/services/hexmining/`, `tests/services/hexmining/`.
-
-**Prerequisite resolved (PR #218):** Deterministic yield formula test vectors are now documented in `docs/hex-dailydata-packing-spec.md §8`. The yield formula implementation may proceed once unit tests using those vectors are written and pass.
+- These items are not blocked — they are deferred to a future PR that also lifts the public output gate (Step 4 or a Step 3 continuation PR with explicit DTO/API contract approval).
 
 **Step 4 — Yield DTO wiring and API route update PR**
 `feat(hexmining): wire estimated yield fields into HexStakeDto and API route`
@@ -1100,51 +1117,130 @@ Original criteria status after this PR:
 - No re-acquisition of stored observations required — viem already returns full packed uint256 values with either ABI declaration (verified, see `docs/hex-dailydata-packing-spec.md` §5).
 - The packed decoder PR must cite `docs/hex-dailydata-packing-spec.md` in the PR body.
 
+> **Note (2026-06-10):** All criteria in the table above are now resolved. The ABI was fixed in PR #213, the packed decoder was added in PR #214, and the yield formula was implemented in PR #220. The acceptance criteria table reflects the state at the time §11.13 was written (PR #212). See §11.14 for the current Phase 4C gating decision.
+
+---
+
+### 11.14 Phase 4C yield-estimation gating decision
+
+**Status: ACTIVE POLICY — public estimated yield intentionally gated after PRs #220 and #221.**
+
+---
+
+#### Decision
+
+After PR #221, `estimateHexMiningYield` in `src/services/hexmining/yield-estimator.ts` **never** returns `status: "estimated"` or a non-null `yieldHex` publicly. For any valid evidence path (all pipeline steps 1–8 succeed), the public return is always:
+
+```typescript
+{
+  status: "evidence_available",
+  schemaVersion: "v1",
+  yieldHex: null,
+  provenance: { ... },
+  warnings: evidence.warnings,
+}
+```
+
+#### What runs internally
+
+The injectable `applyCalculation` dep (defaulting to `defaultApplyCalculation`) is invoked at step 8:
+
+```typescript
+const applyCalculation = deps.applyCalculation ?? defaultApplyCalculation;
+applyCalculation(packedResult.entries, args);  // runs, return value not used
+```
+
+`defaultApplyCalculation` implements the §8 formula:
+
+```
+Σ (stakeShares × dayPayoutTotal) / dayStakeSharesTotal   (bigint floor; multiply-first)
+dayStakeSharesTotal === 0n → 0n contribution (zero-division guard)
+```
+
+The formula runs internally and is verified via injectable `applyCalculation` in `tests/services/hexmining/yield-estimator.test.ts` (§8 test vectors A–E). However, its return value (`{ status: "estimated", yieldHex: string }`) is **not** used in the public return path at step 9. This is intentional.
+
+#### Why the gate exists
+
+Surfacing `status: "estimated"` and a non-null `yieldHex` to callers requires:
+
+1. Explicit DTO contract approval: the `HexStakeDto.yield` field shape must be finalised (elapsed-days-only coverage rule, BPD attribution, provenance completeness per §11.9).
+2. API route wiring: `GET /api/hexmining/stakes` must explicitly opt in to assembling yield from `estimateHexMiningYield`.
+3. Separate PR scope: changes to `reader.ts`, `route.ts`, and `types.ts` are out of scope for the formula implementation PR.
+
+Merging the formula ahead of these decisions is safe precisely because the public output is gated. Internal pipeline correctness (steps 6–8) is proven without coupling to the DTO/API contract.
+
+#### Files affected by the gate
+
+| File | Gate role |
+|---|---|
+| `src/services/hexmining/yield-estimator.ts` | Step 9 always returns `evidence_available`; `applyCalculation` called but result ignored |
+| `tests/services/hexmining/yield-estimator.test.ts` | §8 vectors verify formula via injectable dep; no public `yieldHex` assertions |
+
+#### Files that must NOT be changed to lift the gate
+
+The following files must remain at their `origin/main` state (as of PR #221) until the gate is explicitly lifted in a separate approved PR:
+
+| File | Constraint |
+|---|---|
+| `src/services/hexmining/reader.ts` | `yield: { status: "unsupported", ... }` hardcoded; no `fetchYieldEvidence` dep |
+| `app/api/hexmining/stakes/route.ts` | No yield evidence fetch; calls `readNativeHexStakes` without yield wiring |
+| `src/services/hexmining/observation-evidence-provider.ts` | No `EvidenceWithCanonicalPayload` export; no `getObservationEvidenceWithPayloadForRange` |
+| `tests/services/hexmining/reader.test.ts` | 15 original tests only; no yield wiring tests |
+
+#### How to lift the gate
+
+A future PR may promote `"estimated"` into the public output **only** when all of the following are satisfied in that same PR:
+
+1. Elapsed-days-only coverage rule is enforced (`rangeStartDay = lockedDay`, `rangeEndDay = min(currentDay, lockedDay + stakedDays - 1)`).
+2. BPD attribution is modelled (`bpdYieldStatus`, `bpdYieldHex` per §11.4 invariant #5).
+3. All §11.9 provenance fields are populated.
+4. `HexStakeDto.yield` field assembly in `reader.ts` is updated.
+5. `GET /api/hexmining/stakes` route is updated.
+6. Contract tests cover the full estimated-yield DTO path.
+
+These are Step 4 requirements (§11.10). No partial lift is permitted: the gate must remain in place until all six conditions are met in a single approved PR.
+
+#### On "do not discard the calculation result" review comments
+
+Review comments that suggest the calculation result should be forwarded to the public DTO without a separate contract approval are **scope-dependent** and are **not automatically accepted**. The formula is correct (§8 test vectors pass). The question of whether and how to surface it publicly is a separate design decision governed by §11.4, §11.9, and Step 4 of §11.10. Discarding the return value at step 9 is intentional policy, not an oversight.
+
+#### Internal evidence vs. public DTO behavior
+
+The `docs/hex-dailydata-packing-spec.md §8` formula documentation and test vectors are **internal calculation evidence**. They prove that `defaultApplyCalculation` is correct. They do not specify or imply the shape of the public `HexStakeDto.yield` DTO, the API route response, or any frontend display format. Those are Step 4 concerns.
+
 ---
 
 ## 12. Proposed Next PR (updated)
 
 **Phase 4B is complete.** PRs #204, #205, and #206 delivered the full read boundary, persistence wiring, and gated operator route.
 
-**Phase 4C is in progress.** PRs #208, #209, and #210 delivered the yield estimator contract, observation evidence provider, and canonical payload decoder. The uint256 packed bit layout is now verified and documented in `docs/hex-dailydata-packing-spec.md`. The packed decoder is blocked pending one ABI fix.
+**Phase 4C formula pipeline is complete and gated.** PRs #208–#221 have delivered the full yield estimation pipeline internally. The formula runs and is verified. The public output is intentionally gated at `evidence_available` — see §11.14.
 
-**Immediate next step: fix ABI declaration in `daily-data-reader.ts`**
+**Immediate next step: Step 3 continuation or Step 4 — yield DTO wiring**
 
-```text
-fix(hexmining): correct dailyDataRange ABI declaration from uint72[] to uint256[]
-```
-
-- Single-line change: `daily-data-reader.ts` line 14, `uint72[]` → `uint256[]`.
-- Update the `rawDailyData` comment in `DailyDataObservation` from "uint72 packed" to "uint256 packed".
-- No schema changes. No frontend changes. No migration. No re-acquisition of stored observations.
-- Note: viem does not truncate with the wrong ABI (verified locally); existing `canonicalPayload` rows are correct. The fix is for code correctness and interoperability safety.
-
-**After ABI fix — packed decoder PR:**
+The next PR must satisfy all of the following before lifting the `evidence_available` gate:
 
 ```text
-feat(hexmining): add dailyData packed decoder
+feat(hexmining): wire estimated yield fields into HexStakeDto and API route
 ```
 
-- New `decodePackedDailyDataEntry(packedValue: bigint)` function in `src/services/hexmining/daily-data-packed-decoder.ts`.
-- Accepts a single packed uint256 bigint from `decodeDailyDataPayload` output.
-- Returns named bigint-safe fields: `dayPayoutTotal`, `dayStakeSharesTotal`, `dayUnclaimedSatoshisTotal`.
-- Rejects negative bigints and values exceeding 200 significant bits.
-- Bit layout sourced from `docs/hex-dailydata-packing-spec.md` — cite in PR body.
-- Deterministic unit tests using the four test vectors in `docs/hex-dailydata-packing-spec.md` §4.
-- No yield formula. No APY. No pricing, valuation, or PnL.
+- Elapsed-days-only coverage rule: compute `rangeStartDay = lockedDay`, `rangeEndDay = min(currentDay, lockedDay + stakedDays - 1)`.
+- BPD day-353 range check: set `bpdYieldStatus: "applicable" | "not_applicable"` and `bpdYieldHex` per §11.4 invariant #5.
+- All §11.9 provenance fields populated before `yield.status: "estimated"` is returned.
+- Update `HexStakeDto` yield field assembly in `reader.ts` to call `estimateHexMiningYield` and map result.
+- Update `GET /api/hexmining/stakes` route to wire `fetchEvidence` dep.
+- Contract tests for the full DTO including estimated yield fields.
+- `valuation.status` and `pnl.status` remain `"unsupported"` — unchanged.
 
-**What must NOT happen before the ABI fix is merged:**
-- No packed decoder implementation.
-- No yield formula or APY.
-- No pricing, valuation, or PnL.
-- No API route changes or new routes.
-- No frontend changes, React hooks, or TanStack Query hooks.
-- No new Prisma schema or migrations.
-- No live RPC calls from yield logic.
+**What must NOT happen without a gate-lift PR:**
+- No direct change to steps 8–9 of `estimateHexMiningYield` to return `"estimated"` without the above prerequisites.
+- No reader.ts or route.ts yield wiring without the coverage rule and BPD modelling.
+- No partial gate lift (e.g., surfacing `yieldHex` without provenance completeness).
+- No frontend changes, React hooks, or TanStack Query hooks for yield until Step 4 is merged.
 - No `canonicalPayload` exposure in any DTO or API response.
 - No `valuation.status` or `pnl.status` changes (remain `"unsupported"` until Phase 7).
 
-See §11.13 for the full blocker record, verification evidence, and acceptance criteria.
+See §11.14 for the gating decision and the full list of gate-lift prerequisites.
 
 ---
 
@@ -1181,10 +1277,22 @@ See §11.13 for the full blocker record, verification evidence, and acceptance c
 - `npm run lint` — passed, no ESLint errors.
 - `npm run typecheck` — passed, no type errors.
 
-**This PR (docs/hexmining-dailydata-bit-layout-evidence-2 — docs only):**
+**PR #212 (docs/hexmining-dailydata-bit-layout-evidence-2 — docs only):**
 - `git diff --check` — passed, no trailing whitespace.
 - `npm run lint` — passed, no ESLint errors.
 - `npm run typecheck` — passed, no type errors.
+
+**PR #220 (feat/hexmining-yield-formula):**
+- `npm run test` — 1539 tests, all passed. §8 test vectors A–E verified via injectable `applyCalculation`.
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
+- `npm run build` — passed, all routes compiled cleanly.
+
+**PR #221 (feat/hexmining-yield-estimate-gating — scope-corrected, docs-only companion: this PR):**
+- `npm run test` — 1539 tests, all passed. `estimateHexMiningYield` returns `evidence_available` for all valid-evidence paths.
+- `npm run lint` — passed, no ESLint errors.
+- `npm run typecheck` — passed, no type errors.
+- `npm run build` — passed, all routes compiled cleanly.
 
 ---
 
@@ -1258,10 +1366,56 @@ See §11.13 for the full blocker record, verification evidence, and acceptance c
 - **What changed:** Document header and Phase completion table updated for Phase 4C in-progress/blocked; §11.1 extended with PRs #207–#210 and post-merge audit; §11.10 Step 3 updated with partial progress and blocker; §11.13 added — full blocker record for packed uint72 decoder (what is complete, what is blocked, why, clarification on field-name references, guardrail, acceptance criteria); §12 updated with blocker state and unblocking path; Final Status extended.
 - **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
 
-**This PR (docs/hexmining-dailydata-bit-layout-evidence-2):**
+**PR #212 (docs/hexmining-dailydata-bit-layout-evidence-2) — merged:**
 - **Branch:** `docs/hexmining-dailydata-bit-layout-evidence-2`
 - **Changed files:** `docs/hex-dailydata-packing-spec.md` (new), `docs/v2-hexmining-roadmap.md` (updated)
-- **What changed:** `docs/hex-dailydata-packing-spec.md` — full bit layout specification from three independent sources (on-chain ABI authoritative, two corroborating Solidity gists); verified field layout table; TypeScript unpacking formula; four deterministic test vectors; critical ABI discrepancy finding (§5); §6 summary table. `docs/v2-hexmining-roadmap.md` — §11.1 extended with PR #211 and post-merge audit; §11.10 Step 3 updated to reflect layout verified and new ABI blocker; §11.13 updated — status changed from "BLOCKED — bit layout not verified" to "LAYOUT VERIFIED — ABI discrepancy blocker"; "Why blocked" section replaced with layout verification evidence table and ABI discrepancy impact table; guardrail updated; acceptance criteria updated with met/unmet status per item; §12 changed from "obtain bit layout evidence" to "fix ABI declaration `uint72[]` → `uint256[]`" with next two bounded PR descriptions; Validation Notes and Final Status extended.
+- **What changed:** `docs/hex-dailydata-packing-spec.md` — full bit layout specification from three independent sources (on-chain ABI authoritative, two corroborating Solidity gists); verified field layout table; TypeScript unpacking formula; four deterministic test vectors; critical ABI discrepancy finding (§5); §6 summary table. `docs/v2-hexmining-roadmap.md` — §11.1 extended with PR #211 and post-merge audit; §11.10 Step 3 updated to reflect layout verified and new ABI blocker; §11.13 updated with verification evidence and ABI blocker.
 - **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
-- **Merge requirement:** None blocking. Phase 4C packed decoder work remains blocked pending the ABI fix in `daily-data-reader.ts` (single line: `uint72[]` → `uint256[]`). Re-acquisition of affected observations also required after ABI fix.
+
+**PR #213 (fix/hexmining-abi-correction) — merged:**
+- **Changed files:** `src/services/hexmining/daily-data-reader.ts`
+- **What changed:** Line 14 `uint72[]` → `uint256[]`; `rawDailyData` comment updated to "uint256 packed". Single-line ABI fix; no schema, no migration, no re-acquisition required.
+- **PR status:** FIX — source only
+
+**PR #214 (feat/hexmining-packed-decoder) — merged:**
+- **Changed files:** `src/services/hexmining/daily-data-packed-decoder.ts` (new), `tests/services/hexmining/daily-data-packed-decoder.test.ts` (new)
+- **What changed:** `decodePackedDailyDataRange(packedValues: readonly bigint[])` returning `DecodedDailyDataEntry[]` with `dayPayoutTotal`, `dayStakeSharesTotal`, `dayUnclaimedSatoshisTotal` bigint fields; rejects negative/out-of-200-bit-range values; bit layout from `docs/hex-dailydata-packing-spec.md §2`; deterministic tests using §4 vectors. No yield math.
+- **PR status:** FEAT — service only
+
+**PR #215 (feat/hexmining-yield-estimator-decoder-wiring) — merged:**
+- **Changed files:** `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated)
+- **What changed:** Steps 6–7 wired into `estimateHexMiningYield`: `decodeDailyDataPayload` (step 6) and `decodePackedDailyDataRange` (step 7); `EvidenceWithPayload` internal type carries `canonicalPayload` (never surfaced); decoder failure paths return `invalid_observation`.
+- **PR status:** FEAT — service only
+
+**PR #216 (feat/hexmining-yield-calculation-boundary) — merged:**
+- **Changed files:** `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated)
+- **What changed:** `YieldCalculationResult` internal type; `defaultApplyCalculation` scaffold (returns `calculation_not_implemented`); injectable `applyCalculation` dep added to `HexMiningYieldEstimatorDeps`; step 8 calls `applyCalculation`.
+- **PR status:** FEAT — service only
+
+**PR #217 (feat/hexmining-stake-shares-arg) — merged:**
+- **Changed files:** `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated)
+- **What changed:** `stakeShares: bigint` added to `HexMiningYieldEstimateArgs`; `stakeShares <= 0n` validation guard at step 1.5 returns `invalid_observation` with `hexmining-yield-invalid-stake-shares` warning.
+- **PR status:** FEAT — service only
+
+**PR #218 (docs/hexmining-yield-formula-test-vectors-spec) — merged:**
+- **Changed files:** `docs/hex-dailydata-packing-spec.md` (updated — §8 added), `docs/v2-hexmining-roadmap.md` (updated — §11.10 Step 3 "Prerequisite resolved" note)
+- **What changed:** §8 yield formula specification: per-day `(stakeShares × dayPayoutTotal) / dayStakeSharesTotal` (bigint floor, multiply-first, zero-division guard); five deterministic test vectors A–E; §11.10 Step 3 updated with prerequisite-resolved note.
+- **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
+
+**PR #220 (feat/hexmining-yield-formula) — merged:**
+- **Changed files:** `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated)
+- **What changed:** `defaultApplyCalculation` implements §8 formula — `Σ (stakeShares × dayPayoutTotal) / dayStakeSharesTotal` (bigint floor, multiply-first, `dayStakeSharesTotal === 0n` skip); §8 test vectors A–E verified via injectable `applyCalculation` that captures decoded entries; 1539 tests pass.
+- **PR status:** FEAT — service only
+
+**PR #221 (feat/hexmining-yield-estimate-gating — scope-corrected) — merged:**
+- **Branch:** `claude/v2-hexmining-roadmap-O56OV`
+- **Changed files:** `src/services/hexmining/yield-estimator.ts` (updated), `tests/services/hexmining/yield-estimator.test.ts` (updated)
+- **What changed:** Public output intentionally gated — `applyCalculation` called at step 8 (internal pipeline proof) but return value is not used; step 9 always returns `evidence_available` with `yieldHex: null`; tests updated to assert `evidence_available` for all valid-evidence paths; §8 test vectors restructured to verify formula via `applyFormula()` helper without public `yieldHex` assertions. See §11.14 for the gating decision record.
+- **PR status:** FEAT (scope-corrected) — `yield-estimator.ts` and `yield-estimator.test.ts` only; no reader, route, provider, or reader-test changes.
+
+**This PR (docs/hexmining-yield-estimate-gating-record) — docs-only companion to PR #221:**
+- **Branch:** `docs/hexmining-yield-estimate-gating-record`
+- **Changed files:** `docs/v2-hexmining-roadmap.md` only
+- **What changed:** Document header and Phase completion table updated for current Phase 4C gating state; §11.1 extended with PRs #212–#221 and post-merge audit (1539 tests); §11.10 Step 3 updated with full PR delivery table and current gating state; §11.13 updated with resolved-criteria note; §11.14 added — yield-estimation gating decision record (decision, internal behavior, gate rationale, gate-lift prerequisites, review comment policy, internal evidence vs. public DTO distinction); §12 updated with gate-lift prerequisites as the next PR spec; Validation Notes and Final Status extended.
+- **PR status:** DOCS-ONLY — no source, test, schema, or config files changed.
 - **Recommendation: MERGE**
