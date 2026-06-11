@@ -159,8 +159,8 @@ export type UnsupportedYieldDto = {
   estimatedYieldHex: null;
   bpdYieldHex: null;
   bpdYieldStatus: null;
-  provenance?: null;
-  warnings?: string[];
+  provenance: null;
+  warnings: string[];
 };
 
 export type UnavailableYieldDto = {
@@ -168,22 +168,22 @@ export type UnavailableYieldDto = {
   estimatedYieldHex: null;
   bpdYieldStatus: HexBpdYieldStatus;
   bpdYieldHex: null;
-  provenance?: HexStakeYieldProvenance | null;
-  warnings?: string[];
+  provenance: HexStakeYieldProvenance | null;
+  warnings: string[];
 };
 
 export type EstimatedYieldDto = {
   status: "estimated";
   estimatedYieldHex: string;
-  provenance?: HexStakeYieldProvenance;
-  warnings?: string[];
+  provenance: HexStakeYieldProvenance;
+  warnings: string[];
 } & HexStakeBpdYieldFields;
 
 export type ExactYieldDto = {
   status: "exact";
   estimatedYieldHex: string;
-  provenance?: HexStakeYieldProvenance;
-  warnings?: string[];
+  provenance: HexStakeYieldProvenance;
+  warnings: string[];
 } & HexStakeBpdYieldFields;
 
 export type HexStakeYieldDto =

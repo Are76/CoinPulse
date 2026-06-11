@@ -236,7 +236,7 @@ type AssembleYieldArgs = {
 
 async function assembleYield(args: AssembleYieldArgs): Promise<HexStakeYieldDto> {
   if (!args.estimateYield) {
-    return { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null };
+    return { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] };
   }
 
   if (args.currentDay === null) {
@@ -301,19 +301,29 @@ function mapEstimateToYieldDto(
   stakedDays: number,
 ): HexStakeYieldDto {
   if (result.status === "unsupported") {
-    return { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null };
+    return { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] };
   }
 
   if (result.status === "estimated") {
     const bpdStatus = deriveBpdYieldStatus(lockedDay, stakedDays, result.warnings);
     const provenance = assembleYieldProvenance(result.provenance);
+    if (provenance === null) {
+      return {
+        status: "unavailable",
+        estimatedYieldHex: null,
+        bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
+        bpdYieldHex: null,
+        provenance: null,
+        warnings: [...result.warnings, "hexmining-yield-estimated-missing-provenance"],
+      };
+    }
     if (bpdStatus === "applicable" && result.bpdYieldHex !== null) {
       return {
         status: "estimated",
         estimatedYieldHex: result.yieldHex,
         bpdYieldStatus: "applicable",
         bpdYieldHex: result.bpdYieldHex,
-        provenance: provenance ?? undefined,
+        provenance,
         warnings: result.warnings,
       };
     }
@@ -322,7 +332,7 @@ function mapEstimateToYieldDto(
       estimatedYieldHex: result.yieldHex,
       bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
       bpdYieldHex: null,
-      provenance: provenance ?? undefined,
+      provenance,
       warnings: result.warnings,
     };
   }
