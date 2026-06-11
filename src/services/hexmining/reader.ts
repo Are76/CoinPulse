@@ -235,11 +235,37 @@ type AssembleYieldArgs = {
 };
 
 async function assembleYield(args: AssembleYieldArgs): Promise<HexStakeYieldDto> {
-  if (!args.estimateYield || args.currentDay === null) {
+  if (!args.estimateYield) {
     return { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null };
   }
 
+  if (args.currentDay === null) {
+    const bpdStatus = deriveBpdYieldStatus(args.lockedDay, args.stakedDays, []);
+    return {
+      status: "unavailable",
+      estimatedYieldHex: null,
+      bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
+      bpdYieldHex: null,
+      provenance: null,
+      warnings: ["hexmining-current-day-unavailable"],
+    };
+  }
+
   const currentDayNum = Number(args.currentDay);
+
+  // Pending stakes have no elapsed days — avoid passing an inverted range to the evidence provider.
+  if (currentDayNum <= args.lockedDay) {
+    const bpdStatus = deriveBpdYieldStatus(args.lockedDay, args.stakedDays, []);
+    return {
+      status: "unavailable",
+      estimatedYieldHex: null,
+      bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
+      bpdYieldHex: null,
+      provenance: null,
+      warnings: ["hexmining-yield-no-elapsed-days"],
+    };
+  }
+
   const elapsedEndDay = Math.min(currentDayNum - 1, args.lockedDay + args.stakedDays - 1);
 
   let result: HexMiningYieldEstimateResult;
@@ -255,10 +281,11 @@ async function assembleYield(args: AssembleYieldArgs): Promise<HexStakeYieldDto>
       rangeEndDay: elapsedEndDay,
     });
   } catch {
+    const bpdStatus = deriveBpdYieldStatus(args.lockedDay, args.stakedDays, []);
     return {
       status: "unavailable",
       estimatedYieldHex: null,
-      bpdYieldStatus: deriveBpdYieldStatus(args.lockedDay, args.stakedDays, []),
+      bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
       bpdYieldHex: null,
       provenance: null,
       warnings: ["hexmining-yield-estimator-threw"],
@@ -302,10 +329,12 @@ function mapEstimateToYieldDto(
 
   // evidence_available, insufficient_observations, invalid_observation, unavailable
   // all map to the public "unavailable" status.
+  // Normalize "applicable" → "unknown": unavailable yields never carry a concrete bpdYieldHex.
+  const bpdStatus = deriveBpdYieldStatus(lockedDay, stakedDays, result.warnings);
   return {
     status: "unavailable",
     estimatedYieldHex: null,
-    bpdYieldStatus: deriveBpdYieldStatus(lockedDay, stakedDays, result.warnings),
+    bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
     bpdYieldHex: null,
     provenance: assembleYieldProvenance(result.provenance),
     warnings: result.warnings,
