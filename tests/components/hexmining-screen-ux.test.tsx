@@ -6,7 +6,7 @@ import React from "react";
 import { HexMiningScreen } from "@/components/hexmining/hexmining-screen";
 import type { HexStakeDto, HexStakeListDto } from "@/services/hexmining/types";
 
-// ── Mocks ────────────────────────────────────────────────────────────────────
+// ── Mocks ────────────────────────────────────────────────────────────────────────
 
 vi.mock("@/lib/query/use-hexmining-stakes-query", () => ({
   useHexMiningStakesQuery: vi.fn(),
@@ -72,7 +72,7 @@ const MOCK_STAKE: HexStakeDto = {
     markPrice: null,
     costBasisPolicy: null,
   },
-  yield: { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null },
+  yield: { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] },
   provenance: {
     chainId: 369,
     walletAddress: VALID_ADDRESS,
@@ -100,7 +100,7 @@ const BASE_LIST: HexStakeListDto = {
   warnings: [],
 };
 
-// ── Idle state ────────────────────────────────────────────────────────────────
+// ── Idle state ────────────────────────────────────────────────────────────────────────
 
 describe("HexMiningScreen — idle state before submit", () => {
   afterEach(() => {
@@ -135,7 +135,7 @@ describe("HexMiningScreen — idle state before submit", () => {
   });
 });
 
-// ── Validation ────────────────────────────────────────────────────────────────
+// ── Validation ────────────────────────────────────────────────────────────────────
 
 describe("HexMiningScreen — wallet address validation", () => {
   afterEach(() => {
@@ -175,7 +175,7 @@ describe("HexMiningScreen — wallet address validation", () => {
   });
 });
 
-// ── Loading state ─────────────────────────────────────────────────────────────
+// ── Loading state ───────────────────────────────────────────────────────────────────
 
 describe("HexMiningScreen — loading state", () => {
   afterEach(() => {
@@ -194,7 +194,7 @@ describe("HexMiningScreen — loading state", () => {
   });
 });
 
-// ── Error rendering ───────────────────────────────────────────────────────────
+// ── Error rendering ──────────────────────────────────────────────────────────────────
 
 describe("HexMiningScreen — error rendering", () => {
   afterEach(() => {
@@ -223,7 +223,7 @@ describe("HexMiningScreen — error rendering", () => {
   });
 });
 
-// ── Empty state ───────────────────────────────────────────────────────────────
+// ── Empty state ──────────────────────────────────────────────────────────────────────
 
 describe("HexMiningScreen — empty stakes rendering", () => {
   afterEach(() => {
@@ -255,7 +255,7 @@ describe("HexMiningScreen — empty stakes rendering", () => {
   });
 });
 
-// ── Stake table rendering ─────────────────────────────────────────────────────
+// ── Stake table rendering ──────────────────────────────────────────────────────────
 
 describe("HexMiningScreen — stake table rendering", () => {
   afterEach(() => {
