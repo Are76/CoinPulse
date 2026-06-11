@@ -1370,18 +1370,19 @@ export interface UnavailableYieldDto {
   warnings: string[];
 }
 
-export interface EstimatedYieldDto {
+export type EstimatedYieldDto = {
   status: "estimated";
-  estimatedYieldHex: string;             // bigint decimal string, unit: hearts
-  bpdYieldStatus: "applicable" | "not_applicable" | "unknown";
-  bpdYieldHex: string | null;            // bigint decimal string, unit: hearts; non-null only when bpdYieldStatus: "applicable"
-  provenance: HexStakeYieldProvenance;   // required when estimated
+  estimatedYieldHex: string;            // bigint decimal string, unit: hearts
+  provenance: HexStakeYieldProvenance;  // required when estimated
   warnings: string[];
-}
+} & (
+  | { bpdYieldStatus: "applicable"; bpdYieldHex: string }           // non-null only when applicable
+  | { bpdYieldStatus: "not_applicable" | "unknown"; bpdYieldHex: null }
+);
 
 export interface HexStakeYieldProvenance {
   chainId: number;       // always 369 (PulseChain)
-  sourceFamily: string;  // always "hexmining-dailydata"
+  sourceFamily: string;  // always "HEXMINING"
   observationId: string; // UUID of the HexMiningObservation record used
   rangeStartDay: number; // inclusive start of observation day range
   rangeEndDay: number;   // inclusive end of observation day range (= elapsedEndDay)
@@ -1418,8 +1419,8 @@ export interface HexStakeYieldProvenance {
 - Non-null only when `status: "estimated"`; null in all other variants
 - Unit: hearts (HEX smallest denomination; 1 HEX = 10^8 hearts)
 - Format: bigint decimal string (no decimals, no exponent notation, no currency symbol)
-- Value: cumulative yield accumulated from `lockedDay` through `elapsedEndDay = min(currentDay − 1, lockedDay + stakedDays − 1)`
-- Does NOT include BPD attribution yield — that is modeled separately in `bpdYieldHex`
+- Value: cumulative yield accumulated from `lockedDay` through `elapsedEndDay = min(currentDay − 1, lockedDay + stakedDays − 1)` via the §8 formula — includes `dayPayoutTotal[353]` when the elapsed range covers day 353
+- `bpdYieldHex` (when non-null) is a reporting split of a portion of this value, not an additional amount on top of it
 - See OQ-1 for unit/format approval
 
 ---
@@ -1437,9 +1438,9 @@ export interface HexStakeYieldProvenance {
 
 - Non-null ONLY when `bpdYieldStatus: "applicable"` AND `status: "estimated"`; null in all other cases
 - Unit: hearts (same as `estimatedYieldHex`); format: bigint decimal string
-- Represents additional yield attributed to BPD day 353, computed separately from the general per-day formula
-- When `bpdYieldStatus: "unknown"`: `bpdYieldHex` is null; general yield estimate may still be populated
-- Total yield for BPD-era stakes = `estimatedYieldHex + bpdYieldHex` (when both non-null)
+- Represents the **portion of `estimatedYieldHex`** attributable to BPD day 353 — attribution/reporting split only, not additional yield on top of `estimatedYieldHex`
+- Do NOT add `bpdYieldHex` to `estimatedYieldHex` to compute total yield; `estimatedYieldHex` already includes day 353's payout via the §8 formula
+- When `bpdYieldStatus: "unknown"`: `bpdYieldHex` is null; `estimatedYieldHex` may still include day 353 payout but BPD attribution is unresolved
 - Assembly of `bpdYieldHex` in reader.ts is deferred to the gate-lift PR (see §11.14 item 2)
 - See OQ-3 for null-vs-omitted approval
 
@@ -1450,7 +1451,7 @@ export interface HexStakeYieldProvenance {
 - Non-null when `status: "estimated"`; present (or null) when `status: "unavailable"` if evidence was fetched; null when `status: "unsupported"`
 - Fields:
   - `chainId`: always 369 — PulseChain only; this contract does not extend to other chains
-  - `sourceFamily`: always `"hexmining-dailydata"` — identifies the observation family
+  - `sourceFamily`: always `"HEXMINING"` — canonical source family enum value; identifies the observation family
   - `observationId`: UUID of the `HexMiningObservation` record; enables audit trail to raw persisted evidence
   - `rangeStartDay`: inclusive start day of the observation range used
   - `rangeEndDay`: inclusive end day of the observation range used — equals `elapsedEndDay`
@@ -1473,13 +1474,17 @@ export interface HexStakeYieldProvenance {
 
 #### BPD attribution interaction with estimated yield
 
-BPD (Big Pay Day, HEX protocol day 353) yield is modeled separately from the general per-day yield formula (§8):
+`estimatedYieldHex` = `Σ (stakeShares × dayPayoutTotal) / dayStakeSharesTotal` over `[rangeStartDay, elapsedEndDay]` (§8 formula, bigint floor, multiply-first). When day 353 falls within the elapsed range, `dayPayoutTotal[353]` is already included in this sum. `estimatedYieldHex` is always the complete yield figure.
 
-- `estimatedYieldHex` = `Σ (stakeShares × dayPayoutTotal) / dayStakeSharesTotal` over `[rangeStartDay, elapsedEndDay]` (bigint floor, multiply-first) — the general formula includes day 353's `dayPayoutTotal` but does NOT separately attribute the BPD bonus
-- `bpdYieldHex` = the isolated BPD attribution bonus; computed separately via a mechanism deferred to the gate-lift PR
-- When both fields are non-null, total yield = `estimatedYieldHex + bpdYieldHex`
+`bpdYieldHex` is an **attribution/reporting split** — the portion of `estimatedYieldHex` that can be attributed specifically to BPD day 353. It is not additional yield on top of `estimatedYieldHex`. Do NOT compute total yield as `estimatedYieldHex + bpdYieldHex`.
 
-When `bpdYieldStatus: "unknown"`, `bpdYieldHex` is null and `hexmining-yield-bpd-attribution-unresolved` signals to callers that the estimate is incomplete for this stake's BPD entitlement.
+| `bpdYieldStatus` | `bpdYieldHex` | Meaning |
+|---|---|---|
+| `"applicable"` | `string` | Day 353 attribution resolved; `bpdYieldHex` is the BPD portion of `estimatedYieldHex` |
+| `"not_applicable"` | `null` | Stake was not active on day 353; no BPD portion exists |
+| `"unknown"` | `null` | Elapsed range includes day 353; `estimatedYieldHex` includes the day 353 payout but BPD attribution is unresolved |
+
+When `bpdYieldStatus: "unknown"`, `hexmining-yield-bpd-attribution-unresolved` signals to callers that the BPD split has not been resolved.
 
 ---
 
