@@ -49,7 +49,7 @@ function buildUnavailableYieldDto(): HexStakeYieldDto {
     status: "unavailable",
     estimatedYieldHex: null,
     bpdYieldHex: null,
-    bpdYieldStatus: null,
+    bpdYieldStatus: "not_applicable",
   };
 }
 
@@ -170,12 +170,12 @@ describe("HexStakeYieldDto type contract — accepts all four states", () => {
     expect(dto.status).toBe("unsupported");
   });
 
-  it("accepts 'unavailable' shape with all null fields", () => {
+  it("accepts 'unavailable' shape with HexBpdYieldStatus", () => {
     const dto: HexStakeYieldDto = {
       status: "unavailable",
       estimatedYieldHex: null,
       bpdYieldHex: null,
-      bpdYieldStatus: null,
+      bpdYieldStatus: "not_applicable",
     };
     expect(dto.status).toBe("unavailable");
   });
@@ -266,9 +266,10 @@ describe("'unavailable' state", () => {
     expect(dto.bpdYieldHex).toBeNull();
   });
 
-  it("bpdYieldStatus is null", () => {
+  it("bpdYieldStatus is HexBpdYieldStatus (not null) — read path is wired and BPD status is known", () => {
     const dto = buildUnavailableYieldDto();
-    expect(dto.bpdYieldStatus).toBeNull();
+    expect(dto.bpdYieldStatus).toBe("not_applicable");
+    expect(dto.bpdYieldStatus).not.toBeNull();
   });
 
   it("is distinct from 'estimated' — data cannot be produced at this time", () => {

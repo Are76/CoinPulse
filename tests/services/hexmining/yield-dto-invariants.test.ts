@@ -44,12 +44,12 @@ describe("named yield DTO member types are exported from types.ts", () => {
       status: "unavailable",
       estimatedYieldHex: null,
       bpdYieldHex: null,
-      bpdYieldStatus: null,
+      bpdYieldStatus: "not_applicable",
     };
     expect(dto.status).toBe("unavailable");
     expect(dto.estimatedYieldHex).toBeNull();
     expect(dto.bpdYieldHex).toBeNull();
-    expect(dto.bpdYieldStatus).toBeNull();
+    expect(dto.bpdYieldStatus).toBe("not_applicable");
   });
 
   it("EstimatedYieldDto is importable and matches expected shape", () => {
@@ -87,7 +87,7 @@ describe("named yield DTO member types are exported from types.ts", () => {
       status: "unavailable",
       estimatedYieldHex: null,
       bpdYieldHex: null,
-      bpdYieldStatus: null,
+      bpdYieldStatus: "not_applicable",
     };
     const estimated: HexStakeYieldDto = {
       status: "estimated",
@@ -124,17 +124,17 @@ describe("valid yield DTO combinations", () => {
     expect(dto.bpdYieldStatus).toBeNull();
   });
 
-  it("UnavailableYieldDto: all fields null at runtime", () => {
+  it("UnavailableYieldDto: estimatedYieldHex and bpdYieldHex are null; bpdYieldStatus is HexBpdYieldStatus", () => {
     const dto: UnavailableYieldDto = {
       status: "unavailable",
       estimatedYieldHex: null,
       bpdYieldHex: null,
-      bpdYieldStatus: null,
+      bpdYieldStatus: "not_applicable",
     };
     expect(dto.status).toBe("unavailable");
     expect(dto.estimatedYieldHex).toBeNull();
     expect(dto.bpdYieldHex).toBeNull();
-    expect(dto.bpdYieldStatus).toBeNull();
+    expect(dto.bpdYieldStatus).toBe("not_applicable");
   });
 
   it("EstimatedYieldDto: estimatedYieldHex and bpdYieldStatus are required strings", () => {
@@ -253,7 +253,7 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
       status: "unavailable",
       estimatedYieldHex: "1000000000",
       bpdYieldHex: null,
-      bpdYieldStatus: null,
+      bpdYieldStatus: "not_applicable",
     };
     void _dto;
   });
@@ -270,14 +270,14 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     void _dto;
   });
 
-  it("'unavailable' + populated bpdYieldStatus is a type error — UnavailableYieldDto requires null", () => {
+  it("'unavailable' + null bpdYieldStatus is a type error — UnavailableYieldDto requires HexBpdYieldStatus", () => {
     // TypeScript reports this at the property line when only one field mismatches.
     const _dto: UnavailableYieldDto = {
       status: "unavailable",
       estimatedYieldHex: null,
       bpdYieldHex: null,
-      // @ts-expect-error — bpdYieldStatus must be null in UnavailableYieldDto
-      bpdYieldStatus: "applicable",
+      // @ts-expect-error — bpdYieldStatus must be HexBpdYieldStatus for "unavailable"
+      bpdYieldStatus: null,
     };
     void _dto;
   });
@@ -331,17 +331,17 @@ describe("discriminated union narrowing on status", () => {
     }
   });
 
-  it("narrowing to 'unavailable' reveals all fields null", () => {
+  it("narrowing to 'unavailable' reveals estimatedYieldHex/bpdYieldHex null, bpdYieldStatus is HexBpdYieldStatus", () => {
     const dto: HexStakeYieldDto = {
       status: "unavailable",
       estimatedYieldHex: null,
       bpdYieldHex: null,
-      bpdYieldStatus: null,
+      bpdYieldStatus: "not_applicable",
     };
     if (dto.status === "unavailable") {
       expect(dto.estimatedYieldHex).toBeNull();
       expect(dto.bpdYieldHex).toBeNull();
-      expect(dto.bpdYieldStatus).toBeNull();
+      expect(dto.bpdYieldStatus).toBe("not_applicable");
     }
   });
 
@@ -379,7 +379,7 @@ describe("discriminated union narrowing on status", () => {
   it("switch on status narrows each branch correctly", () => {
     const dtos: HexStakeYieldDto[] = [
       { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null },
-      { status: "unavailable", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null },
+      { status: "unavailable", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: "not_applicable" },
       { status: "estimated", estimatedYieldHex: "1000000000", bpdYieldHex: null, bpdYieldStatus: "not_applicable" },
       { status: "exact", estimatedYieldHex: "2000000000", bpdYieldHex: null, bpdYieldStatus: "not_applicable" },
     ];
@@ -422,7 +422,7 @@ describe("Phase 1–3 unsupported state is unchanged by the union refactor", () 
 
   it("status 'unsupported' is distinct from all other states", () => {
     const unsupported: HexStakeYieldDto = { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null };
-    const unavailable: HexStakeYieldDto = { status: "unavailable", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null };
+    const unavailable: HexStakeYieldDto = { status: "unavailable", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: "not_applicable" };
     expect(unsupported.status).not.toBe(unavailable.status);
     expect(unsupported.status).not.toBe("estimated");
     expect(unsupported.status).not.toBe("exact");

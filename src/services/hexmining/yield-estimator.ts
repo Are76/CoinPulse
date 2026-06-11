@@ -85,6 +85,7 @@ export type HexMiningYieldEstimateResult =
       status: "estimated";
       schemaVersion: "v1";
       yieldHex: string;
+      bpdYieldHex: string | null;
       provenance: HexMiningYieldEstimateProvenance;
       warnings: string[];
     }
