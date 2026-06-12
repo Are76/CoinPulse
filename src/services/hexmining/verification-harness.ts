@@ -19,6 +19,7 @@ export type HexMiningVerificationHarnessInput = {
   stakeShares: bigint;
   isInvalidated?: boolean;
   rpcEndpointLabel?: string | null;
+  warnings?: string[];
 };
 
 export type HexMiningVerificationProvenanceSummary = {
@@ -40,6 +41,7 @@ export type HexMiningVerificationHarnessResult = {
     reproducedYieldHex: string | null;
     estimatorInternalYieldHex: string | null;
     entryCount: number | null;
+    expectedEntryCount: number | null;
   };
   estimatorStatus: string | null;
 };
@@ -73,6 +75,7 @@ function fail(
     reproducedYieldHex: null,
     estimatorInternalYieldHex: null,
     entryCount: null,
+    expectedEntryCount: null,
   },
   estimatorStatus: string | null = null,
 ): HexMiningVerificationHarnessResult {
@@ -84,6 +87,15 @@ function fail(
     formula,
     estimatorStatus,
   };
+}
+
+function calculateExpectedEntryCount(input: HexMiningVerificationHarnessInput): number | null {
+  if (input.rangeStartDay < 0 || input.rangeEndDay < 0) return null;
+
+  const expectedEntryCount = input.rangeEndDay - input.rangeStartDay + 1;
+  if (expectedEntryCount <= 0) return null;
+
+  return expectedEntryCount;
 }
 
 function calculateYieldHex(
@@ -100,14 +112,14 @@ function calculateYieldHex(
 
 function makeEstimatorArgs(
   input: HexMiningVerificationHarnessInput,
+  expectedEntryCount: number,
 ): HexMiningYieldEstimateArgs {
-  const elapsedDays = input.rangeEndDay - input.rangeStartDay + 1;
   return {
     chainId: PULSECHAIN_CHAIN_ID,
     stakeId: input.observationId,
     stakeShares: input.stakeShares,
     lockedDay: input.rangeStartDay,
-    stakedDays: elapsedDays,
+    stakedDays: expectedEntryCount,
     currentDay: input.rangeEndDay + 1,
     rangeStartDay: input.rangeStartDay,
     rangeEndDay: input.rangeEndDay,
@@ -118,13 +130,41 @@ export async function verifyHexMiningYieldEvidence(
   input: HexMiningVerificationHarnessInput,
   deps: VerificationHarnessDeps = {},
 ): Promise<HexMiningVerificationHarnessResult> {
+  const upstreamWarnings = input.warnings ?? [];
+  const expectedEntryCount = calculateExpectedEntryCount(input);
+
+  if (expectedEntryCount === null) {
+    return fail(input, "hexmining-verification-invalid-range", upstreamWarnings);
+  }
+
   const payloadResult = decodeDailyDataPayload(input.canonicalPayload);
   if (!payloadResult.ok) {
-    return fail(input, "hexmining-verification-invalid-payload", payloadResult.warnings);
+    return fail(input, "hexmining-verification-invalid-payload", [
+      ...upstreamWarnings,
+      ...payloadResult.warnings,
+    ]);
+  }
+
+  if (payloadResult.entryCount !== expectedEntryCount) {
+    return fail(
+      input,
+      "hexmining-verification-payload-range-mismatch",
+      [
+        ...upstreamWarnings,
+        `hexmining-verification-expected-${expectedEntryCount}-entries-got-${payloadResult.entryCount}`,
+      ],
+      {
+        reproducedYieldHex: null,
+        estimatorInternalYieldHex: null,
+        entryCount: payloadResult.entryCount,
+        expectedEntryCount,
+      },
+    );
   }
 
   if (input.isInvalidated === true) {
     return fail(input, "hexmining-verification-observation-invalidated", [
+      ...upstreamWarnings,
       "hexmining-yield-observation-invalidated",
     ]);
   }
@@ -132,6 +172,7 @@ export async function verifyHexMiningYieldEvidence(
   const packedResult = decodePackedDailyDataRange(payloadResult.dailyData);
   if (!packedResult.ok) {
     return fail(input, "hexmining-verification-packed-decode-failed", [
+      ...upstreamWarnings,
       `hexmining-verification-${packedResult.code}-at-${packedResult.index}`,
     ]);
   }
@@ -139,7 +180,7 @@ export async function verifyHexMiningYieldEvidence(
   const reproducedYieldHex = calculateYieldHex(packedResult.entries, input.stakeShares);
   let estimatorInternalYieldHex: string | null = null;
 
-  const args = makeEstimatorArgs(input);
+  const args = makeEstimatorArgs(input, expectedEntryCount);
   const estimatorDeps: HexMiningYieldEstimatorDeps = {
     fetchEvidence: async () => ({
       observationId: input.observationId,
@@ -152,24 +193,26 @@ export async function verifyHexMiningYieldEvidence(
       payloadVersion: payloadResult.schemaVersion,
       payloadSchemaValid: true,
       isInvalidated: false,
-      warnings: [],
+      warnings: upstreamWarnings,
       canonicalPayload: input.canonicalPayload,
     }),
-    applyCalculation: (entries, estimatorArgs) => {
-      const result = deps.estimatorCalculation?.(entries, estimatorArgs) ?? {
-        status: "estimated" as const,
-        yieldHex: calculateYieldHex(entries, estimatorArgs.stakeShares),
-      };
+  };
+
+  if (deps.estimatorCalculation !== undefined) {
+    const estimatorCalculation = deps.estimatorCalculation;
+    estimatorDeps.applyCalculation = (entries, estimatorArgs) => {
+      const result = estimatorCalculation(entries, estimatorArgs);
       estimatorInternalYieldHex = result.yieldHex;
       return result;
-    },
-  };
+    };
+  }
 
   const estimatorResult = await estimateHexMiningYield(args, estimatorDeps);
   const formula = {
     reproducedYieldHex,
     estimatorInternalYieldHex,
     entryCount: packedResult.entries.length,
+    expectedEntryCount,
   };
 
   if (estimatorResult.status !== "evidence_available") {
@@ -182,11 +225,14 @@ export async function verifyHexMiningYieldEvidence(
     );
   }
 
-  if (estimatorInternalYieldHex !== reproducedYieldHex) {
+  if (
+    estimatorInternalYieldHex !== null &&
+    estimatorInternalYieldHex !== reproducedYieldHex
+  ) {
     return fail(
       input,
       "hexmining-verification-estimator-mismatch",
-      ["hexmining-verification-estimator-mismatch"],
+      [...estimatorResult.warnings, "hexmining-verification-estimator-mismatch"],
       formula,
       estimatorResult.status,
     );

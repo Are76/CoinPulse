@@ -47,8 +47,9 @@ describe("verifyHexMiningYieldEvidence", () => {
     expect(result.failureCode).toBeNull();
     expect(result.estimatorStatus).toBe("evidence_available");
     expect(result.formula.reproducedYieldHex).toBe("500");
-    expect(result.formula.estimatorInternalYieldHex).toBe("500");
+    expect(result.formula.estimatorInternalYieldHex).toBeNull();
     expect(result.formula.entryCount).toBe(2);
+    expect(result.formula.expectedEntryCount).toBe(2);
   });
 
   it("fails invalid payloads before estimator execution", async () => {
@@ -63,6 +64,72 @@ describe("verifyHexMiningYieldEvidence", () => {
     expect(result.warnings).toContain("hexmining-payload-numeric-json-value");
   });
 
+  it("fails when the payload is shorter than the requested range", async () => {
+    const result = await verifyHexMiningYieldEvidence({
+      ...BASE_INPUT,
+      canonicalPayload: makePayload(
+        packDailyDataEntry({ dayPayoutTotal: 1000n, dayStakeSharesTotal: 500n }),
+      ),
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.failureCode).toBe("hexmining-verification-payload-range-mismatch");
+    expect(result.formula.entryCount).toBe(1);
+    expect(result.formula.expectedEntryCount).toBe(2);
+    expect(result.warnings).toContain("hexmining-verification-expected-2-entries-got-1");
+  });
+
+  it("fails when the payload is longer than the requested range", async () => {
+    const result = await verifyHexMiningYieldEvidence({
+      ...BASE_INPUT,
+      canonicalPayload: makePayload(
+        packDailyDataEntry({ dayPayoutTotal: 1000n, dayStakeSharesTotal: 500n }),
+        packDailyDataEntry({ dayPayoutTotal: 750n, dayStakeSharesTotal: 250n }),
+        packDailyDataEntry({ dayPayoutTotal: 400n, dayStakeSharesTotal: 200n }),
+      ),
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.failureCode).toBe("hexmining-verification-payload-range-mismatch");
+    expect(result.formula.entryCount).toBe(3);
+    expect(result.formula.expectedEntryCount).toBe(2);
+    expect(result.warnings).toContain("hexmining-verification-expected-2-entries-got-3");
+  });
+
+  it("fails closed for a zero-width invalid day range", async () => {
+    const result = await verifyHexMiningYieldEvidence({
+      ...BASE_INPUT,
+      rangeStartDay: 1000,
+      rangeEndDay: 999,
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.failureCode).toBe("hexmining-verification-invalid-range");
+    expect(result.formula.expectedEntryCount).toBeNull();
+  });
+
+  it("fails closed for a negative start day", async () => {
+    const result = await verifyHexMiningYieldEvidence({
+      ...BASE_INPUT,
+      rangeStartDay: -1,
+      rangeEndDay: 0,
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.failureCode).toBe("hexmining-verification-invalid-range");
+  });
+
+  it("fails closed for a negative end day", async () => {
+    const result = await verifyHexMiningYieldEvidence({
+      ...BASE_INPUT,
+      rangeStartDay: 0,
+      rangeEndDay: -1,
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.failureCode).toBe("hexmining-verification-invalid-range");
+  });
+
   it("fails invalidated observations", async () => {
     const result = await verifyHexMiningYieldEvidence({
       ...BASE_INPUT,
@@ -74,7 +141,16 @@ describe("verifyHexMiningYieldEvidence", () => {
     expect(result.warnings).toContain("hexmining-yield-observation-invalidated");
   });
 
-  it("fails when independently reproduced bigint math does not match estimator math", async () => {
+  it("passes the normal path without overriding the estimator calculation", async () => {
+    const result = await verifyHexMiningYieldEvidence(BASE_INPUT);
+
+    expect(result.passed).toBe(true);
+    expect(result.estimatorStatus).toBe("evidence_available");
+    expect(result.formula.reproducedYieldHex).toBe("500");
+    expect(result.formula.estimatorInternalYieldHex).toBeNull();
+  });
+
+  it("fails when test-only estimator math does not match independently reproduced bigint math", async () => {
     const result = await verifyHexMiningYieldEvidence(BASE_INPUT, {
       estimatorCalculation: () => ({ status: "estimated", yieldHex: "499" }),
     });
@@ -84,6 +160,16 @@ describe("verifyHexMiningYieldEvidence", () => {
     expect(result.estimatorStatus).toBe("evidence_available");
     expect(result.formula.reproducedYieldHex).toBe("500");
     expect(result.formula.estimatorInternalYieldHex).toBe("499");
+  });
+
+  it("preserves upstream observation warnings in the final verification result", async () => {
+    const result = await verifyHexMiningYieldEvidence({
+      ...BASE_INPUT,
+      warnings: ["hexmining-rpc-slow"],
+    });
+
+    expect(result.passed).toBe(true);
+    expect(result.warnings).toContain("hexmining-rpc-slow");
   });
 
   it("preserves sanitized provenance from the verification input", async () => {
