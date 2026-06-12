@@ -806,13 +806,18 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     expect(response.status).toBe(200);
     const body = await response.json();
+    expect(Object.keys(body)).toEqual(["data"]);
+    expect(body.data.schemaVersion).toBe("v1");
+    expect(body.data.stakes).toHaveLength(1);
     expect(body.data.stakes[0].yield).toMatchObject({
       status: "estimated",
       estimatedYieldHex: "12345",
       bpdYieldHex: null,
+      bpdYieldStatus: "unknown",
       provenance: expect.objectContaining({ observationId: "obs-estimated" }),
       warnings: ["hexmining-yield-public-estimate-test"],
     });
+    expect(Array.isArray(body.data.stakes[0].yield.warnings)).toBe(true);
   });
 
   // ── Yield gate — route must never expose estimated yield ──────────────────

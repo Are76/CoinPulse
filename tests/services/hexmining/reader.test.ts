@@ -836,6 +836,43 @@ describe("yield estimator wiring", () => {
     expect(yieldDto.bpdYieldHex).toBeNull();
   });
 
+  it("downgrades estimated yield with incomplete provenance to unavailable while preserving warnings", async () => {
+    const estimateYield = vi.fn(async (): Promise<HexMiningYieldEstimateResult> => ({
+      status: "estimated",
+      schemaVersion: "v1",
+      yieldHex: "7000000000",
+      bpdYieldHex: null,
+      provenance: {
+        chainId: 369,
+        sourceFamily: "HEXMINING",
+        observationId: null,
+        rangeStartDay: 1000,
+        rangeEndDay: 4999,
+      },
+      warnings: ["hexmining-yield-estimated-provenance-fixture-warning"],
+    }));
+    const client = makeClient();
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+
+    const yieldDto = result.stakes[0].yield;
+    expect(yieldDto.status).toBe("unavailable");
+    expect(yieldDto.estimatedYieldHex).toBeNull();
+    expect(yieldDto.provenance).toBeNull();
+    expect(yieldDto.bpdYieldHex).toBeNull();
+    expect(yieldDto.bpdYieldStatus).toBe("not_applicable");
+    expect(yieldDto.warnings).toContain(
+      "hexmining-yield-estimated-provenance-fixture-warning",
+    );
+    expect(yieldDto.warnings).toContain(
+      "hexmining-yield-estimated-missing-provenance",
+    );
+  });
+
   // 30. Warning pass-through from estimator to yield DTO.
   it("passes estimator warnings through to the yield DTO without modification", async () => {
     const warnings = [

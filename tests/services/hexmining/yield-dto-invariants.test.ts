@@ -336,6 +336,30 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     void _dto;
   });
 
+  it("'estimated' missing provenance is a type error", () => {
+    // @ts-expect-error — EstimatedYieldDto requires provenance.
+    const _dto: EstimatedYieldDto = {
+      status: "estimated",
+      estimatedYieldHex: "1000000000",
+      bpdYieldHex: null,
+      bpdYieldStatus: "not_applicable",
+      warnings: [],
+    };
+    void _dto;
+  });
+
+  it("'estimated' missing warnings is a type error", () => {
+    // @ts-expect-error — EstimatedYieldDto requires warnings.
+    const _dto: EstimatedYieldDto = {
+      status: "estimated",
+      estimatedYieldHex: "1000000000",
+      bpdYieldHex: null,
+      bpdYieldStatus: "not_applicable",
+      provenance: TEST_PROVENANCE,
+    };
+    void _dto;
+  });
+
   it("'estimated' missing estimatedYieldHex is a type error", () => {
     // @ts-expect-error — EstimatedYieldDto requires estimatedYieldHex field
     const _dto: EstimatedYieldDto = {
