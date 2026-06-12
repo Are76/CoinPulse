@@ -5,6 +5,8 @@ import type { HexStakeDto, HexStakeListDto } from "@/services/hexmining/types";
 // Keep in outer scope so mock factories close over them across vi.resetModules() cycles.
 const readNativeHexStakes = vi.fn();
 const createPublicClientForChain = vi.fn();
+const estimateHexMiningYield = vi.fn();
+const getObservationEvidenceWithPayloadForRange = vi.fn();
 
 vi.mock("@/services/hexmining/reader", () => ({
   readNativeHexStakes,
@@ -12,6 +14,14 @@ vi.mock("@/services/hexmining/reader", () => ({
 
 vi.mock("@/services/chains/public-client", () => ({
   createPublicClientForChain,
+}));
+
+vi.mock("@/services/hexmining/yield-estimator", () => ({
+  estimateHexMiningYield,
+}));
+
+vi.mock("@/services/hexmining/observation-evidence-provider", () => ({
+  getObservationEvidenceWithPayloadForRange,
 }));
 
 const WALLET_ADDRESS = "0x1111111111111111111111111111111111111111";
@@ -64,7 +74,10 @@ function makeDegradedDto(): HexStakeListDto {
     isComplete: false,
     observedAtBlock: null,
     observedAt: OBSERVED_AT,
-    warnings: ["hexmining-provenance-block-unavailable", "hexmining-stake-count-rpc-timeout"],
+    warnings: [
+      "hexmining-provenance-block-unavailable",
+      "hexmining-stake-count-rpc-timeout",
+    ],
   };
 }
 
@@ -85,7 +98,12 @@ function makeSingleStakeDto(): HexStakeListDto {
     stakeShares: "1000000000000",
     tShares: "1.000000",
     isAutoStake: false,
-    pricing: { status: "unsupported", sourceType: null, sourceId: null, observedAt: null },
+    pricing: {
+      status: "unsupported",
+      sourceType: null,
+      sourceId: null,
+      observedAt: null,
+    },
     valuation: { status: "unsupported", valueQuote: null },
     pnl: {
       status: "unsupported",
@@ -131,6 +149,167 @@ function makeSingleStakeDto(): HexStakeListDto {
   };
 }
 
+function makeYieldDtoFromEstimate(result: {
+  status: string;
+  yieldHex: string | null;
+  bpdYieldHex?: string | null;
+  provenance: {
+    chainId: number;
+    sourceFamily: "HEXMINING";
+    observationId: string | null;
+    rangeStartDay: number | null;
+    rangeEndDay: number | null;
+  } | null;
+  warnings: string[];
+}): HexStakeDto["yield"] {
+  if (
+    result.status === "estimated" &&
+    result.provenance !== null &&
+    result.yieldHex !== null
+  ) {
+    const provenance = {
+      chainId: result.provenance.chainId,
+      sourceFamily: result.provenance.sourceFamily,
+      observationId: result.provenance.observationId ?? "unknown",
+      rangeStartDay: result.provenance.rangeStartDay ?? 0,
+      rangeEndDay: result.provenance.rangeEndDay ?? 0,
+    };
+
+    if (result.bpdYieldHex !== undefined && result.bpdYieldHex !== null) {
+      return {
+        status: "estimated",
+        estimatedYieldHex: result.yieldHex,
+        bpdYieldHex: result.bpdYieldHex,
+        bpdYieldStatus: "applicable",
+        provenance,
+        warnings: result.warnings,
+      };
+    }
+
+    return {
+      status: "estimated",
+      estimatedYieldHex: result.yieldHex,
+      bpdYieldHex: null,
+      bpdYieldStatus: "unknown",
+      provenance,
+      warnings: result.warnings,
+    };
+  }
+
+  if (result.status === "unsupported") {
+    return {
+      status: "unsupported",
+      estimatedYieldHex: null,
+      bpdYieldHex: null,
+      bpdYieldStatus: null,
+      provenance: null,
+      warnings: [],
+    };
+  }
+
+  const provenance =
+    result.provenance !== null &&
+    result.provenance.observationId !== null &&
+    result.provenance.rangeStartDay !== null &&
+    result.provenance.rangeEndDay !== null
+      ? {
+          chainId: result.provenance.chainId,
+          sourceFamily: result.provenance.sourceFamily,
+          observationId: result.provenance.observationId,
+          rangeStartDay: result.provenance.rangeStartDay,
+          rangeEndDay: result.provenance.rangeEndDay,
+        }
+      : null;
+
+  return {
+    status: "unavailable",
+    estimatedYieldHex: null,
+    bpdYieldHex: null,
+    bpdYieldStatus: "unknown",
+    provenance,
+    warnings: result.warnings,
+  };
+}
+
+function mockReaderInvokesRouteYieldDependency() {
+  readNativeHexStakes.mockImplementation(
+    async (args: {
+      estimateYield?: (estimateArgs: {
+        chainId: number;
+        stakeId: string;
+        stakeShares: bigint;
+        lockedDay: number;
+        stakedDays: number;
+        currentDay: number;
+        rangeStartDay: number;
+        rangeEndDay: number;
+      }) => Promise<{
+        status: string;
+        yieldHex: string | null;
+        bpdYieldHex?: string | null;
+        provenance: {
+          chainId: number;
+          sourceFamily: "HEXMINING";
+          observationId: string | null;
+          rangeStartDay: number | null;
+          rangeEndDay: number | null;
+        } | null;
+        warnings: string[];
+      }>;
+    }) => {
+      const fixture = makeSingleStakeDto();
+      if (!args.estimateYield) return fixture;
+
+      let result;
+      try {
+        result = await args.estimateYield({
+          chainId: CHAIN_ID,
+          stakeId: "42",
+          stakeShares: 1000000000000n,
+          lockedDay: 1000,
+          stakedDays: 5555,
+          currentDay: 1002,
+          rangeStartDay: 1000,
+          rangeEndDay: 1001,
+        });
+      } catch {
+        result = {
+          status: "unavailable",
+          yieldHex: null,
+          provenance: null,
+          warnings: ["hexmining-yield-estimator-threw"],
+        };
+      }
+
+      return {
+        ...fixture,
+        stakes: [
+          {
+            ...fixture.stakes[0],
+            yield: makeYieldDtoFromEstimate(result),
+          },
+        ],
+      };
+    },
+  );
+}
+
+function makeEstimateResult(status: string, warnings: string[] = []) {
+  return {
+    status,
+    schemaVersion: "v1",
+    yieldHex: null,
+    provenance: {
+      chainId: CHAIN_ID,
+      sourceFamily: "HEXMINING" as const,
+      observationId: status === "insufficient_observations" ? null : "obs-1",
+      rangeStartDay: status === "insufficient_observations" ? null : 1000,
+      rangeEndDay: status === "insufficient_observations" ? null : 1001,
+    },
+    warnings,
+  };
+}
+
 function makeUrl(params: Record<string, string | number | undefined>): string {
   const url = new URL("http://localhost/api/hexmining/stakes");
   for (const [key, value] of Object.entries(params)) {
@@ -149,9 +328,7 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
   it("returns 400 with stable error envelope when walletAddress is missing", async () => {
     const { GET } = await import("../../app/api/hexmining/stakes/route");
-    const response = await GET(
-      new Request(makeUrl({ chainId: CHAIN_ID })),
-    );
+    const response = await GET(new Request(makeUrl({ chainId: CHAIN_ID })));
 
     expect(response.status).toBe(400);
     const body = await response.json();
@@ -170,7 +347,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
   it("returns 400 when walletAddress is not a valid EVM address", async () => {
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: "not-an-address", chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({ walletAddress: "not-an-address", chainId: CHAIN_ID }),
+      ),
     );
 
     expect(response.status).toBe(400);
@@ -184,7 +363,12 @@ describe("GET /api/hexmining/stakes route contract", () => {
   it("returns 400 when walletAddress is missing the 0x prefix", async () => {
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: "1111111111111111111111111111111111111111", chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({
+          walletAddress: "1111111111111111111111111111111111111111",
+          chainId: CHAIN_ID,
+        }),
+      ),
     );
 
     expect(response.status).toBe(400);
@@ -225,7 +409,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
     );
 
     expect(response.status).toBe(200);
@@ -251,7 +437,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
   ])("returns 400 for malformed chainId '%s' (%s)", async (badChainId) => {
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: badChainId })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: badChainId }),
+      ),
     );
 
     expect(response.status).toBe(400);
@@ -272,7 +460,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: unsupportedChainId })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: unsupportedChainId }),
+      ),
     );
 
     expect(response.status).toBe(200);
@@ -295,14 +485,18 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
     );
 
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.data.isComplete).toBe(false);
     expect(body.data.observedAtBlock).toBeNull();
-    expect(body.data.warnings).toContain("hexmining-provenance-block-unavailable");
+    expect(body.data.warnings).toContain(
+      "hexmining-provenance-block-unavailable",
+    );
     expect(body.data.warnings).toContain("hexmining-stake-count-rpc-timeout");
   });
 
@@ -317,7 +511,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
     );
 
     expect(response.status).toBe(500);
@@ -340,7 +536,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
     );
 
     expect(response.status).toBe(200);
@@ -378,7 +576,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
     );
 
     expect(response.status).toBe(200);
@@ -404,7 +604,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
     );
 
     expect(response.status).toBe(200);
@@ -427,13 +629,203 @@ describe("GET /api/hexmining/stakes route contract", () => {
     expect(stake.warnings).toContain("hexmining-valuation-unsupported-v1");
   });
 
+  // ── Route-level HexMining yield dependency wiring ────────────────────────
+
+  it("passes estimateYield into readNativeHexStakes", async () => {
+    createPublicClientForChain.mockReturnValue({});
+    readNativeHexStakes.mockResolvedValue(makeEmptyStakeList());
+
+    const { GET } = await import("../../app/api/hexmining/stakes/route");
+    const response = await GET(
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(readNativeHexStakes).toHaveBeenCalledWith(
+      expect.objectContaining({ estimateYield: expect.any(Function) }),
+    );
+  });
+
+  it("invokes the yield estimator and evidence provider through the route dependency path", async () => {
+    createPublicClientForChain.mockReturnValue({});
+    mockReaderInvokesRouteYieldDependency();
+    getObservationEvidenceWithPayloadForRange.mockResolvedValue(null);
+    estimateHexMiningYield.mockImplementation(async (args, deps) => {
+      await deps.fetchEvidence({
+        chainId: args.chainId,
+        rangeStartDay: args.rangeStartDay,
+        rangeEndDay: args.rangeEndDay,
+      });
+      return makeEstimateResult("insufficient_observations", [
+        "hexmining-yield-no-observation-evidence",
+      ]);
+    });
+
+    const { GET } = await import("../../app/api/hexmining/stakes/route");
+    const response = await GET(
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(estimateHexMiningYield).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chainId: CHAIN_ID,
+        stakeId: "42",
+        rangeStartDay: 1000,
+        rangeEndDay: 1001,
+      }),
+      { fetchEvidence: getObservationEvidenceWithPayloadForRange },
+    );
+    expect(getObservationEvidenceWithPayloadForRange).toHaveBeenCalledWith({
+      chainId: CHAIN_ID,
+      rangeStartDay: 1000,
+      rangeEndDay: 1001,
+    });
+  });
+
+  it.each([
+    ["evidence_available", ["hexmining-yield-bpd-attribution-unresolved"]],
+    ["insufficient_observations", ["hexmining-yield-no-observation-evidence"]],
+    ["invalid_observation", ["hexmining-yield-invalid-observation-payload"]],
+  ])(
+    "maps %s to public unavailable with deterministic provenance and warnings",
+    async (status, warnings) => {
+      createPublicClientForChain.mockReturnValue({});
+      mockReaderInvokesRouteYieldDependency();
+      estimateHexMiningYield.mockResolvedValue(
+        makeEstimateResult(status, warnings),
+      );
+
+      const { GET } = await import("../../app/api/hexmining/stakes/route");
+      const response = await GET(
+        new Request(
+          makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+        ),
+      );
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      const yieldDto = body.data.stakes[0].yield;
+      expect(yieldDto.status).toBe("unavailable");
+      expect(yieldDto.estimatedYieldHex).toBeNull();
+      expect(yieldDto.bpdYieldHex).toBeNull();
+      if (status === "insufficient_observations") {
+        expect(yieldDto.provenance).toBeNull();
+      } else {
+        expect(yieldDto.provenance).toEqual(
+          expect.objectContaining({
+            chainId: CHAIN_ID,
+            sourceFamily: "HEXMINING",
+          }),
+        );
+      }
+      expect(yieldDto.warnings).toEqual(warnings);
+    },
+  );
+
+  it("maps estimator throws safely without leaking internals", async () => {
+    createPublicClientForChain.mockReturnValue({});
+    mockReaderInvokesRouteYieldDependency();
+    estimateHexMiningYield.mockRejectedValue(
+      new Error("secret estimator failure"),
+    );
+
+    const { GET } = await import("../../app/api/hexmining/stakes/route");
+    const response = await GET(
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
+    );
+
+    const bodyText = await response.text();
+    expect(response.status).toBe(200);
+    expect(bodyText).toContain("hexmining-yield-estimator-threw");
+    expect(bodyText).not.toContain("secret estimator failure");
+    const body = JSON.parse(bodyText);
+    expect(body.data.stakes[0].yield).toMatchObject({
+      status: "unavailable",
+      estimatedYieldHex: null,
+      bpdYieldHex: null,
+      provenance: null,
+      warnings: ["hexmining-yield-estimator-threw"],
+    });
+  });
+
+  it("preserves unsupported fallback and does not fabricate estimatedYieldHex", async () => {
+    createPublicClientForChain.mockReturnValue({});
+    mockReaderInvokesRouteYieldDependency();
+    estimateHexMiningYield.mockResolvedValue(makeEstimateResult("unsupported"));
+
+    const { GET } = await import("../../app/api/hexmining/stakes/route");
+    const response = await GET(
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.stakes[0].yield).toMatchObject({
+      status: "unsupported",
+      estimatedYieldHex: null,
+      bpdYieldHex: null,
+      bpdYieldStatus: null,
+      provenance: null,
+      warnings: [],
+    });
+  });
+
+  it("only exposes non-null estimatedYieldHex when estimator returns a valid estimated result with provenance", async () => {
+    createPublicClientForChain.mockReturnValue({});
+    mockReaderInvokesRouteYieldDependency();
+    estimateHexMiningYield.mockResolvedValue({
+      status: "estimated",
+      schemaVersion: "v1",
+      yieldHex: "12345",
+      bpdYieldHex: null,
+      provenance: {
+        chainId: CHAIN_ID,
+        sourceFamily: "HEXMINING",
+        observationId: "obs-estimated",
+        rangeStartDay: 1000,
+        rangeEndDay: 1001,
+      },
+      warnings: ["hexmining-yield-public-estimate-test"],
+    });
+
+    const { GET } = await import("../../app/api/hexmining/stakes/route");
+    const response = await GET(
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.stakes[0].yield).toMatchObject({
+      status: "estimated",
+      estimatedYieldHex: "12345",
+      bpdYieldHex: null,
+      provenance: expect.objectContaining({ observationId: "obs-estimated" }),
+      warnings: ["hexmining-yield-public-estimate-test"],
+    });
+  });
+
   // ── Yield gate — route must never expose estimated yield ──────────────────
 
   // Coverage item 4: every stake in a multi-stake successful response must carry
   // only the gated "unsupported" yield, not "estimated" or "evidence_available".
   it("yield gate preserved for every stake when route response contains multiple stakes", async () => {
     const base = makeSingleStakeDto();
-    const second: HexStakeDto = { ...base.stakes[0], stakeId: "99", stakeIndex: 1 };
+    const second: HexStakeDto = {
+      ...base.stakes[0],
+      stakeId: "99",
+      stakeIndex: 1,
+    };
     const fixture: HexStakeListDto = {
       ...base,
       stakes: [base.stakes[0], second],
@@ -444,7 +836,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
     );
 
     expect(response.status).toBe(200);
@@ -464,7 +858,10 @@ describe("GET /api/hexmining/stakes route contract", () => {
     const base = makeSingleStakeDto();
     const stakeWithBpdWarning: HexStakeDto = {
       ...base.stakes[0],
-      warnings: [...base.stakes[0].warnings, "hexmining-yield-bpd-attribution-unresolved"],
+      warnings: [
+        ...base.stakes[0].warnings,
+        "hexmining-yield-bpd-attribution-unresolved",
+      ],
     };
     const fixture: HexStakeListDto = { ...base, stakes: [stakeWithBpdWarning] };
     createPublicClientForChain.mockReturnValue({});
@@ -472,14 +869,18 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
     );
 
     expect(response.status).toBe(200);
     const body = await response.json();
     const stake = body.data.stakes[0];
     // Warning must be preserved in the pass-through
-    expect(stake.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
+    expect(stake.warnings).toContain(
+      "hexmining-yield-bpd-attribution-unresolved",
+    );
     // Yield stays gated: route must not compute yield because a BPD warning is present
     expect(stake.yield.status).toBe("unsupported");
     expect(stake.yield.estimatedYieldHex).toBeNull();
@@ -495,7 +896,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
     );
 
     expect(response.status).toBe(200);
@@ -504,7 +907,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
     const yieldSerialized = JSON.stringify(stake.yield);
     expect(yieldSerialized).not.toContain('"estimated"');
     expect(yieldSerialized).not.toContain('"evidence_available"');
-    const parsed = JSON.parse(yieldSerialized) as { estimatedYieldHex: unknown };
+    const parsed = JSON.parse(yieldSerialized) as {
+      estimatedYieldHex: unknown;
+    };
     expect(parsed.estimatedYieldHex).toBeNull();
   });
 
@@ -516,7 +921,9 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     const { GET } = await import("../../app/api/hexmining/stakes/route");
     const response = await GET(
-      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+      new Request(
+        makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID }),
+      ),
     );
 
     expect(response.status).toBe(500);
