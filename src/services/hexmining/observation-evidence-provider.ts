@@ -73,6 +73,13 @@ export type ObservationEvidenceMetadata = {
   warnings: string[];
 };
 
+// Internal estimator dependency shape. This is intentionally separate from
+// ObservationEvidenceMetadata so public provider callers continue to receive
+// safe metadata without canonicalPayload.
+export type ObservationEvidenceWithPayload = ObservationEvidenceMetadata & {
+  canonicalPayload: string;
+};
+
 export type GetObservationEvidenceArgs = {
   chainId: number;
   rangeStartDay: number;
@@ -119,6 +126,33 @@ export async function getObservationEvidenceForRange(
   args: GetObservationEvidenceArgs,
   deps: EvidenceProviderDeps = {},
 ): Promise<ObservationEvidenceMetadata | null> {
+  return getObservationEvidence(args, deps, false);
+}
+
+export async function getObservationEvidenceWithPayloadForRange(
+  args: GetObservationEvidenceArgs,
+  deps: EvidenceProviderDeps = {},
+): Promise<ObservationEvidenceWithPayload | null> {
+  return getObservationEvidence(args, deps, true);
+}
+
+async function getObservationEvidence(
+  args: GetObservationEvidenceArgs,
+  deps: EvidenceProviderDeps,
+  includePayload: false,
+): Promise<ObservationEvidenceMetadata | null>;
+async function getObservationEvidence(
+  args: GetObservationEvidenceArgs,
+  deps: EvidenceProviderDeps,
+  includePayload: true,
+): Promise<ObservationEvidenceWithPayload | null>;
+async function getObservationEvidence(
+  args: GetObservationEvidenceArgs,
+  deps: EvidenceProviderDeps,
+  includePayload: boolean,
+): Promise<
+  ObservationEvidenceMetadata | ObservationEvidenceWithPayload | null
+> {
   if (args.chainId !== PULSECHAIN_CHAIN_ID) return null;
 
   const db = deps.db ?? getDb();
@@ -147,12 +181,13 @@ export async function getObservationEvidenceForRange(
 
   if (row === null) return null;
 
-  const invalidation = await db.rawHexDailyDataObservationInvalidation.findFirst({
-    where: { observationId: row.id },
-    select: { id: true },
-  });
+  const invalidation =
+    await db.rawHexDailyDataObservationInvalidation.findFirst({
+      where: { observationId: row.id },
+      select: { id: true },
+    });
 
-  return {
+  const metadata: ObservationEvidenceMetadata = {
     observationId: row.id,
     chainId: row.chainId,
     sourceFamily: "HEXMINING",
@@ -164,5 +199,12 @@ export async function getObservationEvidenceForRange(
     payloadSchemaValid: isPayloadSchemaValid(row.canonicalPayload),
     isInvalidated: invalidation !== null,
     warnings: row.warnings,
+  };
+
+  if (!includePayload) return metadata;
+
+  return {
+    ...metadata,
+    canonicalPayload: row.canonicalPayload,
   };
 }
