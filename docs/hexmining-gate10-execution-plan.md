@@ -98,7 +98,15 @@ Collect all inputs before beginning the verification workflow. All inputs come f
 
 ### How to retrieve inputs
 
-Query the database to find a suitable observation:
+**Step A — Pre-select the target day range and fixture stake.**
+
+Before querying, the operator must independently decide:
+- The exact `rangeStartDay` and `rangeEndDay` for the known historical range being verified, as required by the live-data verification plan. Do not discover this from the database — choose it from the authorized fixture or opt-in stake documentation.
+- The specific fixture or opt-in stake to use. Record the stake's identity (wallet address and on-chain stake index or stake ID) from the authorized source before querying. Do not select an arbitrary stake after the observation is found.
+
+**Step B — Retrieve the observation for the pre-selected range.**
+
+Query the database using the pre-selected day range values. Do not use `ORDER BY createdAt DESC LIMIT 1` — that would select an arbitrary observation unrelated to the authorized fixture range:
 
 ```sql
 SELECT
@@ -115,15 +123,25 @@ SELECT
 FROM "HexMiningObservation"
 WHERE
   "chainId" = 369
+  AND "rangeStartDay" = <pre-selected rangeStartDay>
+  AND "rangeEndDay"   = <pre-selected rangeEndDay>
   AND "isInvalidated" = false
-  AND "payloadSchemaValid" = true
-  AND "rangeStartDay" >= 0
-  AND "rangeEndDay" >= "rangeStartDay"
-ORDER BY "createdAt" DESC
-LIMIT 1;
+  AND "payloadSchemaValid" = true;
 ```
 
-Retrieve the associated `stakeShares` from the corresponding stake record using the stake identifier embedded in the observation.
+If the query returns no rows, the required observation does not yet exist. Do not proceed — run the backend ingestion path to create the observation for the pre-selected range, then re-query.
+
+If the query returns more than one row, select the row whose `observedAtBlock` corresponds to the authorized ingestion run and record the reason for the selection in the evidence package.
+
+**Step C — Retrieve `stakeShares` from the fixture stake.**
+
+`HexMiningObservation` records are range-level daily-data evidence; they do not contain a stake identifier or `stakeShares`. The `stakeShares` value must come from the specific fixture or opt-in stake pre-selected in Step A.
+
+Retrieve `stakeShares` using one of the following sources (in preference order):
+1. A persisted native HEX stake record in the database for the authorized fixture stake (query by wallet address and on-chain stake index).
+2. The on-chain `stakeLists` RPC data read and persisted by the backend ingestion path for the authorized fixture stake.
+
+Do not read `stakeShares` from any source other than the authorized fixture or opt-in stake. Do not pair an arbitrary stake's shares with the observation payload.
 
 Confirm that the `dailyData` array length in the `canonicalPayload` JSON equals `rangeEndDay - rangeStartDay + 1` before proceeding. If there is a mismatch, the harness will fail closed — select a different observation.
 
@@ -145,7 +163,7 @@ This records which codebase was used for verification and is included in the evi
 
 ### Step 2 — Extract and record inputs
 
-Write down (sanitized) all eight inputs listed in the Pre-verification inputs table. Do not record:
+Write down (sanitized) all nine inputs listed in the Pre-verification inputs table. Do not record:
 - The raw RPC URL or any credentials.
 - Private wallet ownership details or opt-in participant identities beyond the minimum fixture identifiers.
 - Any secrets, environment variable values, or API tokens.
@@ -204,6 +222,8 @@ The result must satisfy all success criteria (see below). Check each field:
 | `result.provenance.rangeStartDay` | Matches input `rangeStartDay` | Must match |
 | `result.provenance.rangeEndDay` | Matches input `rangeEndDay` | Must match |
 | `result.warnings` | Any array | Review and record; expected upstream warnings and BPD warnings are acceptable |
+
+**Note on provenance scope:** `result.provenance` is constructed by the harness directly from the input object (`makeProvenance(input)`). It is a sanitized echo of the inputs collected in Step 2 — it does not expose the estimator's own internal provenance. The estimator's own provenance path (populated from the `evidence` record returned by `fetchEvidence`) is exercised by its internal evidence-provider traversal; its correctness is covered by the existing route/reader contract tests in PRs #234–#236. The key evidence that the estimator traversed its own evidence-provider path successfully during Gate 10 is `result.estimatorStatus === "evidence_available"`, which the estimator can only return after fetching evidence, validating it through its own internal checks, and running the calculation — meaning the estimator's own internal provenance-construction path was exercised. If the operator's invocation script has access to the raw `estimatorResult` (before the harness wraps it), record `estimatorResult.provenance` separately in the evidence package as additional confirmation.
 
 ### Step 6 — Review warnings
 
@@ -274,7 +294,7 @@ Gate 10 passes only when **all** of the following are true:
 2. `result.failureCode === null`
 3. `result.estimatorStatus === "evidence_available"` — the estimator must reach this state before the gate-lift PR promotes it to `"estimated"`
 4. `result.formula.entryCount === result.formula.expectedEntryCount` — payload covers the full declared range
-5. `result.formula.reproducedYieldHex` is a non-null decimal string — formula reproduction succeeded
+5. `result.formula.reproducedYieldHex` is a non-null decimal string — formula reproduction succeeded. Note: "Hex" in this field name refers to the HEX token (hearts unit), not hexadecimal encoding; the value is a bigint base-10 decimal string (e.g., `"500"`).
 6. `result.formula.estimatorInternalYieldHex === null` — confirms the normal production estimator path ran without test-only substitution
 7. `result.provenance.chainId === 369`
 8. All provenance fields match the inputs collected in Step 2
