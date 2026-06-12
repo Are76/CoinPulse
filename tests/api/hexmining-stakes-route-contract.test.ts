@@ -95,7 +95,14 @@ function makeSingleStakeDto(): HexStakeListDto {
       markPrice: null,
       costBasisPolicy: null,
     },
-    yield: { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null },
+    yield: {
+      status: "unsupported",
+      estimatedYieldHex: null,
+      bpdYieldHex: null,
+      bpdYieldStatus: null,
+      provenance: null,
+      warnings: [],
+    },
     provenance: {
       chainId: CHAIN_ID,
       walletAddress: WALLET_ADDRESS.toLowerCase(),

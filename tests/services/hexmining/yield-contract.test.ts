@@ -23,6 +23,7 @@ import type {
   HexBpdYieldStatus,
   HexStakeDto,
   HexStakeYieldDto,
+  HexStakeYieldProvenance,
   HexYieldStatus,
 } from "@/services/hexmining/types";
 
@@ -32,6 +33,13 @@ const PULSECHAIN_CHAIN_ID = 369;
 const WALLET_ADDRESS = "0x1111111111111111111111111111111111111111";
 const OBSERVED_AT_BLOCK = "21000000";
 const OBSERVED_AT = "2026-06-06T00:00:00.000Z";
+const TEST_YIELD_PROVENANCE: HexStakeYieldProvenance = {
+  chainId: PULSECHAIN_CHAIN_ID,
+  sourceFamily: "HEXMINING",
+  observationId: "00000000-0000-4000-8000-000000000001",
+  rangeStartDay: 1000,
+  rangeEndDay: 1200,
+};
 
 // ─── Yield DTO fixture builders ───────────────────────────────────────────────
 
@@ -41,6 +49,8 @@ function buildUnsupportedYieldDto(): HexStakeYieldDto {
     estimatedYieldHex: null,
     bpdYieldHex: null,
     bpdYieldStatus: null,
+    provenance: null,
+    warnings: [],
   };
 }
 
@@ -50,6 +60,8 @@ function buildUnavailableYieldDto(): HexStakeYieldDto {
     estimatedYieldHex: null,
     bpdYieldHex: null,
     bpdYieldStatus: "not_applicable",
+    provenance: null,
+    warnings: [],
   };
 }
 
@@ -65,6 +77,8 @@ function buildEstimatedYieldDto(opts: {
     estimatedYieldHex: opts.estimatedYieldHex,
     bpdYieldHex: opts.bpdYieldHex ?? null,
     bpdYieldStatus: opts.bpdYieldStatus ?? "unknown",
+    provenance: TEST_YIELD_PROVENANCE,
+    warnings: [],
   } as EstimatedYieldDto;
 }
 
@@ -80,6 +94,8 @@ function buildExactYieldDto(opts?: {
     estimatedYieldHex: opts?.estimatedYieldHex ?? "1000000000",
     bpdYieldHex: opts?.bpdYieldHex ?? null,
     bpdYieldStatus: opts?.bpdYieldStatus ?? "not_applicable",
+    provenance: TEST_YIELD_PROVENANCE,
+    warnings: [],
   } as ExactYieldDto;
 }
 
@@ -166,6 +182,8 @@ describe("HexStakeYieldDto type contract — accepts all four states", () => {
       estimatedYieldHex: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
+      provenance: null,
+      warnings: [],
     };
     expect(dto.status).toBe("unsupported");
   });
@@ -176,6 +194,8 @@ describe("HexStakeYieldDto type contract — accepts all four states", () => {
       estimatedYieldHex: null,
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
+      provenance: null,
+      warnings: [],
     };
     expect(dto.status).toBe("unavailable");
   });
@@ -186,6 +206,8 @@ describe("HexStakeYieldDto type contract — accepts all four states", () => {
       estimatedYieldHex: "1234567890",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
+      provenance: TEST_YIELD_PROVENANCE,
+      warnings: [],
     };
     expect(dto.status).toBe("estimated");
   });
@@ -196,6 +218,8 @@ describe("HexStakeYieldDto type contract — accepts all four states", () => {
       estimatedYieldHex: "1234567890",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
+      provenance: TEST_YIELD_PROVENANCE,
+      warnings: [],
     };
     expect(dto.status).toBe("exact");
   });
