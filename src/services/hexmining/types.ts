@@ -55,6 +55,19 @@ export type HexStakeSourceDeferred = "hsi" | "htt";
 
 export type HexBpdYieldStatus = "applicable" | "not_applicable" | "unknown";
 
+// ─── Yield provenance ─────────────────────────────────────────────────────────
+//
+// Carried on EstimatedYieldDto and (when available) UnavailableYieldDto.
+// Always references a HexMiningObservation record — observationId is a UUID.
+
+export type HexStakeYieldProvenance = {
+  chainId: number;
+  sourceFamily: string;
+  observationId: string;
+  rangeStartDay: number;
+  rangeEndDay: number;
+};
+
 // ─── Yield status ─────────────────────────────────────────────────────────────
 //
 //   unsupported: yield reads not yet implemented (Phases 1–3)
@@ -146,23 +159,31 @@ export type UnsupportedYieldDto = {
   estimatedYieldHex: null;
   bpdYieldHex: null;
   bpdYieldStatus: null;
+  provenance: null;
+  warnings: string[];
 };
 
 export type UnavailableYieldDto = {
   status: "unavailable";
   estimatedYieldHex: null;
+  bpdYieldStatus: HexBpdYieldStatus;
   bpdYieldHex: null;
-  bpdYieldStatus: null;
+  provenance: HexStakeYieldProvenance | null;
+  warnings: string[];
 };
 
 export type EstimatedYieldDto = {
   status: "estimated";
   estimatedYieldHex: string;
+  provenance: HexStakeYieldProvenance;
+  warnings: string[];
 } & HexStakeBpdYieldFields;
 
 export type ExactYieldDto = {
   status: "exact";
   estimatedYieldHex: string;
+  provenance: HexStakeYieldProvenance;
+  warnings: string[];
 } & HexStakeBpdYieldFields;
 
 export type HexStakeYieldDto =

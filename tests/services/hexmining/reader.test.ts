@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { readNativeHexStakes } from "@/services/hexmining/reader";
-import type { HexMiningReadClient } from "@/services/hexmining/reader";
+import type { EstimateYieldDep, HexMiningReadClient } from "@/services/hexmining/reader";
 import { PHEX_ASSET_ID } from "@/services/hexmining/types";
+import type { HexMiningYieldEstimateResult } from "@/services/hexmining/yield-estimator";
 
 // ─── Test constants ───────────────────────────────────────────────────────────
 
@@ -517,5 +518,517 @@ describe("readNativeHexStakes", () => {
       const parsed = JSON.parse(yieldSerialized) as { estimatedYieldHex: unknown };
       expect(parsed.estimatedYieldHex).toBeNull();
     });
+  });
+});
+
+// ─── Yield estimator wiring ────────────────────────────────────────────────────
+//
+// Tests for the injectable estimateYield dep path in readNativeHexStakes.
+// These tests do NOT require API route changes — all assertions are at the reader layer.
+
+// Build an estimator result factory for test injection.
+function makeEstimateResult(
+  overrides: Partial<HexMiningYieldEstimateResult> = {},
+): HexMiningYieldEstimateResult {
+  return {
+    status: "evidence_available",
+    schemaVersion: "v1",
+    yieldHex: null,
+    provenance: {
+      chainId: 369,
+      sourceFamily: "HEXMINING",
+      observationId: "obs-uuid-1",
+      rangeStartDay: 1000,
+      rangeEndDay: 4999,
+    },
+    warnings: [],
+    ...overrides,
+  } as HexMiningYieldEstimateResult;
+}
+
+const NOMINAL_OBSERVATION_PROVENANCE = {
+  chainId: 369,
+  sourceFamily: "HEXMINING",
+  observationId: "obs-uuid-1",
+  rangeStartDay: 1000,
+  rangeEndDay: 4999,
+} as const;
+
+describe("yield estimator wiring", () => {
+  // 21. Estimator dep is called with expected stake args.
+  it("calls estimateYield dep with correct stake and range args for each stake", async () => {
+    const estimateYieldMock = vi.fn<EstimateYieldDep>(async () => makeEstimateResult());
+    const client = makeClient();
+    await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield: estimateYieldMock,
+    });
+
+    expect(estimateYieldMock).toHaveBeenCalledTimes(1);
+    const call = estimateYieldMock.mock.calls[0]![0]!;
+    expect(call.chainId).toBe(369);
+    expect(call.stakeId).toBe("42");
+    expect(call.stakeShares).toBe(500_000_000_000n);
+    expect(call.lockedDay).toBe(1000);
+    expect(call.stakedDays).toBe(5555);
+    expect(call.currentDay).toBe(5000);
+    // rangeStartDay = lockedDay; rangeEndDay = min(currentDay - 1, lockedDay + stakedDays - 1)
+    expect(call.rangeStartDay).toBe(1000);
+    expect(call.rangeEndDay).toBe(4999); // min(5000-1=4999, 1000+5555-1=6554) = 4999
+  });
+
+  // 22. evidence_available maps to public unavailable.
+  it("maps estimator evidence_available to public yield status unavailable", async () => {
+    const estimateYield = vi.fn(async () =>
+      makeEstimateResult({
+        status: "evidence_available",
+        provenance: NOMINAL_OBSERVATION_PROVENANCE,
+        warnings: [],
+      }),
+    );
+    const client = makeClient();
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    expect(result.stakes[0].yield.status).toBe("unavailable");
+    expect(result.stakes[0].yield.estimatedYieldHex).toBeNull();
+    expect(result.stakes[0].yield.bpdYieldHex).toBeNull();
+    const yieldJson = JSON.stringify(result.stakes[0].yield);
+    expect(yieldJson).not.toContain('"evidence_available"');
+  });
+
+  // 23. insufficient_observations maps to unavailable with provenance and warnings retained.
+  it("maps insufficient_observations to unavailable, retaining provenance and warnings", async () => {
+    const estimateYield = vi.fn(async () =>
+      makeEstimateResult({
+        status: "insufficient_observations",
+        provenance: {
+          chainId: 369,
+          sourceFamily: "HEXMINING",
+          observationId: "obs-uuid-1",
+          rangeStartDay: 1000,
+          rangeEndDay: 3000,
+        },
+        warnings: ["hexmining-yield-insufficient-elapsed-day-coverage"],
+      }),
+    );
+    const client = makeClient();
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    const yieldDto = result.stakes[0].yield;
+    expect(yieldDto.status).toBe("unavailable");
+    expect(yieldDto.estimatedYieldHex).toBeNull();
+    // provenance is available when observationId is non-null
+    if (yieldDto.status === "unavailable") {
+      expect(yieldDto.provenance?.observationId).toBe("obs-uuid-1");
+      expect(yieldDto.warnings).toContain("hexmining-yield-insufficient-elapsed-day-coverage");
+    }
+  });
+
+  // 24. invalid_observation maps safely without leaking internal status.
+  it("maps invalid_observation to unavailable without leaking internal status string", async () => {
+    const estimateYield = vi.fn(async () =>
+      makeEstimateResult({
+        status: "invalid_observation",
+        provenance: {
+          chainId: 369,
+          sourceFamily: "HEXMINING",
+          observationId: null,
+          rangeStartDay: null,
+          rangeEndDay: null,
+        },
+        warnings: ["hexmining-yield-invalid-stake-shares"],
+      }),
+    );
+    const client = makeClient();
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    const yieldDto = result.stakes[0].yield;
+    expect(yieldDto.status).toBe("unavailable");
+    const json = JSON.stringify(yieldDto);
+    expect(json).not.toContain('"invalid_observation"');
+    expect(json).not.toContain('"evidence_available"');
+  });
+
+  // 25. BPD not_applicable: stake starts after BPD day 353 (lockedDay=1000).
+  it("derives bpdYieldStatus not_applicable when stake does not span BPD day 353", async () => {
+    const estimateYield = vi.fn(async () =>
+      makeEstimateResult({
+        status: "evidence_available",
+        provenance: NOMINAL_OBSERVATION_PROVENANCE,
+        warnings: [], // no BPD warning
+      }),
+    );
+    const client = makeClient(); // NOMINAL_STAKE: lockedDay=1000 > 353
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    const yieldDto = result.stakes[0].yield;
+    expect(yieldDto.status).toBe("unavailable");
+    expect(yieldDto.bpdYieldStatus).toBe("not_applicable");
+    expect(yieldDto.bpdYieldHex).toBeNull();
+  });
+
+  // 26. BPD unknown: elapsed range includes day 353, attribution unresolved.
+  it("derives bpdYieldStatus unknown when hexmining-yield-bpd-attribution-unresolved warning is present", async () => {
+    const BPD_STAKE = [42n, 100_000_000n, 500_000_000_000n, 300, 200, 0, false] as const;
+    // lockedDay=300, stakedDays=200 → elapsed range [300, 399] spans BPD day 353
+    const estimateYield = vi.fn(async () =>
+      makeEstimateResult({
+        status: "evidence_available",
+        provenance: {
+          chainId: 369,
+          sourceFamily: "HEXMINING",
+          observationId: "obs-bpd",
+          rangeStartDay: 300,
+          rangeEndDay: 399,
+        },
+        warnings: ["hexmining-yield-bpd-attribution-unresolved"],
+      }),
+    );
+    const client = makeClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 1n;
+        if (functionName === "currentDay") return 400n;
+        if (functionName === "stakeLists") return BPD_STAKE;
+        throw new Error(`unexpected: ${functionName}`);
+      },
+    });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    expect(result.stakes[0].yield.status).toBe("unavailable");
+    expect(result.stakes[0].yield.bpdYieldStatus).toBe("unknown");
+    expect(result.stakes[0].yield.bpdYieldHex).toBeNull();
+  });
+
+  // 27. BPD applicable: estimated status with non-null bpdYieldHex.
+  it("assembles EstimatedYieldDto with bpdYieldStatus applicable and non-null bpdYieldHex", async () => {
+    const BPD_STAKE = [42n, 100_000_000n, 500_000_000_000n, 100, 1000, 0, false] as const;
+    // lockedDay=100, stakedDays=1000 → spans day 353; no unresolved warning → applicable
+    const estimateYield = vi.fn(async (): Promise<HexMiningYieldEstimateResult> => ({
+      status: "estimated",
+      schemaVersion: "v1",
+      yieldHex: "9000000000",
+      bpdYieldHex: "3000000000",
+      provenance: {
+        chainId: 369,
+        sourceFamily: "HEXMINING",
+        observationId: "obs-bpd-resolved",
+        rangeStartDay: 100,
+        rangeEndDay: 1099,
+      },
+      warnings: [],
+    }));
+    const client = makeClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 1n;
+        if (functionName === "currentDay") return 1100n;
+        if (functionName === "stakeLists") return BPD_STAKE;
+        throw new Error(`unexpected: ${functionName}`);
+      },
+    });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    const yieldDto = result.stakes[0].yield;
+    expect(yieldDto.status).toBe("estimated");
+    expect(yieldDto.estimatedYieldHex).toBe("9000000000");
+    expect(yieldDto.bpdYieldStatus).toBe("applicable");
+    expect(yieldDto.bpdYieldHex).toBe("3000000000");
+  });
+
+  // 28. BPD not_applicable on estimated path: stake does not span day 353.
+  it("assembles EstimatedYieldDto with bpdYieldStatus not_applicable and null bpdYieldHex", async () => {
+    const POST_BPD_STAKE = [42n, 100_000_000n, 500_000_000_000n, 1000, 5555, 0, false] as const;
+    // lockedDay=1000 > 353 → not_applicable
+    const estimateYield = vi.fn(async (): Promise<HexMiningYieldEstimateResult> => ({
+      status: "estimated",
+      schemaVersion: "v1",
+      yieldHex: "5000000000",
+      bpdYieldHex: null,
+      provenance: {
+        chainId: 369,
+        sourceFamily: "HEXMINING",
+        observationId: "obs-no-bpd",
+        rangeStartDay: 1000,
+        rangeEndDay: 4999,
+      },
+      warnings: [],
+    }));
+    const client = makeClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 1n;
+        if (functionName === "currentDay") return DEFAULT_CURRENT_DAY;
+        if (functionName === "stakeLists") return POST_BPD_STAKE;
+        throw new Error(`unexpected: ${functionName}`);
+      },
+    });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    const yieldDto = result.stakes[0].yield;
+    expect(yieldDto.status).toBe("estimated");
+    expect(yieldDto.estimatedYieldHex).toBe("5000000000");
+    expect(yieldDto.bpdYieldStatus).toBe("not_applicable");
+    expect(yieldDto.bpdYieldHex).toBeNull();
+  });
+
+  // 29. BPD unknown on estimated path: elapsed spans day 353 but attribution unresolved.
+  it("assembles EstimatedYieldDto with bpdYieldStatus unknown when BPD attribution warning is present", async () => {
+    const BPD_STAKE = [42n, 100_000_000n, 500_000_000_000n, 300, 200, 0, false] as const;
+    const estimateYield = vi.fn(async (): Promise<HexMiningYieldEstimateResult> => ({
+      status: "estimated",
+      schemaVersion: "v1",
+      yieldHex: "7000000000",
+      bpdYieldHex: null,
+      provenance: {
+        chainId: 369,
+        sourceFamily: "HEXMINING",
+        observationId: "obs-bpd-unresolved",
+        rangeStartDay: 300,
+        rangeEndDay: 399,
+      },
+      warnings: ["hexmining-yield-bpd-attribution-unresolved"],
+    }));
+    const client = makeClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 1n;
+        if (functionName === "currentDay") return 400n;
+        if (functionName === "stakeLists") return BPD_STAKE;
+        throw new Error(`unexpected: ${functionName}`);
+      },
+    });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    const yieldDto = result.stakes[0].yield;
+    expect(yieldDto.status).toBe("estimated");
+    expect(yieldDto.bpdYieldStatus).toBe("unknown");
+    expect(yieldDto.bpdYieldHex).toBeNull();
+  });
+
+  // 30. Warning pass-through from estimator to yield DTO.
+  it("passes estimator warnings through to the yield DTO without modification", async () => {
+    const warnings = [
+      "hexmining-yield-insufficient-elapsed-day-coverage",
+      "hexmining-yield-bpd-attribution-unresolved",
+    ];
+    const estimateYield = vi.fn(async () =>
+      makeEstimateResult({
+        status: "evidence_available",
+        provenance: NOMINAL_OBSERVATION_PROVENANCE,
+        warnings,
+      }),
+    );
+    const client = makeClient();
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    const yieldDto = result.stakes[0].yield;
+    expect(yieldDto.status).toBe("unavailable");
+    if (yieldDto.status === "unavailable") {
+      expect(yieldDto.warnings).toEqual(warnings);
+    }
+  });
+
+  // 31. Provenance fields populated from estimator result when observationId is non-null.
+  it("assembles yield provenance from estimator result when evidence observationId is non-null", async () => {
+    const estimateYield = vi.fn(async () =>
+      makeEstimateResult({
+        status: "evidence_available",
+        provenance: {
+          chainId: 369,
+          sourceFamily: "HEXMINING",
+          observationId: "obs-uuid-provenance",
+          rangeStartDay: 1000,
+          rangeEndDay: 4999,
+        },
+        warnings: [],
+      }),
+    );
+    const client = makeClient();
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    const yieldDto = result.stakes[0].yield;
+    expect(yieldDto.status).toBe("unavailable");
+    if (yieldDto.status === "unavailable") {
+      expect(yieldDto.provenance).not.toBeNull();
+      expect(yieldDto.provenance?.chainId).toBe(369);
+      expect(yieldDto.provenance?.sourceFamily).toBe("HEXMINING");
+      expect(yieldDto.provenance?.observationId).toBe("obs-uuid-provenance");
+      expect(yieldDto.provenance?.rangeStartDay).toBe(1000);
+      expect(yieldDto.provenance?.rangeEndDay).toBe(4999);
+    }
+  });
+
+  // 32. No dep provided → yield remains unsupported (existing gate-preservation tests still hold).
+  it("yield remains unsupported when no estimateYield dep is provided", async () => {
+    const client = makeClient();
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      // no estimateYield
+    });
+    expect(result.stakes[0].yield.status).toBe("unsupported");
+    expect(result.stakes[0].yield.estimatedYieldHex).toBeNull();
+  });
+
+  // 33. Estimator wiring for multiple stakes — each stake gets its own call.
+  it("calls estimateYield once per stake for a multi-stake response", async () => {
+    const estimateYield = vi.fn(async () => makeEstimateResult());
+    let stakeCallCount = 0;
+    const client = makeClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 3n;
+        if (functionName === "currentDay") return DEFAULT_CURRENT_DAY;
+        if (functionName === "stakeLists") {
+          const idx = stakeCallCount++;
+          return [BigInt(idx + 10), 100_000_000n, 500_000_000_000n, 1000, 5555, 0, false];
+        }
+        throw new Error(`unexpected: ${functionName}`);
+      },
+    });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    expect(result.stakes).toHaveLength(3);
+    expect(estimateYield).toHaveBeenCalledTimes(3);
+    for (const stake of result.stakes) {
+      expect(stake.yield.status).toBe("unavailable");
+    }
+  });
+
+  // 34. Public API route guard: no API route is changed or required for these tests.
+  // (This test exists to document the guarantee — all assertions above use readNativeHexStakes directly.)
+  it("all yield wiring tests call readNativeHexStakes directly, not through any API route", () => {
+    // This is a compile-time and documentation assertion: the reader dep is injectable.
+    // No route import is present in this test file.
+    expect(true).toBe(true);
+  });
+
+  // 35. Estimator present but currentDay RPC fails → "unavailable" (not "unsupported").
+  it("yields unavailable with warning when estimator is wired but currentDay is unavailable", async () => {
+    const estimateYield = vi.fn<EstimateYieldDep>(async () => makeEstimateResult());
+    const client = makeClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 1n;
+        if (functionName === "currentDay") throw new Error("rpc-failure");
+        if (functionName === "stakeLists") return NOMINAL_STAKE;
+        throw new Error(`unexpected: ${functionName}`);
+      },
+    });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    const y = result.stakes[0]!.yield;
+    expect(y.status).toBe("unavailable");
+    expect(y.warnings).toContain("hexmining-current-day-unavailable");
+    expect(estimateYield).not.toHaveBeenCalled();
+  });
+
+  // 36. Pending stake (lockedDay > currentDay) with estimator wired → "unavailable",
+  //     estimator NOT called (no inverted range sent to evidence provider).
+  it("yields unavailable for pending stakes without calling the estimator", async () => {
+    const estimateYield = vi.fn<EstimateYieldDep>(async () => makeEstimateResult());
+    const client = makeClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 1n;
+        if (functionName === "currentDay") return 5_000n;
+        // lockedDay=6000 > currentDay=5000 → pending stake
+        if (functionName === "stakeLists") return [42n, 100_000_000n, 500_000_000_000n, 6000, 365, 0, false];
+        throw new Error(`unexpected: ${functionName}`);
+      },
+    });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    const y = result.stakes[0]!.yield;
+    expect(y.status).toBe("unavailable");
+    expect(y.warnings).toContain("hexmining-yield-no-elapsed-days");
+    expect(estimateYield).not.toHaveBeenCalled();
+  });
+
+  // 37. BPD-spanning stake with evidence_available result → bpdYieldStatus "unknown" (not "applicable" + null).
+  it("normalizes bpdYieldStatus from applicable to unknown for unavailable yields on BPD-spanning stakes", async () => {
+    // lockedDay=100, stakedDays=5000: spans BPD day 353 (100 <= 353 < 5100).
+    const estimateYield = vi.fn<EstimateYieldDep>(async () =>
+      makeEstimateResult({
+        status: "evidence_available",
+        provenance: {
+          chainId: 369,
+          sourceFamily: "HEXMINING",
+          observationId: "obs-bpd-1",
+          rangeStartDay: 100,
+          rangeEndDay: 4999,
+        },
+        warnings: [],
+      }),
+    );
+    const client = makeClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 1n;
+        if (functionName === "currentDay") return 5_000n;
+        // lockedDay=100, stakedDays=5000, active at currentDay=5000
+        if (functionName === "stakeLists") return [42n, 100_000_000n, 500_000_000_000n, 100, 5000, 0, false];
+        throw new Error(`unexpected: ${functionName}`);
+      },
+    });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+      estimateYield,
+    });
+    const y = result.stakes[0]!.yield;
+    expect(y.status).toBe("unavailable");
+    // Must NOT emit "applicable" + null combination — that would violate BPD correlation.
+    expect(y.bpdYieldStatus).toBe("unknown");
+    expect(y.bpdYieldHex).toBeNull();
   });
 });

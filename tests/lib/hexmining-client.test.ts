@@ -85,7 +85,7 @@ describe("hexmining client — fetchHexMiningStakes", () => {
     );
   });
 
-  // ── DTO passthrough ───────────────────────────────────────────────────────
+  // ── DTO passthrough ─────────────────────────────────────────────────────────
 
   it("unwraps { data } envelope and returns HexStakeListDto unchanged", async () => {
     global.fetch = vi.fn().mockResolvedValue(
@@ -137,6 +137,8 @@ describe("hexmining client — fetchHexMiningStakes", () => {
             estimatedYieldHex: null,
             bpdYieldHex: null,
             bpdYieldStatus: null,
+            provenance: null,
+            warnings: [],
           },
           provenance: {
             chainId: CHAIN_ID,
@@ -185,7 +187,7 @@ describe("hexmining client — fetchHexMiningStakes", () => {
     expect(result.warnings).toContain("hexmining-unsupported-chain-1");
   });
 
-  // ── Error handling ────────────────────────────────────────────────────────
+  // ── Error handling ──────────────────────────────────────────────────────────
 
   it("throws ApiClientError with structured fields on a 400 response", async () => {
     global.fetch = vi.fn().mockResolvedValue(

@@ -76,6 +76,8 @@ function buildMinimalHexStakeDto(overrides: Partial<HexStakeDto> = {}): HexStake
       estimatedYieldHex: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
+      provenance: null,
+      warnings: [],
     },
     provenance: {
       chainId: PULSECHAIN_CHAIN_ID,
