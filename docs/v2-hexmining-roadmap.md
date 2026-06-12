@@ -2,9 +2,9 @@
 
 > **AI USAGE NOTE:** This is the condensed active working document (~200 lines). Full historical context, completed-phase details, PR logs, validation history, and research records are in [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md). **For routine implementation work, read only this file.** Use `grep` to locate specific gates or sections. Do not load the archive into context unless explicitly asked.
 
-**Document status:** Phase 4C internal pipeline complete and gated — PRs #208–#232 merged. Public estimated yield intentionally gated. `HexStakeYieldDto` contract APPROVED FOR IMPLEMENTATION (§11.16, OQ-1–OQ-6 resolved, PR #232). Gate-lift implementation PR is the next step.
+**Document status:** Phase 4C internal pipeline complete and gated — PRs #208–#236 merged. Public estimated yield remains intentionally gated. `HexStakeYieldDto` contract APPROVED FOR IMPLEMENTATION (§11.16, OQ-1–OQ-6 resolved, PR #232); reader assembly, route dependency wiring, and focused public DTO contract coverage are closed by PRs #234–#236. Remaining gate-lift gates are still explicit in §11.14.
 **Created:** 2026-06-06
-**Last updated:** 2026-06-11 (docs/split-hexmining-roadmap-archive: condensed active roadmap; history moved to archive)
+**Last updated:** 2026-06-12 (docs/hexmining-yield-route-and-dto-test-closure: route wiring and DTO contract coverage closure after PRs #235–#236)
 
 **Archive:** [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md) — historical PR logs, completed phase details, research records, validation history, full §1–§15 prose.
 
@@ -20,7 +20,7 @@
 | Phase 3 | HexMining page shell / unsupported valuation display | ✅ Complete — merged PRs #192, #193 |
 | Phase 4A | Observation persistence, status API, and operator surface | ✅ Complete — merged PRs #199–#202 |
 | Phase 4B | dailyDataRange read boundary, persistence wiring, and gated operator route | ✅ Complete — merged PRs #204, #205, #206 |
-| Phase 4C | Yield estimation and DTO wiring | ⚠️ In progress — PRs #208–#232 merged; formula complete and gated; DTO contract approved (PR #232); gate-lift implementation PR is next |
+| Phase 4C | Yield estimation and DTO wiring | ⚠️ In progress — PRs #208–#236 merged; formula complete and gated; DTO contract approved (PR #232); reader assembly, route dependency wiring, and DTO contract coverage closed (PRs #234–#236); remaining gate-lift gates still open |
 | Phase 5 | Ended stake discovery | 🔲 Not started |
 | Phase 6 | HSI and HTT source families | 🔲 Not started |
 | Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
@@ -46,37 +46,38 @@ These rules apply to every PR. See archive §3 and §11.6 for full rationale.
 
 ## Gate-Lift State (§11.14)
 
-**Current public behavior:** `estimateHexMiningYield` always returns `status: "evidence_available"`, `yieldHex: null` for valid evidence paths. The formula runs internally (proven via injectable `applyCalculation` in tests) but the result is not surfaced publicly. The reader (`reader.ts`) hardcodes `yield: { status: "unsupported", ... }`.
+**Current public behavior:** `estimateHexMiningYield` still returns `status: "evidence_available"`, `yieldHex: null` for valid evidence paths. The formula runs internally (proven via injectable `applyCalculation` in tests) but the real production estimator does not yet surface non-null public estimated yield. Reader/route infrastructure can now carry an injected estimate result through the approved DTO path (PRs #234–#235), and PR #236 covers that path with focused contract tests; this is infrastructure/test closure, not public release of estimated yield.
 
 See archive §11.14 for full gating rationale, internal behavior details, and review comment policy.
 
-### Files that must NOT be changed until gate is lifted
+### Gate-protected implementation state
 
-| File | Constraint |
+| File | Current constraint/status |
 |---|---|
-| `src/services/hexmining/reader.ts` | `yield: { status: "unsupported", ... }` hardcoded; no `fetchYieldEvidence` dep |
-| `app/api/hexmining/stakes/route.ts` | No yield evidence fetch; calls `readNativeHexStakes` without yield wiring |
-| `src/services/hexmining/observation-evidence-provider.ts` | No `EvidenceWithCanonicalPayload` export; no `getObservationEvidenceWithPayloadForRange` |
-| `tests/services/hexmining/reader.test.ts` | Gate-preservation tests only — no yield wiring or estimated-yield assertions |
-| `tests/api/hexmining-stakes-route-contract.test.ts` | Gate-preservation tests only — no estimated-yield DTO assertions |
+| `src/services/hexmining/yield-estimator.ts` | Public estimator gate remains active: valid evidence paths return `status: "evidence_available"`, `yieldHex: null`; no production promotion to `"estimated"` yet |
+| `src/services/hexmining/reader.ts` | ✅ PR #234 closed reader assembly: injectable `estimateYield` results can assemble the approved `HexStakeYieldDto` shape; without the dep, yield remains `"unsupported"` |
+| `app/api/hexmining/stakes/route.ts` | ✅ PR #235 closed route wiring: the route passes `estimateYield` into `readNativeHexStakes` using the existing `estimateHexMiningYield` + evidence-provider dependency path |
+| `src/services/hexmining/observation-evidence-provider.ts` | Evidence provider remains backend-only; no canonical payload exposure in public DTO/API response |
+| `tests/services/hexmining/reader.test.ts` | ✅ Reader contract coverage includes estimated DTO assembly and safety downgrades |
+| `tests/api/hexmining-stakes-route-contract.test.ts` | ✅ PR #236 closed focused route/public DTO contract coverage for the injected estimated-yield path and route envelope |
 
 ### Gate-lift prerequisites
 
-A gate-lift PR may promote `"estimated"` into public output **only** when all of the following are satisfied in that PR:
+A gate-lift PR may promote `"estimated"` into public output **only** when all of the following are satisfied before release:
 
 1. **Elapsed-days-only coverage rule** — ✅ **RESOLVED (PR #225)**
-2. **BPD attribution gate** — ✅ **RESOLVED at estimator boundary (PR #226)**; full `bpdYieldHex`/`bpdYieldStatus` reader/route assembly required in gate-lift PR
+2. **BPD attribution gate** — ✅ **RESOLVED at estimator boundary (PR #226)**; reader/route `bpdYieldHex`/`bpdYieldStatus` assembly and contract coverage closed by PRs #234–#236; final production promotion remains gated
 3. **§11.9 provenance fields** — ✅ **RESOLVED (PR #227)**
-4. `HexStakeDto.yield` field assembly in `reader.ts` updated — including `bpdYieldHex`, `bpdYieldStatus`, `estimatedYieldHex` wiring from `estimateHexMiningYield`
-5. `GET /api/hexmining/stakes` route wires the `fetchEvidence` dep
-6. Contract tests cover full estimated-yield DTO path (non-null `estimatedYieldHex`, BPD correlation, provenance completeness in assembled `HexStakeDto`)
+4. **`HexStakeDto.yield` field assembly** — ✅ **RESOLVED (PR #234)** — including `bpdYieldHex`, `bpdYieldStatus`, `estimatedYieldHex`, `provenance`, and `warnings` wiring from injected `estimateYield` results
+5. **`GET /api/hexmining/stakes` route dependency wiring** — ✅ **RESOLVED (PR #235)** — route passes `estimateYield` into `readNativeHexStakes` through the existing `estimateHexMiningYield` + `getObservationEvidenceWithPayloadForRange` path
+6. **Contract tests for full public estimated-yield DTO path** — ✅ **RESOLVED (PR #236)** — covers non-null `estimatedYieldHex`, BPD field correlation/statuses, provenance completeness, missing-provenance downgrade, and route envelope
 7. **EES/penalty distribution** — ✅ **RESOLVED (PR #224, Finding A)** — penalties already included in `dayPayoutTotal`; see `docs/hexmining-penalty-distribution-research.md`
 8. **DTO contract approval** — ✅ **RESOLVED (PR #232)** — §11.16 OQ-1–OQ-6 approved
-9. Explicit contract tests for public estimated-yield DTO path in gate-lift PR
+9. **Explicit contract tests for public estimated-yield DTO path** — ✅ **RESOLVED (PR #236)** — focused route/reader contract tests cover the approved DTO path before public promotion
 10. Live-data fixture or opt-in integration verification against a known historical day range on PulseChain (chain ID 369)
 11. Final docs record approving the gate lift — this roadmap updated with gate-lifted record and PR reference
 
-**Resolved:** items 1, 3, 7, 8; item 2 resolved at estimator boundary. **Remaining for implementation PR:** items 4–6, 9–11.
+**Resolved:** items 1–9, with item 2 resolved at the estimator boundary and reader/route coverage closed by PRs #234–#236. **Remaining gates before public estimated yield release:** item 10, item 11, and the final production promotion of valid evidence paths from internal `"evidence_available"`/`yieldHex: null` to public `"estimated"` with non-null `estimatedYieldHex`.
 
 ---
 
@@ -161,30 +162,30 @@ export interface HexStakeYieldProvenance {
 
 **`schemaVersion`:** top-level `HexStakeDto.schemaVersion` bumped on gate lift — no separate yield subobject version (OQ-6).
 
-**This contract is APPROVED FOR IMPLEMENTATION.** Gate-lift PR may proceed. Remaining prerequisites: §11.14 items 4–6, 9–11.
+**This contract is APPROVED FOR IMPLEMENTATION.** Infrastructure and focused contract-test closure are complete through PR #236. Remaining public-release gates: §11.14 items 10–11 plus the final production promotion from gated internal evidence to public `"estimated"`.
 
 ---
 
 ## Next PR
 
 ```
-feat(hexmining): wire estimated yield fields into HexStakeDto and API route
+feat(hexmining): lift public estimated yield gate after live-data verification
 ```
 
-**Prerequisites satisfied:** items 1–3, 7, 8 resolved. **Remaining in gate-lift implementation PR:** items 4–6, 9–11.
+**Prerequisites satisfied:** items 1–3 and 7–9 resolved; item 2 resolved at estimator boundary; reader assembly, route dependency wiring, and focused public DTO contract coverage closed by PRs #234–#236. **Remaining before public release:** item 10, item 11, and final production promotion from internal `"evidence_available"`/`yieldHex: null` to public `"estimated"` with non-null `estimatedYieldHex`.
+
+**2026-06-12 closure note (PRs #235–#236):** PR #235 wires the `/api/hexmining/stakes` route to pass `estimateYield` into `readNativeHexStakes` through the existing `estimateHexMiningYield` dependency path. PR #236 adds focused contract coverage for estimated yield plus provenance, BPD `applicable`/`not_applicable`/`unknown`, missing-provenance downgrade, and the route response envelope. This records infrastructure/test closure only; public estimated yield remains gated until the remaining gates above are complete. These changes introduced no fabricated yield, no frontend truth, and no DTO weakening.
 
 **Required in the gate-lift PR:**
-- Follow the approved §11.16 contract above (field shapes, OQ-1–OQ-6 decisions, `evidence_available` → `"unavailable"` mapping)
-- Update `HexStakeDto.yield` field assembly in `reader.ts` — call `estimateHexMiningYield`, assemble `bpdYieldHex`/`bpdYieldStatus`/`estimatedYieldHex`/`provenance`/`warnings`
-- Wire `fetchEvidence` dep into `GET /api/hexmining/stakes` route
-- Contract tests for full DTO path (non-null `estimatedYieldHex`, BPD field correlation, provenance completeness, warnings pass-through)
+- Follow the approved §11.16 contract above (field shapes, OQ-1–OQ-6 decisions, `evidence_available` → `"unavailable"` mapping until the final production promotion)
+- Keep the PR production promotion narrow: change the real estimator path only after item 10 is satisfied so valid evidence can surface public `"estimated"` output
 - Live-data fixture or opt-in integration verification against a known historical day range on PulseChain
 - Final docs record approving gate lift (update this roadmap)
 - `valuation.status` and `pnl.status` remain `"unsupported"` — unchanged
 
 **Must NOT happen without a gate-lift implementation PR:**
 - No change to steps 8–9 of `estimateHexMiningYield` to return `"estimated"` without all prerequisites
-- No `reader.ts` or `route.ts` yield wiring without coverage rule, BPD modelling, and EES verification
+- No production promotion to public `"estimated"` without live-data/opt-in verification and final gate-lift docs
 - No partial gate lift (e.g., surfacing `yieldHex` without provenance completeness)
 - No frontend yield changes, React hooks, or TanStack Query hooks for yield until Step 4 is merged
 - No `canonicalPayload` exposure in any DTO or API response
