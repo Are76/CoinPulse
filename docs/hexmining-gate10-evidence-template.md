@@ -57,7 +57,24 @@ Retrieved from the authorized fixture or opt-in stake record, pre-selected befor
 
 ## 4. Harness Execution Record
 
-### 4a. Command run
+### 4a. Observation retrieval query (sanitized)
+
+Record the sanitized query or retrieval method used in Step B to look up the `RawHexDailyDataObservation` record. This lets reviewers confirm the observation was selected by the pre-specified `rangeStartDay`/`rangeEndDay`, not by an arbitrary sort order.
+
+```sql
+<sanitized query — omit DATABASE_URL, connection string, and any private credentials>
+```
+
+Example form (fill in actual values):
+```sql
+SELECT id, "rangeStartDay", "rangeEndDay", "observedAtBlock", "rpcEndpointLabel", "payloadVersion"
+FROM "RawHexDailyDataObservation"
+WHERE "chainId" = 369 AND "rangeStartDay" = <n> AND "rangeEndDay" = <n>
+ORDER BY "observedAtBlock" DESC
+LIMIT 1;
+```
+
+### 4b. Command run
 
 ```
 <exact command or script invocation used to call verifyHexMiningYieldEvidence>
@@ -72,7 +89,7 @@ No `deps.estimatorCalculation` override was passed: `YES / NO`
 
 > Must be YES. The test-only override must not be used during Gate 10 execution.
 
-### 4b. Raw harness result (sanitized)
+### 4c. Raw harness result (sanitized)
 
 ```json
 {
@@ -94,13 +111,13 @@ No `deps.estimatorCalculation` override was passed: `YES / NO`
     "observedAtBlock": "<string>",
     "rpcEndpointLabel": "<sanitized label>"
   },
-  "warnings": []
+  "warnings": [<"warning string if present" — copy all strings verbatim; use [] if none>]
 }
 ```
 
 > Do not include `canonicalPayload` anywhere in this record. The `reproducedYieldHex` value is a bigint base-10 decimal string (the "Hex" suffix refers to the HEX token in hearts units, not hexadecimal encoding).
 
-### 4c. Summary fields
+### 4d. Summary fields
 
 | Field | Recorded value | Expected |
 |---|---|---|
@@ -202,7 +219,7 @@ Complete only after Gate 10 passes (Section 7 result = PASSED). All items must b
 | # | Requirement | Confirmed |
 |---|---|---|
 | 1 | Gate 10 passed — `result.passed === true` | `YES / NO` |
-| 2 | This evidence package is complete and committed in the gate-lift PR | `YES / NO` |
+| 2 | This evidence package is complete and submitted in the gate-lift PR body or committed as a companion document | `YES / NO` |
 | 3 | `docs/v2-hexmining-roadmap.md` §11.14 item 10 will be marked `✅ RESOLVED` in the gate-lift PR | `YES / NO` |
 | 4 | The gate-lift PR promotes `evidence_available` → `"estimated"` in `src/services/hexmining/yield-estimator.ts` | `YES / NO` |
 | 5 | The approved §11.16 `HexStakeYieldDto` contract shape is preserved | `YES / NO` |
