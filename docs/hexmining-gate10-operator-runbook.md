@@ -97,7 +97,7 @@ Run a sanitized query against the database. Example form (replace `<n>` with act
 
 ```sql
 SELECT id, "rangeStartDay", "rangeEndDay", "observedAtBlock", "rpcEndpointLabel", "payloadVersion",
-       array_length(warnings, 1) AS warning_count
+       warnings
 FROM "RawHexDailyDataObservation"
 WHERE "chainId" = 369
   AND "rangeStartDay" = <n>
@@ -105,6 +105,8 @@ WHERE "chainId" = 369
 ORDER BY "observedAtBlock" DESC
 LIMIT 1;
 ```
+
+> Retrieve the full `warnings` array (not just the count). The observation's upstream warning strings must be passed to the harness as `input.warnings` and copied verbatim into the evidence template Section 6 warning record. Note: `canonicalPayload` is also retrieved from the same row and passed to the harness internally — see Section 4.
 
 - [ ] Query executed successfully
 - [ ] One row returned
@@ -190,7 +192,7 @@ Record:
 ### 3.3 Confirm stake is not derived from observation
 
 - [ ] `stakeShares` was NOT read from `canonicalPayload` or any observation field
-- [ ] `stakeShares` was retrieved before the observation query in Step 2
+- [ ] The source of `stakeShares` was independent of the observation record (persisted stake record or ingested `stakeLists` RPC data only)
 
 **Stake selection complete:** `YES / NO`
 
@@ -208,6 +210,8 @@ Before running the harness, confirm all required inputs are collected and none a
 | `rangeEndDay` | `YES / NO` | `RawHexDailyDataObservation.rangeEndDay` |
 | `observedAtBlock` | `YES / NO` | `RawHexDailyDataObservation.observedAtBlock` |
 | `rpcEndpointLabel` | `YES / NO` | `RawHexDailyDataObservation.rpcEndpointLabel` |
+| `canonicalPayload` | `YES / NO` | `RawHexDailyDataObservation.canonicalPayload` — internal only; passed to harness; do NOT record in evidence output |
+| `warnings` (observation warnings) | `YES / NO` | `RawHexDailyDataObservation.warnings` — upstream warning strings; pass to harness as `input.warnings`; copy verbatim into evidence template |
 | `stakeShares` | `YES / NO` | Fixture stake record (Section 3) |
 | Invalidation check | `YES / NO` | Section 2.4 (count = 0) |
 
@@ -228,10 +232,11 @@ The harness exports `verifyHexMiningYieldEvidence` from `src/services/hexmining/
 
 1. Reads `DATABASE_URL` from the environment
 2. Instantiates the Prisma client
-3. Calls `verifyHexMiningYieldEvidence` with the inputs from Section 4
-4. Prints the result as JSON
+3. Fetches `canonicalPayload` and `warnings` from `RawHexDailyDataObservation` (same row as Section 2) — these are required harness inputs but must NOT appear in the evidence output
+4. Calls `verifyHexMiningYieldEvidence` with all inputs from Section 4, including `canonicalPayload`
+5. Prints the result as JSON
 
-Example invocation form:
+Example invocation form (note: `canonicalPayload` is retrieved internally by the script — it does not appear in CLI output or evidence records):
 
 ```bash
 DATABASE_URL='<redacted>' npx tsx <path-to-your-script> \
@@ -241,6 +246,7 @@ DATABASE_URL='<redacted>' npx tsx <path-to-your-script> \
   --observedAtBlock <block> \
   --rpcEndpointLabel <label> \
   --stakeShares <decimal>
+# canonicalPayload and warnings are read from the DB by the script; not shown in command line
 ```
 
 - [ ] Script or invocation prepared
@@ -499,6 +505,7 @@ Complete after all sections above are done and Gate 11 is approved.
 - [ ] Evidence template completed and sanitized
 - [ ] Evidence package submitted in gate-lift PR body or committed as companion document
 - [ ] `docs/v2-hexmining-roadmap.md` §11.14 item 10 marked `✅ RESOLVED` in gate-lift PR
+- [ ] `docs/v2-hexmining-roadmap.md` §11.14 item 11 will be marked `✅ RESOLVED` after gate-lift PR merges
 - [ ] Gate 11 approval confirmed (Section 9 decision tree = APPROVED)
 - [ ] Gate-lift PR scope is narrow and does not include disallowed changes
 
