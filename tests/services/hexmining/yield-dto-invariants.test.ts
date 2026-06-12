@@ -153,7 +153,7 @@ describe("valid yield DTO combinations", () => {
     expect(dto.bpdYieldStatus).toBeNull();
   });
 
-  it("UnavailableYieldDto: estimatedYieldHex and bpdYieldHex are null; bpdYieldStatus is HexBpdYieldStatus", () => {
+  it("UnavailableYieldDto: estimatedYieldHex and bpdYieldHex are null; bpdYieldStatus is 'not_applicable' | 'unknown'", () => {
     const dto: UnavailableYieldDto = {
       status: "unavailable",
       estimatedYieldHex: null,
@@ -311,7 +311,7 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     void _dto;
   });
 
-  it("'unavailable' + null bpdYieldStatus is a type error — UnavailableYieldDto requires HexBpdYieldStatus", () => {
+  it("'unavailable' + null bpdYieldStatus is a type error — UnavailableYieldDto requires 'not_applicable' | 'unknown'", () => {
     // TypeScript reports this at the property line when only one field mismatches.
     const _dto: UnavailableYieldDto = {
       status: "unavailable",
@@ -319,8 +319,23 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
       bpdYieldHex: null,
       provenance: null,
       warnings: [],
-      // @ts-expect-error — bpdYieldStatus must be HexBpdYieldStatus for "unavailable"
+      // @ts-expect-error — bpdYieldStatus must be 'not_applicable' | 'unknown' for "unavailable"
       bpdYieldStatus: null,
+    };
+    void _dto;
+  });
+
+  it("'unavailable' + applicable bpdYieldStatus is a type error — UnavailableYieldDto rejects 'applicable'", () => {
+    // The reader normalizes "applicable" → "unknown" for all unavailable paths;
+    // the type reflects this invariant so it is caught at compile time.
+    const _dto: UnavailableYieldDto = {
+      status: "unavailable",
+      estimatedYieldHex: null,
+      bpdYieldHex: null,
+      provenance: null,
+      warnings: [],
+      // @ts-expect-error — bpdYieldStatus "applicable" is not assignable to 'not_applicable' | 'unknown'
+      bpdYieldStatus: "applicable",
     };
     void _dto;
   });
@@ -400,7 +415,7 @@ describe("discriminated union narrowing on status", () => {
     }
   });
 
-  it("narrowing to 'unavailable' reveals estimatedYieldHex/bpdYieldHex null, bpdYieldStatus is HexBpdYieldStatus", () => {
+  it("narrowing to 'unavailable' reveals estimatedYieldHex/bpdYieldHex null, bpdYieldStatus is 'not_applicable' | 'unknown'", () => {
     const dto: HexStakeYieldDto = {
       status: "unavailable",
       estimatedYieldHex: null,
@@ -617,6 +632,8 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
       estimatedYieldHex: "1000000000",
       bpdYieldStatus: "applicable",
       bpdYieldHex: null,
+      provenance: TEST_PROVENANCE,
+      warnings: [],
     };
     void _dto;
   });
@@ -628,6 +645,8 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
       estimatedYieldHex: "9876543210",
       bpdYieldStatus: "applicable",
       bpdYieldHex: null,
+      provenance: TEST_PROVENANCE,
+      warnings: [],
     };
     void _dto;
   });
@@ -639,6 +658,8 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
       estimatedYieldHex: "1000000000",
       bpdYieldStatus: "not_applicable",
       bpdYieldHex: "5000000000",
+      provenance: TEST_PROVENANCE,
+      warnings: [],
     };
     void _dto;
   });
@@ -650,6 +671,8 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
       estimatedYieldHex: "9876543210",
       bpdYieldStatus: "not_applicable",
       bpdYieldHex: "5000000000",
+      provenance: TEST_PROVENANCE,
+      warnings: [],
     };
     void _dto;
   });
@@ -661,6 +684,8 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
       estimatedYieldHex: "1000000000",
       bpdYieldStatus: "unknown",
       bpdYieldHex: "5000000000",
+      provenance: TEST_PROVENANCE,
+      warnings: [],
     };
     void _dto;
   });
@@ -672,6 +697,8 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
       estimatedYieldHex: "9876543210",
       bpdYieldStatus: "unknown",
       bpdYieldHex: "5000000000",
+      provenance: TEST_PROVENANCE,
+      warnings: [],
     };
     void _dto;
   });

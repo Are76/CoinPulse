@@ -166,7 +166,9 @@ export type UnsupportedYieldDto = {
 export type UnavailableYieldDto = {
   status: "unavailable";
   estimatedYieldHex: null;
-  bpdYieldStatus: HexBpdYieldStatus;
+  // "applicable" is normalized to "unknown" at the reader for all unavailable paths —
+  // bpdYieldHex is always null here, so "applicable" can never be publicly emitted.
+  bpdYieldStatus: "not_applicable" | "unknown";
   bpdYieldHex: null;
   provenance: HexStakeYieldProvenance | null;
   warnings: string[];
