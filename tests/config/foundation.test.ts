@@ -69,7 +69,7 @@ describe("foundation config", () => {
 
   it("missing PULSECHAIN_RPC_URL causes explicit configuration failure", async () => {
     delete process.env.PULSECHAIN_RPC_URL;
-    await expect(import("@/lib/rpc-env")).rejects.toThrow();
+    await expect(import("@/lib/rpc-env")).rejects.toThrowError(/PULSECHAIN_RPC_URL/);
   });
 
   it("tracks only the core protocol constants for the bounded foundation slice", () => {
