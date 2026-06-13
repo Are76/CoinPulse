@@ -6,9 +6,14 @@
  * record suitable for Gate 10 submission.
  *
  * Usage:
- *   DATABASE_URL='...' npx tsx scripts/hexmining-gate10-run.ts \
+ *   DATABASE_URL='...' npx tsx --conditions react-server \
+ *     scripts/hexmining-gate10-run.ts \
  *     --observationId <cuid> \
  *     --stakeShares <decimal-string>
+ *
+ * The --conditions react-server flag is required because the verification
+ * harness uses the server-only guard, which resolves to a no-op only under
+ * the react-server export condition.
  *
  * Output: sanitized JSON to stdout (no canonicalPayload, no credentials).
  *
@@ -18,6 +23,7 @@
 
 import { PrismaClient } from "@prisma/client";
 
+import { createPrismaAdapter } from "@/lib/prisma-adapter";
 import { runGate10Verification } from "@/services/hexmining/gate10-runner";
 
 function parseArgs(argv: string[]): { observationId: string; stakeShares: bigint } {
@@ -49,15 +55,24 @@ function safeStringify(value: unknown): string {
   );
 }
 
-const db = new PrismaClient();
-try {
+async function main(): Promise<void> {
   const input = parseArgs(process.argv.slice(2));
-  const result = await runGate10Verification(input, db);
-  console.log(safeStringify(result));
-} catch (err) {
+  const db = new PrismaClient({ adapter: createPrismaAdapter() });
+  try {
+    const result = await runGate10Verification(input, db);
+    if ("error" in result) {
+      console.error(`gate10-runner: ${result.error}`, safeStringify(result));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(safeStringify(result));
+  } finally {
+    await db.$disconnect();
+  }
+}
+
+main().catch((err) => {
   const message = err instanceof Error ? err.message : String(err);
   console.error(`gate10-runner error: ${message}`);
   process.exitCode = 1;
-} finally {
-  await db.$disconnect();
-}
+});

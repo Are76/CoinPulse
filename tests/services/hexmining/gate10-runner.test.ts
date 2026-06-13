@@ -28,6 +28,8 @@ const VALID_PAYLOAD = makePayload(
 
 const BASE_OBS = {
   id: "obs-gate10-fixture",
+  chainId: 369,
+  sourceFamily: "HEXMINING",
   rangeStartDay: 1000,
   rangeEndDay: 1001,
   observedAtBlock: 99999999n,
@@ -69,7 +71,7 @@ describe("runGate10Verification", () => {
     });
     expect(db.rawHexDailyDataObservation.findUnique).toHaveBeenCalledWith({
       where: { id: VALID_INPUT.observationId },
-      select: expect.objectContaining({ id: true, canonicalPayload: true }),
+      select: expect.objectContaining({ id: true, chainId: true, canonicalPayload: true }),
     });
   });
 
@@ -77,6 +79,29 @@ describe("runGate10Verification", () => {
     const db = makeDb(null);
     await runGate10Verification(VALID_INPUT, db);
     expect(db.rawHexDailyDataObservationInvalidation.count).not.toHaveBeenCalled();
+  });
+
+  it("returns observation-wrong-source when chainId does not match 369", async () => {
+    const obs = { ...BASE_OBS, chainId: 1, sourceFamily: "HEXMINING" };
+    const db = makeDb(obs);
+    const result = await runGate10Verification(VALID_INPUT, db);
+    expect(result).toMatchObject({
+      error: "observation-wrong-source",
+      observationId: BASE_OBS.id,
+      chainId: 1,
+    });
+    expect(db.rawHexDailyDataObservationInvalidation.count).not.toHaveBeenCalled();
+  });
+
+  it("returns observation-wrong-source when sourceFamily does not match HEXMINING", async () => {
+    const obs = { ...BASE_OBS, chainId: 369, sourceFamily: "OTHER" };
+    const db = makeDb(obs);
+    const result = await runGate10Verification(VALID_INPUT, db);
+    expect(result).toMatchObject({
+      error: "observation-wrong-source",
+      observationId: BASE_OBS.id,
+      sourceFamily: "OTHER",
+    });
   });
 
   it("passes valid evidence through harness with passed: true", async () => {
@@ -97,7 +122,6 @@ describe("runGate10Verification", () => {
     const result = await runGate10Verification(VALID_INPUT, db);
     const json = JSON.stringify(result);
     expect(json).not.toContain("canonicalPayload");
-    // schemaVersion appears only in the payload — must not leak
     expect(json).not.toContain("schemaVersion");
     expect(json).not.toContain("dailyData");
   });

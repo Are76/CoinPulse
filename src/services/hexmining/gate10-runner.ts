@@ -1,15 +1,17 @@
-import "server-only";
-
-import { getDb } from "@/lib/db";
 import {
   verifyHexMiningYieldEvidence,
   type HexMiningVerificationHarnessResult,
 } from "@/services/hexmining/verification-harness";
 
+const REQUIRED_CHAIN_ID = 369;
+const REQUIRED_SOURCE_FAMILY = "HEXMINING";
+
 // Narrow typed client — only the fields and operations this module uses.
 // Drives the mock in tests and keeps the module portable.
 type ObservationRow = {
   id: string;
+  chainId: number;
+  sourceFamily: string;
   rangeStartDay: number;
   rangeEndDay: number;
   observedAtBlock: bigint;
@@ -24,6 +26,8 @@ type Gate10RunnerClient = {
       where: { id: string };
       select: {
         id: true;
+        chainId: true;
+        sourceFamily: true;
         rangeStartDay: true;
         rangeEndDay: true;
         observedAtBlock: true;
@@ -43,21 +47,27 @@ export type Gate10RunnerInput = {
   stakeShares: bigint;
 };
 
-export type Gate10RunnerNotFoundError = {
-  error: "observation-not-found";
-  observationId: string;
-};
+export type Gate10RunnerError =
+  | { error: "observation-not-found"; observationId: string }
+  | {
+      error: "observation-wrong-source";
+      observationId: string;
+      chainId: number;
+      sourceFamily: string;
+    };
 
-export type Gate10RunnerOutput = HexMiningVerificationHarnessResult | Gate10RunnerNotFoundError;
+export type Gate10RunnerOutput = HexMiningVerificationHarnessResult | Gate10RunnerError;
 
 export async function runGate10Verification(
   input: Gate10RunnerInput,
-  db: Gate10RunnerClient = getDb(),
+  db: Gate10RunnerClient,
 ): Promise<Gate10RunnerOutput> {
   const obs = await db.rawHexDailyDataObservation.findUnique({
     where: { id: input.observationId },
     select: {
       id: true,
+      chainId: true,
+      sourceFamily: true,
       rangeStartDay: true,
       rangeEndDay: true,
       observedAtBlock: true,
@@ -69,6 +79,15 @@ export async function runGate10Verification(
 
   if (!obs) {
     return { error: "observation-not-found", observationId: input.observationId };
+  }
+
+  if (obs.chainId !== REQUIRED_CHAIN_ID || obs.sourceFamily !== REQUIRED_SOURCE_FAMILY) {
+    return {
+      error: "observation-wrong-source",
+      observationId: obs.id,
+      chainId: obs.chainId,
+      sourceFamily: obs.sourceFamily,
+    };
   }
 
   const invalidationCount = await db.rawHexDailyDataObservationInvalidation.count({
