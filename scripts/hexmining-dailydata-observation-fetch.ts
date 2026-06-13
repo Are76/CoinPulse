@@ -54,11 +54,17 @@ export function parseInput(
   }
 
   const args: Record<string, string> = {};
-  for (let i = 0; i < argv.length - 1; i++) {
+  for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
-    if (flag?.startsWith("--")) {
-      args[flag.slice(2)] = argv[i + 1] ?? "";
+    if (!flag?.startsWith("--")) continue;
+
+    const value = argv[i + 1];
+    if (!value || value.startsWith("--")) {
+      return { ok: false, error: `${flag} requires a value` };
     }
+
+    args[flag.slice(2)] = value;
+    i += 1;
   }
 
   const { rangeStartDay: startStr, rangeEndDay: endStr, rpcEndpointLabel, rpcUrl } = args;
@@ -199,7 +205,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`hexmining-dailydata-fetch error: ${message}`);
+  const errorType = err instanceof Error ? err.name : "UnknownError";
+  console.error(`hexmining-dailydata-fetch error: ${errorType}`);
   process.exitCode = 1;
 });

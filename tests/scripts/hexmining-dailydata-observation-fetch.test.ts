@@ -110,6 +110,16 @@ describe("parseInput", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("returns ok:false when a flag is given another flag as its value", () => {
+    const argv = [
+      "--rangeStartDay", "--rangeEndDay",
+      "1001", "--rpcEndpointLabel", "label",
+      "--rpcUrl", "https://rpc.example.invalid",
+    ];
+    const result = parseInput(argv, VALID_ENV);
+    expect(result.ok).toBe(false);
+  });
+
   it("returns ok:false when rangeStartDay is negative", () => {
     const result = parseInput(makeArgv({ "--rangeStartDay": "-1" }), VALID_ENV);
     expect(result.ok).toBe(false);
