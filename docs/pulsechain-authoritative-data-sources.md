@@ -161,6 +161,11 @@ Every Tier 1 source that returned HTTP 403 is listed here. No information about 
 | `https://rpc-pulsechain.g4mm4.io` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether RPC endpoint is live |
 | `wss://rpc-pulsechain.g4mm4.io` | Not testable via HTTP fetch | Not applicable | WebSocket availability |
 | `https://otter-pulsechain.g4mm4.io` | WebFetch (HTTP GET) | HTTP 403 Forbidden | OtterScan content |
+| `https://ipfs.bridge.pulsechain.com` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether the IPFS-hosted bridge UI is live; any content |
+| `https://ipfs.app.pulsex.com` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether the IPFS-hosted PulseX DEX UI is live; any content |
+| `https://ipfs.scan.pulsechain.com` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether the IPFS-hosted BlockScout UI is live; any content |
+| `https://ipfs.launchpad.pulsechain.com` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether the IPFS-hosted launchpad UI is live; any content |
+| `https://ipfs.go.hex.com` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether the IPFS-hosted HEX application is live; any content |
 | `https://gitlab.com/pulsechaincom/graph-node` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether this repository exists, its description, content |
 | `https://gitlab.com/pulsechaincom/otter-pulse` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether this repository exists, its description, content |
 | `https://gitlab.com/pulsechaincom/pulsex` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether this repository exists, its description, content |
@@ -263,6 +268,7 @@ The following tasks must be completed by an operator with unrestricted network a
 | 8 | Confirm G4MM4 RPC liveness | Send `eth_chainId` POST to `https://rpc-pulsechain.g4mm4.io` | HTTP 403 for GET; RPC liveness not confirmed |
 | 9 | Confirm OtterScan availability | `https://otter.pulsechain.com` (browser) | HTTP 403 |
 | 10 | Confirm Beacon explorer availability and API | `https://beacon.pulsechain.com` (browser) | HTTP 403 |
+| 11 | Confirm IPFS application availability | Each URL in Section 7.1 (browser) | All returned HTTP 403; existence and content not confirmed |
 
 ---
 
@@ -288,8 +294,42 @@ The following Tier 1 sources have not been directly confirmed in this environmen
 - `pulsechain.com` developer portal
 - `data.pls-api.com`
 - Complete GitLab repository list
+- Five IPFS application URLs (see Section 7)
 
 No implementation decision may be made on the basis of unconfirmed Tier 1 sources.
+
+---
+
+## Section 7 — Official PulseChain IPFS Applications
+
+**Category:** Tier 1 PulseChain-controlled user-facing applications
+
+**Intended use:**
+- User navigation
+- Deep links
+- Manual verification by an operator
+- Ecosystem reference
+
+**Not intended as:**
+- Canonical data sources
+- Ingestion APIs
+- Pricing APIs
+
+### 7.1 Access failure log
+
+All five IPFS application URLs returned HTTP 403 in this environment (2026-06-13). Their existence, content, and current availability cannot be confirmed here.
+
+| URL | Access method | Exact failure | Information unavailable |
+|---|---|---|---|
+| `https://ipfs.bridge.pulsechain.com` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether the IPFS-hosted bridge UI is live; any content |
+| `https://ipfs.app.pulsex.com` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether the IPFS-hosted PulseX DEX UI is live; any content |
+| `https://ipfs.scan.pulsechain.com` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether the IPFS-hosted BlockScout UI is live; any content |
+| `https://ipfs.launchpad.pulsechain.com` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether the IPFS-hosted launchpad UI is live; any content |
+| `https://ipfs.go.hex.com` | WebFetch (HTTP GET) | HTTP 403 Forbidden | Whether the IPFS-hosted HEX application is live; any content |
+
+### 7.2 Operator validation required
+
+An operator must confirm each URL is live and determine whether it serves the described application before these are cited as ecosystem references. Add confirmed entries to Section 2 once verified.
 
 ---
 
