@@ -3,29 +3,40 @@
 // All network, RPC, and DB dependencies are mocked. No live calls.
 //
 // Verifies:
+//   Import safety:
+//     1. Importing the module does not execute main() or mutate process.exitCode.
+//     2. parseInput can be called without REDIS_URL — it is a pure function
+//        that does not trigger server-env loading.
+//
 //   parseInput:
-//     1. Missing DATABASE_URL → ok:false (no DATABASE_URL value in error message)
-//     2. Missing --rangeStartDay → ok:false
-//     3. Missing --rangeEndDay → ok:false
-//     4. Missing --rpcEndpointLabel → ok:false
-//     5. Missing --rpcUrl → ok:false
-//     6. Negative rangeStartDay → ok:false
-//     7. Fractional rangeStartDay → ok:false
-//     8. rangeEndDay < rangeStartDay → ok:false
-//     9. Valid args → ok:true with correct parsed values
-//    10. rpcUrl value does not appear in any error message
+//     3. Missing DATABASE_URL → ok:false (sanitized, no credential values)
+//     4. Missing --rangeStartDay → ok:false
+//     5. Missing --rangeEndDay → ok:false
+//     6. Missing --rpcEndpointLabel → ok:false
+//     7. Missing --rpcUrl → ok:false
+//     8. Flag given another flag as its value → ok:false (fail-fast)
+//     9. Negative rangeStartDay → ok:false
+//    10. Fractional rangeStartDay → ok:false
+//    11. rangeEndDay < rangeStartDay → ok:false
+//    12. Valid args → ok:true with correct parsed values
+//    13. rpcUrl value does not appear in any error message
+//
+//   Chain ID verification:
+//    14. chainId 369 → acquireAndPersist is called
+//    15. non-369 chainId → acquireAndPersist not called, ok:false, code "wrong-chain"
+//    16. getChainId() throws → acquireAndPersist not called, ok:false, code "chain-id-unavailable"
+//    17. error output for wrong chain does not contain rpcUrl or credentials
 //
 //   runHexMiningDailyDataObservationFetch:
-//    11. Success path calls acquireAndPersist with correct rangeStartDay/rangeEndDay/rpcEndpointLabel
-//    12. Success result has chainId=369, status="persisted", payloadVersion="v1"
-//    13. Success result does not contain canonicalPayload or rpcUrl
-//    14. Failure from acquireAndPersist → ok:false with code and warnings
-//    15. publicClient is forwarded to acquireAndPersist
+//    18. Calls acquireAndPersist with correct rangeStartDay/rangeEndDay/rpcEndpointLabel
+//    19. Forwards publicClient to acquireAndPersist
+//    20. Success result has chainId=369, status="persisted", payloadVersion="v1"
+//    21. Success result does not contain canonicalPayload or rpcUrl
+//    22. Failure from acquireAndPersist → ok:false with code and warnings
+//    23. Propagates warnings from successful acquire result
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { HexMiningReadClient } from "@/services/hexmining/reader";
-import { DAILY_DATA_PAYLOAD_VERSION } from "@/services/hexmining/daily-data-observation-service";
 import {
   parseInput,
   runHexMiningDailyDataObservationFetch,
@@ -47,13 +58,22 @@ function makeArgv(overrides: Record<string, string> = {}): string[] {
   return Object.entries(merged).flatMap(([flag, value]) => [flag, value]);
 }
 
-function makePublicClientMock(): HexMiningReadClient {
+function makePublicClientMock(opts?: {
+  chainId?: number;
+  chainIdThrows?: boolean;
+}): ObservationFetchDeps["publicClient"] {
+  const chainId = opts?.chainId ?? 369;
+  const chainIdThrows = opts?.chainIdThrows ?? false;
   return {
     getBlockNumber: vi.fn(async () => 99999999n),
+    getChainId: vi.fn(async () => {
+      if (chainIdThrows) throw new Error("mock: getChainId failed");
+      return chainId;
+    }),
     readContract: vi.fn(async () => {
       throw new Error("mock: readContract not expected in these unit tests");
     }),
-  } as unknown as HexMiningReadClient;
+  } as unknown as ObservationFetchDeps["publicClient"];
 }
 
 function makeAcquireMock(result: Awaited<ReturnType<ObservationFetchDeps["acquireAndPersist"] & {}>>) {
@@ -70,42 +90,71 @@ const VALID_ACQUIRE_RESULT = {
   warnings: [] as string[],
 };
 
+// ─── Import safety ────────────────────────────────────────────────────────────
+
+describe("import safety", () => {
+  it("importing the module does not mutate process.exitCode", () => {
+    // The module is already imported at the top of this file via the import statement.
+    // If main() had run on import, it would have parsed process.argv (vitest argv),
+    // found no valid CLI args, and set process.exitCode = 1.
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  it("parseInput can be called without REDIS_URL in env", () => {
+    // parseInput is pure — it only inspects argv and env["DATABASE_URL"].
+    // No service module is loaded; no REDIS_URL validation is triggered.
+    const result = parseInput([], {});
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("DATABASE_URL");
+    }
+  });
+
+  it("missing DATABASE_URL returns sanitized error without leaking values", () => {
+    const result = parseInput(makeArgv(), {});
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("DATABASE_URL");
+      expect(result.error).not.toMatch(/postgresql|password|secret|redis/i);
+    }
+  });
+});
+
 // ─── parseInput ───────────────────────────────────────────────────────────────
 
 describe("parseInput", () => {
-  it("returns ok:false when DATABASE_URL is missing", () => {
-    const result = parseInput(makeArgv(), {});
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toContain("DATABASE_URL");
-    expect(result.error).not.toMatch(/postgresql|postgres|password|secret/i);
-  });
-
   it("returns ok:false when --rangeStartDay is missing", () => {
-    const argv = makeArgv({ "--rangeStartDay": "" }).filter((v) => v !== "");
-    const filtered = makeArgv();
-    const withoutStart = filtered.filter((_, i, arr) => arr[i - 1] !== "--rangeStartDay" && arr[i] !== "--rangeStartDay");
+    const full = makeArgv();
+    const withoutStart = full.filter(
+      (_, i, arr) => arr[i - 1] !== "--rangeStartDay" && arr[i] !== "--rangeStartDay",
+    );
     const result = parseInput(withoutStart, VALID_ENV);
     expect(result.ok).toBe(false);
   });
 
   it("returns ok:false when --rangeEndDay is missing", () => {
     const full = makeArgv();
-    const withoutEnd = full.filter((_, i, arr) => arr[i - 1] !== "--rangeEndDay" && arr[i] !== "--rangeEndDay");
+    const withoutEnd = full.filter(
+      (_, i, arr) => arr[i - 1] !== "--rangeEndDay" && arr[i] !== "--rangeEndDay",
+    );
     const result = parseInput(withoutEnd, VALID_ENV);
     expect(result.ok).toBe(false);
   });
 
   it("returns ok:false when --rpcEndpointLabel is missing", () => {
     const full = makeArgv();
-    const without = full.filter((_, i, arr) => arr[i - 1] !== "--rpcEndpointLabel" && arr[i] !== "--rpcEndpointLabel");
+    const without = full.filter(
+      (_, i, arr) => arr[i - 1] !== "--rpcEndpointLabel" && arr[i] !== "--rpcEndpointLabel",
+    );
     const result = parseInput(without, VALID_ENV);
     expect(result.ok).toBe(false);
   });
 
   it("returns ok:false when --rpcUrl is missing", () => {
     const full = makeArgv();
-    const without = full.filter((_, i, arr) => arr[i - 1] !== "--rpcUrl" && arr[i] !== "--rpcUrl");
+    const without = full.filter(
+      (_, i, arr) => arr[i - 1] !== "--rpcUrl" && arr[i] !== "--rpcUrl",
+    );
     const result = parseInput(without, VALID_ENV);
     expect(result.ok).toBe(false);
   });
@@ -159,6 +208,65 @@ describe("parseInput", () => {
   });
 });
 
+// ─── Chain ID verification ────────────────────────────────────────────────────
+
+describe("chain ID verification", () => {
+  it("calls acquireAndPersist when chainId is 369", async () => {
+    const acquireMock = makeAcquireMock(VALID_ACQUIRE_RESULT);
+    const publicClient = makePublicClientMock({ chainId: 369 });
+
+    await runHexMiningDailyDataObservationFetch(
+      { rangeStartDay: 1000, rangeEndDay: 1001, rpcEndpointLabel: "label" },
+      { publicClient, acquireAndPersist: acquireMock },
+    );
+
+    expect(acquireMock).toHaveBeenCalledOnce();
+  });
+
+  it("returns ok:false and does not call acquireAndPersist when chainId is not 369", async () => {
+    const acquireMock = makeAcquireMock(VALID_ACQUIRE_RESULT);
+    const publicClient = makePublicClientMock({ chainId: 1 });
+
+    const result = await runHexMiningDailyDataObservationFetch(
+      { rangeStartDay: 1000, rangeEndDay: 1001, rpcEndpointLabel: "label" },
+      { publicClient, acquireAndPersist: acquireMock },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("wrong-chain");
+    expect(acquireMock).not.toHaveBeenCalled();
+  });
+
+  it("returns ok:false and does not call acquireAndPersist when getChainId throws", async () => {
+    const acquireMock = makeAcquireMock(VALID_ACQUIRE_RESULT);
+    const publicClient = makePublicClientMock({ chainIdThrows: true });
+
+    const result = await runHexMiningDailyDataObservationFetch(
+      { rangeStartDay: 1000, rangeEndDay: 1001, rpcEndpointLabel: "label" },
+      { publicClient, acquireAndPersist: acquireMock },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("chain-id-unavailable");
+    expect(acquireMock).not.toHaveBeenCalled();
+  });
+
+  it("error output for wrong chain does not contain rpcUrl or credentials", async () => {
+    const acquireMock = makeAcquireMock(VALID_ACQUIRE_RESULT);
+    const publicClient = makePublicClientMock({ chainId: 1 });
+
+    const result = await runHexMiningDailyDataObservationFetch(
+      { rangeStartDay: 1000, rangeEndDay: 1001, rpcEndpointLabel: "label" },
+      { publicClient, acquireAndPersist: acquireMock },
+    );
+
+    const json = JSON.stringify(result);
+    expect(json).not.toContain("https://");
+    expect(json).not.toContain("rpcUrl");
+    expect(json).not.toContain("DATABASE_URL");
+  });
+});
+
 // ─── runHexMiningDailyDataObservationFetch ────────────────────────────────────
 
 describe("runHexMiningDailyDataObservationFetch", () => {
@@ -208,7 +316,7 @@ describe("runHexMiningDailyDataObservationFetch", () => {
     if (!result.ok) return;
     expect(result.chainId).toBe(369);
     expect(result.status).toBe("persisted");
-    expect(result.payloadVersion).toBe(DAILY_DATA_PAYLOAD_VERSION);
+    expect(result.payloadVersion).toBe("v1");
     expect(result.observationId).toBe("obs-abc123");
     expect(result.rangeStartDay).toBe(1000);
     expect(result.rangeEndDay).toBe(1001);

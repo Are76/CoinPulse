@@ -24,15 +24,20 @@
  * collection only.
  */
 
+import { fileURLToPath } from "url";
+
 import { createPublicClient, http } from "viem";
 
 import { PULSECHAIN_CHAIN } from "@/config/chains";
 import type { HexMiningReadClient } from "@/services/hexmining/reader";
-import {
-  acquireAndPersistHexDailyDataObservation,
-  DAILY_DATA_PAYLOAD_VERSION,
-  type AcquireAndPersistHexDailyDataResult,
-} from "@/services/hexmining/daily-data-observation-service";
+// Type-only import — erased at runtime. Does not load server-env or prisma-adapter.
+import type { acquireAndPersistHexDailyDataObservation } from "@/services/hexmining/daily-data-observation-service";
+
+// Avoids loading the service module (and transitively server-env/REDIS_URL)
+// at import time. Matches DAILY_DATA_PAYLOAD_VERSION from the service.
+const PAYLOAD_VERSION = "v1" as const;
+
+const PULSECHAIN_CHAIN_ID = 369 as const;
 
 // ─── parseInput ───────────────────────────────────────────────────────────────
 
@@ -110,12 +115,11 @@ export type ObservationFetchInput = {
   rpcEndpointLabel: string;
 };
 
+// publicClient is extended with getChainId so the runner can verify the remote
+// chain before persisting. The real viem PublicClient satisfies this shape.
 export type ObservationFetchDeps = {
-  publicClient: HexMiningReadClient;
-  acquireAndPersist?: (
-    args: Parameters<typeof acquireAndPersistHexDailyDataObservation>[0],
-    deps?: Parameters<typeof acquireAndPersistHexDailyDataObservation>[1],
-  ) => Promise<AcquireAndPersistHexDailyDataResult>;
+  publicClient: HexMiningReadClient & { getChainId(): Promise<number> };
+  acquireAndPersist?: typeof acquireAndPersistHexDailyDataObservation;
 };
 
 export type ObservationFetchResult =
@@ -129,7 +133,7 @@ export type ObservationFetchResult =
       observedAtBlock: string;
       observedAt: string;
       rpcEndpointLabel: string;
-      payloadVersion: typeof DAILY_DATA_PAYLOAD_VERSION;
+      payloadVersion: typeof PAYLOAD_VERSION;
       warnings: string[];
     }
   | { ok: false; code: string; warnings: string[] };
@@ -138,7 +142,28 @@ export async function runHexMiningDailyDataObservationFetch(
   input: ObservationFetchInput,
   deps: ObservationFetchDeps,
 ): Promise<ObservationFetchResult> {
-  const acquireFn = deps.acquireAndPersist ?? acquireAndPersistHexDailyDataObservation;
+  // Verify the remote RPC endpoint is PulseChain before any persist operation.
+  // viem's chain config does not prove the remote endpoint; getChainId() does.
+  let remoteChainId: number;
+  try {
+    remoteChainId = await deps.publicClient.getChainId();
+  } catch {
+    return { ok: false, code: "chain-id-unavailable", warnings: ["chain-id-unavailable"] };
+  }
+
+  if (remoteChainId !== PULSECHAIN_CHAIN_ID) {
+    return { ok: false, code: "wrong-chain", warnings: ["wrong-chain"] };
+  }
+
+  // Defer the env-dependent service import until after parseInput validation and
+  // chain verification have both succeeded. The dynamic import loads server-env
+  // (REDIS_URL) and prisma-adapter — importing the module must not do this.
+  // When deps.acquireAndPersist is injected (e.g. in tests), the dynamic import
+  // is never executed and no env-dependent modules are loaded.
+  const acquireFn =
+    deps.acquireAndPersist ??
+    (await import("@/services/hexmining/daily-data-observation-service"))
+      .acquireAndPersistHexDailyDataObservation;
 
   const result = await acquireFn({
     publicClient: deps.publicClient,
@@ -155,13 +180,13 @@ export async function runHexMiningDailyDataObservationFetch(
     ok: true,
     status: "persisted",
     observationId: result.observationId,
-    chainId: 369,
+    chainId: PULSECHAIN_CHAIN_ID,
     rangeStartDay: result.rangeStartDay,
     rangeEndDay: result.rangeEndDay,
     observedAtBlock: result.observedAtBlock,
     observedAt: result.observedAt,
     rpcEndpointLabel: input.rpcEndpointLabel,
-    payloadVersion: DAILY_DATA_PAYLOAD_VERSION,
+    payloadVersion: PAYLOAD_VERSION,
     warnings: result.warnings,
   };
 }
@@ -188,7 +213,7 @@ async function main(): Promise<void> {
   const publicClient = createPublicClient({
     chain: PULSECHAIN_CHAIN,
     transport: http(rpcUrl),
-  }) as unknown as HexMiningReadClient;
+  }) as unknown as ObservationFetchDeps["publicClient"];
 
   const result = await runHexMiningDailyDataObservationFetch(
     { rangeStartDay, rangeEndDay, rpcEndpointLabel },
@@ -204,8 +229,11 @@ async function main(): Promise<void> {
   console.log(safeStringify(result));
 }
 
-main().catch((err) => {
-  const errorType = err instanceof Error ? err.name : "UnknownError";
-  console.error(`hexmining-dailydata-fetch error: ${errorType}`);
-  process.exitCode = 1;
-});
+// Run only when executed directly as CLI, not when imported by tests or tooling.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    const errorType = err instanceof Error ? err.name : "UnknownError";
+    console.error(`hexmining-dailydata-fetch error: ${errorType}`);
+    process.exitCode = 1;
+  });
+}
