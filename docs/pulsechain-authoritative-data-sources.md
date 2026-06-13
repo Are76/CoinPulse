@@ -18,13 +18,12 @@ Sources directly operated by the PulseChain team or published in PulseChain-cont
 
 - `pulsechain.com` and all subdomains
 - PulseChain GitLab group: `gitlab.com/pulsechaincom`
-- `data.pls-api.com`
+- `data.pls-api.com` (PulseChain ownership not confirmed — listed pending operator verification)
 - `graph.pulsechain.com`
 - `scan.pulsechain.com` and `api.scan.pulsechain.com`
 - `otter.pulsechain.com`
 - `beacon.pulsechain.com`
 - `rpc.pulsechain.com`
-- G4MM4 infrastructure (`g4mm4.io` and subdomains)
 
 Tier 1 is the only permitted basis for implementation decisions in CoinPulse.
 
@@ -77,7 +76,7 @@ Sources where a direct HTTP fetch returned content in this execution environment
 | License | GNU GPLv3 |
 | Created | 2021-05-11 |
 | Verification method | Direct HTTP fetch — content returned |
-| CoinPulse relevance | Source code for `scan.pulsechain.com` and its REST API. Authoritative reference for BlockScout API surface, PulseChain-specific modifications, and supported API modules. |
+| CoinPulse relevance | Source code for the PulseChain block explorer (intended deployment: `scan.pulsechain.com` — not directly confirmed in this environment). Authoritative reference for BlockScout code structure and PulseChain-specific modifications. Live deployment and API endpoint behavior require separate operator verification before integration. |
 
 ### 2.2 gitlab.com/pulsechaincom/go-pulse
 
@@ -208,8 +207,8 @@ All HTTP 403 failures occurred in the CoinPulse remote execution environment on 
 | Field | Value |
 |---|---|
 | URL | `https://gitlab.com/pulsechaincom/blockscout` |
-| Purpose | PulseChain block explorer — fork of Blockscout. Powers `scan.pulsechain.com`. |
-| CoinPulse relevance | Authoritative reference for the BlockScout REST API surface available at `api.scan.pulsechain.com`. Source for any PulseChain-specific API modifications. |
+| Purpose | PulseChain block explorer — fork of Blockscout. Intended deployment: `scan.pulsechain.com` (not directly confirmed in this environment). |
+| CoinPulse relevance | Authoritative reference for BlockScout code structure and PulseChain-specific modifications. Live API surface at `api.scan.pulsechain.com` requires separate operator verification before integration. |
 
 #### gitlab.com/pulsechaincom/go-pulse
 
@@ -271,16 +270,16 @@ The following repository URLs are within the `pulsechaincom` GitLab group and ar
 
 ## Section 5 — Operator Validation Backlog
 
-The following tasks must be completed by an operator with unrestricted network access before any Tier 1 source can serve as the basis for an implementation decision.
+Each task below must be completed by an operator with unrestricted network access before the corresponding policy-accepted, environment-unverified source (Section 3) can serve as the basis for an implementation decision. Directly verified sources (Section 2) are not blocked by this backlog.
 
 | # | Task | URL to visit | Why required |
 |---|---|---|---|
 | 1 | Enumerate complete PulseChain GitLab repository list | `https://gitlab.com/pulsechaincom` (browser) | Complete project listing not returned by fetch; 9 additional repo names attempted with HTTP 403 |
 | 2 | Confirm PulseChain developer portal content | `https://pulsechain.com/#/develop` (browser) | HTTP 403 in this environment; page may list authoritative RPC, subgraph, and API endpoint URLs |
 | 3 | Confirm G4MM4 complete endpoint list | `https://www.g4mm4.io/endpoints-and-resources` (browser) | HTTP 403; complete set of G4MM4-hosted endpoints unknown |
-| 4 | Confirm data.pls-api.com API surface | `https://data.pls-api.com/docs` (browser) | HTTP 403; API groups, authentication model, and ownership unknown |
+| 4 | Confirm data.pls-api.com API surface and ownership | `https://data.pls-api.com/docs` (browser) | HTTP 403; API groups, authentication model, and PulseChain ownership unknown |
 | 5 | Confirm PulseX subgraph existence and schema | `https://graph.pulsechain.com` (browser) and GraphQL introspection on `https://graph.pulsechain.com/subgraphs/name/pulsechain/pulsex/graphql` | HTTP 403; Graph node and subgraph existence not confirmed |
-| 6 | Confirm BlockScout REST API module list | `https://api.scan.pulsechain.com/api-docs` (browser) | HTTP 403; API modules and endpoint paths unknown |
+| 6 | Confirm BlockScout REST API module list and deployed version | `https://api.scan.pulsechain.com/api-docs` (browser) | HTTP 403; live API surface and deployed version not confirmed |
 | 7 | Confirm official RPC liveness and chain ID | Send `{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}` POST to `https://rpc.pulsechain.com` | HTTP 403 for GET; RPC liveness via POST not confirmed |
 | 8 | Confirm G4MM4 RPC liveness | Send `eth_chainId` POST to `https://rpc-pulsechain.g4mm4.io` | HTTP 403 for GET; RPC liveness not confirmed |
 | 9 | Confirm OtterScan availability | `https://otter.pulsechain.com` (browser) | HTTP 403 |
@@ -309,7 +308,7 @@ As of this document (2026-06-13):
 **Policy-accepted, environment-unverified (Tier 1 by governance; HTTP 403 in this environment):**
 - All live infrastructure endpoints (RPC, Graph, BlockScout, OtterScan, Beacon, G4MM4)
 - `pulsechain.com` developer portal
-- `data.pls-api.com`
+- `data.pls-api.com` (ownership pending operator confirmation)
 - Complete GitLab repository list (9 additional repo names attempted)
 - Five IPFS application URLs (see Section 7)
 
