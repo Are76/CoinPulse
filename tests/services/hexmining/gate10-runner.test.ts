@@ -62,6 +62,14 @@ const VALID_INPUT: Gate10RunnerInput = {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("runGate10Verification", () => {
+  it("returns invalid-stake-shares when stakeShares is negative", async () => {
+    const db = makeDb(null);
+    const result = await runGate10Verification({ ...VALID_INPUT, stakeShares: -1n }, db);
+    expect(result).toEqual({ error: "invalid-stake-shares", stakeShares: "-1" });
+    expect(db.rawHexDailyDataObservation.findUnique).not.toHaveBeenCalled();
+    expect(db.rawHexDailyDataObservationInvalidation.count).not.toHaveBeenCalled();
+  });
+
   it("returns observation-not-found error when observation does not exist", async () => {
     const db = makeDb(null);
     const result = await runGate10Verification(VALID_INPUT, db);
