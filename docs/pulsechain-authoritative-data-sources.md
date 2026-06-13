@@ -28,6 +28,21 @@ Sources directly operated by the PulseChain team or published in PulseChain-cont
 
 Tier 1 is the only permitted basis for implementation decisions in CoinPulse.
 
+### Verification states
+
+Two independent properties apply to every source in this document:
+
+**Policy acceptance** — whether CoinPulse project governance designates a source as Tier 1. Determined by this policy. Not affected by environment access constraints.
+
+**Direct verification** — whether a direct HTTP fetch in this execution environment returned content. Determined by observation in this environment only.
+
+These are separate claims. A source can be policy-accepted (Tier 1) while remaining unverifiable in this environment due to network restrictions. HTTP 403 in the remote execution environment does not withdraw a Tier 1 policy classification. It means live endpoint confirmation must be completed by an operator from an unrestricted network context.
+
+| State | Policy basis | Environment confirmation |
+|---|---|---|
+| **Directly verified** | Yes — Tier 1 | Yes — content returned |
+| **Policy-accepted, environment-unverified** | Yes — Tier 1 | No — HTTP 403 in this environment |
+
 ### Tier 2 — PulseChain ecosystem resources explicitly referenced by Tier 1
 
 Sources that are not PulseChain-operated but are explicitly linked or referenced from Tier 1 sources. May be used to supplement Tier 1 after Tier 1 has been directly verified. Cannot replace Tier 1.
@@ -44,9 +59,9 @@ Examples: CoinGecko, CoinMarketCap, CoinPaprika, Moralis, DexScreener.
 
 ---
 
-## Section 2 — Verified Sources
+## Section 2 — Directly Verified Sources
 
-Only sources where a direct HTTP fetch returned content are listed here.
+Sources where a direct HTTP fetch returned content in this execution environment. Both policy-accepted and environment-confirmed.
 
 ### 2.1 gitlab.com/pulsechaincom/blockscout
 
@@ -134,9 +149,11 @@ Only sources where a direct HTTP fetch returned content are listed here.
 
 ---
 
-## Section 3 — Unverified Sources
+## Section 3 — Policy-Accepted Sources: Environment-Unverified
 
-Every Tier 1 source that returned HTTP 403 is listed here. No information about these sources is stated beyond what was directly observed.
+Every source listed here is designated Tier 1 by CoinPulse project governance (Section 1). None could be directly confirmed in this execution environment — each returned HTTP 403. The policy classification is established; the live endpoint confirmation is pending operator validation.
+
+No information about these sources is stated beyond what was directly observed in this environment.
 
 ### Access failure log
 
@@ -234,9 +251,9 @@ All HTTP 403 failures occurred in the CoinPulse remote execution environment on 
 | Description returned | "Energy Efficient, Cheaper, Faster Fee-Burning Ethereum fork" |
 | Fetch result | Partial — group header and description only; complete project list not returned |
 
-### 4.3 GitLab repository access failures
+### 4.3 Policy-accepted GitLab repositories: environment-unverified
 
-The following repository URLs were attempted and returned HTTP 403. Their existence cannot be confirmed or denied in this environment.
+The following repository URLs are within the `pulsechaincom` GitLab group and are therefore covered by the Tier 1 policy classification. Each returned HTTP 403 in this environment — their existence and content cannot be confirmed here.
 
 | URL | Status |
 |---|---|
@@ -284,23 +301,23 @@ The following tasks must be completed by an operator with unrestricted network a
 
 ### Current governance state
 
-As of this document (2026-06-13), the following Tier 1 sources have been directly confirmed in this environment:
+As of this document (2026-06-13):
 
+**Directly verified (policy-accepted + environment-confirmed):**
 - Five PulseChain GitLab repositories (see Section 2)
 
-The following Tier 1 sources have not been directly confirmed in this environment and remain in the operator validation backlog (see Section 5):
-
+**Policy-accepted, environment-unverified (Tier 1 by governance; HTTP 403 in this environment):**
 - All live infrastructure endpoints (RPC, Graph, BlockScout, OtterScan, Beacon, G4MM4)
 - `pulsechain.com` developer portal
 - `data.pls-api.com`
-- Complete GitLab repository list
+- Complete GitLab repository list (9 additional repo names attempted)
 - Five IPFS application URLs (see Section 7)
 
-No implementation decision may be made on the basis of unconfirmed Tier 1 sources.
+The policy-accepted classification is a CoinPulse project governance decision. It is not contingent on direct verification in this environment. Live endpoint confirmation must be completed by an operator from an unrestricted network context before any of these sources can inform an implementation decision.
 
 ---
 
-## Section 7 — Official PulseChain IPFS Applications
+## Section 7 — Official PulseChain IPFS Applications (Policy-Accepted, Environment-Unverified)
 
 **Category:** Tier 1 PulseChain-controlled user-facing applications
 
