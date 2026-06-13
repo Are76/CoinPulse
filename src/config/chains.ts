@@ -4,7 +4,6 @@ export const PULSECHAIN_REFERENCE = {
   id: 369,
   slug: "pulsechain",
   name: "PulseChain",
-  rpcUrl: "https://rpc.pulsechainstats.com",
   nativeAssetId: "chain:369:native:PLS",
 } as const;
 
@@ -18,7 +17,8 @@ export const PULSECHAIN_CHAIN = defineChain({
   },
   rpcUrls: {
     default: {
-      http: [PULSECHAIN_REFERENCE.rpcUrl],
+      // No hardcoded default. Runtime transport is always provided explicitly by the caller.
+      http: [],
     },
   },
   blockExplorers: {

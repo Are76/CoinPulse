@@ -22,14 +22,14 @@ async function main() {
     update: {
       slug: PULSECHAIN_REFERENCE.slug,
       name: PULSECHAIN_REFERENCE.name,
-      rpcUrl: PULSECHAIN_REFERENCE.rpcUrl,
+      rpcUrl: "",
       nativeAssetId: PULSECHAIN_REFERENCE.nativeAssetId,
     },
     create: {
       id: PULSECHAIN_CHAIN.id,
       slug: PULSECHAIN_REFERENCE.slug,
       name: PULSECHAIN_REFERENCE.name,
-      rpcUrl: PULSECHAIN_REFERENCE.rpcUrl,
+      rpcUrl: "",
       nativeAssetId: PULSECHAIN_REFERENCE.nativeAssetId,
     },
   });
