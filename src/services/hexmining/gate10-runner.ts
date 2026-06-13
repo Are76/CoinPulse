@@ -48,6 +48,7 @@ export type Gate10RunnerInput = {
 };
 
 export type Gate10RunnerError =
+  | { error: "invalid-stake-shares"; stakeShares: string }
   | { error: "observation-not-found"; observationId: string }
   | {
       error: "observation-wrong-source";
@@ -62,6 +63,10 @@ export async function runGate10Verification(
   input: Gate10RunnerInput,
   db: Gate10RunnerClient,
 ): Promise<Gate10RunnerOutput> {
+  if (input.stakeShares < 0n) {
+    return { error: "invalid-stake-shares", stakeShares: input.stakeShares.toString() };
+  }
+
   const obs = await db.rawHexDailyDataObservation.findUnique({
     where: { id: input.observationId },
     select: {
