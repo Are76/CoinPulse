@@ -317,7 +317,53 @@ describe("HexMiningScreen — stake table rendering", () => {
       ...MOCK_STAKE,
       yield: {
         status: "estimated",
-        estimatedYieldHex: "42.123456",
+        estimatedYieldHex: "4212345600",
+        bpdYieldStatus: "not_applicable",
+        bpdYieldHex: null,
+        provenance: {
+          chainId: 369,
+          sourceFamily: "native",
+          observationId: "11111111-1111-1111-1111-111111111111",
+          rangeStartDay: 5000,
+          rangeEndDay: 5365,
+        },
+        warnings: ["hexmining-yield-bpd-attribution-unresolved"],
+      },
+    });
+
+    expect(screen.getByText(/yield: estimated/i)).toBeInTheDocument();
+    expect(screen.getByText("estimated yield: 4212345600 hearts")).toBeInTheDocument();
+    expect(screen.queryByText("estimated yield: 4212345600 HEX")).not.toBeInTheDocument();
+  });
+
+  it("renders yield warnings near estimated yield rows", () => {
+    renderWithStake({
+      ...MOCK_STAKE,
+      yield: {
+        status: "estimated",
+        estimatedYieldHex: "4212345600",
+        bpdYieldStatus: "not_applicable",
+        bpdYieldHex: null,
+        provenance: {
+          chainId: 369,
+          sourceFamily: "native",
+          observationId: "11111111-1111-1111-1111-111111111111",
+          rangeStartDay: 5000,
+          rangeEndDay: 5365,
+        },
+        warnings: ["hexmining-yield-bpd-attribution-unresolved"],
+      },
+    });
+
+    expect(screen.getByText("yield warning: hexmining-yield-bpd-attribution-unresolved")).toBeInTheDocument();
+  });
+
+  it("renders yield provenance near estimated yield rows", () => {
+    renderWithStake({
+      ...MOCK_STAKE,
+      yield: {
+        status: "estimated",
+        estimatedYieldHex: "4212345600",
         bpdYieldStatus: "not_applicable",
         bpdYieldHex: null,
         provenance: {
@@ -331,8 +377,10 @@ describe("HexMiningScreen — stake table rendering", () => {
       },
     });
 
-    expect(screen.getByText(/yield: estimated/i)).toBeInTheDocument();
-    expect(screen.getByText("estimated yield: 42.123456 HEX")).toBeInTheDocument();
+    expect(
+      screen.getByText("yield observation: 11111111-1111-1111-1111-111111111111"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("yield days: 5000-5365")).toBeInTheDocument();
   });
 
   it("does not fabricate yield values for unavailable rows", () => {

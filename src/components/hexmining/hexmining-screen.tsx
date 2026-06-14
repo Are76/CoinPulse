@@ -285,9 +285,25 @@ function StakeRow({ stake }: { stake: HexStakeDto }) {
             <ProvenanceChip tone="neutral">pnl: {stake.pnl.status}</ProvenanceChip>
           </div>
           {stake.yield.status === "estimated" ? (
-            <span className="cp-data text-xs">
-              estimated yield: {stake.yield.estimatedYieldHex} HEX
-            </span>
+            <div className="flex flex-col gap-0.5">
+              <span className="cp-data text-xs">
+                estimated yield: {stake.yield.estimatedYieldHex} hearts
+              </span>
+              <span className="text-xs text-[color:var(--color-text-muted)]">
+                yield observation: {stake.yield.provenance.observationId}
+              </span>
+              <span className="text-xs text-[color:var(--color-text-muted)]">
+                yield days: {stake.yield.provenance.rangeStartDay}-{stake.yield.provenance.rangeEndDay}
+              </span>
+              {stake.yield.warnings.map((warning, index) => (
+                <span
+                  key={`yield-warn-${stake.stakeId}-${index}`}
+                  className="text-xs text-[color:var(--color-status-warning)]"
+                >
+                  yield warning: {warning}
+                </span>
+              ))}
+            </div>
           ) : null}
         </div>
       </td>
