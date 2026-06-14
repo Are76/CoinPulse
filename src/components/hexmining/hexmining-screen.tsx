@@ -16,6 +16,7 @@ import { useHexMiningStakesQuery } from "@/lib/query/use-hexmining-stakes-query"
 import type { HexStakeDto, HexStakeListDto, HexStakeStatus } from "@/services/hexmining/types";
 
 const PULSECHAIN_CHAIN_ID = 369;
+const HEARTS_PER_HEX = 100_000_000n;
 
 type SubmittedParams = {
   walletAddress: string;
@@ -39,6 +40,19 @@ function resolveStakeStatusTone(
   if (status === "overdue") return "danger";
   if (status === "pending") return "warn";
   return "neutral";
+}
+
+function formatHeartsAsHexDisplay(hearts: string): string | null {
+  if (!/^\d+$/.test(hearts)) return null;
+
+  const rawHearts = BigInt(hearts);
+  const wholeHex = rawHearts / HEARTS_PER_HEX;
+  const fractionalHearts = rawHearts % HEARTS_PER_HEX;
+
+  if (fractionalHearts === 0n) return wholeHex.toString();
+
+  const fraction = fractionalHearts.toString().padStart(8, "0").replace(/0+$/, "");
+  return `${wholeHex.toString()}.${fraction}`;
 }
 
 export function HexMiningScreen() {
@@ -244,6 +258,10 @@ function StakeTable({
 
 function StakeRow({ stake }: { stake: HexStakeDto }) {
   const statusTone = resolveStakeStatusTone(stake.stakeStatus);
+  const estimatedYieldHexDisplay =
+    stake.yield.status === "estimated"
+      ? formatHeartsAsHexDisplay(stake.yield.estimatedYieldHex)
+      : null;
 
   return (
     <tr>
@@ -286,9 +304,16 @@ function StakeRow({ stake }: { stake: HexStakeDto }) {
           </div>
           {stake.yield.status === "estimated" ? (
             <div className="flex flex-col gap-0.5">
-              <span className="cp-data text-xs">
-                estimated yield: {stake.yield.estimatedYieldHex} hearts
-              </span>
+              {estimatedYieldHexDisplay !== null ? (
+                <>
+                  <span className="cp-data text-xs">
+                    estimated yield: {estimatedYieldHexDisplay} HEX
+                  </span>
+                  <span className="text-xs text-[color:var(--color-text-muted)]">
+                    raw hearts: {stake.yield.estimatedYieldHex}
+                  </span>
+                </>
+              ) : null}
               <span className="text-xs text-[color:var(--color-text-muted)]">
                 yield observation: {stake.yield.provenance.observationId}
               </span>

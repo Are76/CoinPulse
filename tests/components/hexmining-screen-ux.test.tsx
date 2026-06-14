@@ -100,6 +100,26 @@ const BASE_LIST: HexStakeListDto = {
   warnings: [],
 };
 
+function makeEstimatedStake(estimatedYieldHex: string): HexStakeDto {
+  return {
+    ...MOCK_STAKE,
+    yield: {
+      status: "estimated",
+      estimatedYieldHex,
+      bpdYieldStatus: "not_applicable",
+      bpdYieldHex: null,
+      provenance: {
+        chainId: 369,
+        sourceFamily: "native",
+        observationId: "11111111-1111-1111-1111-111111111111",
+        rangeStartDay: 5000,
+        rangeEndDay: 5365,
+      },
+      warnings: [],
+    },
+  };
+}
+
 // ── Idle state ────────────────────────────────────────────────────────────────────────
 
 describe("HexMiningScreen — idle state before submit", () => {
@@ -312,28 +332,47 @@ describe("HexMiningScreen — stake table rendering", () => {
     expect(screen.getByText(/pnl: unsupported/i)).toBeInTheDocument();
   });
 
-  it("renders backend-provided estimated yield for estimated yield rows", () => {
-    renderWithStake({
-      ...MOCK_STAKE,
-      yield: {
-        status: "estimated",
-        estimatedYieldHex: "4212345600",
-        bpdYieldStatus: "not_applicable",
-        bpdYieldHex: null,
-        provenance: {
-          chainId: 369,
-          sourceFamily: "native",
-          observationId: "11111111-1111-1111-1111-111111111111",
-          rangeStartDay: 5000,
-          rangeEndDay: 5365,
-        },
-        warnings: ["hexmining-yield-bpd-attribution-unresolved"],
-      },
-    });
+  it("renders estimated yield in HEX from raw hearts string", () => {
+    renderWithStake(makeEstimatedStake("4212345600"));
 
     expect(screen.getByText(/yield: estimated/i)).toBeInTheDocument();
-    expect(screen.getByText("estimated yield: 4212345600 hearts")).toBeInTheDocument();
-    expect(screen.queryByText("estimated yield: 4212345600 HEX")).not.toBeInTheDocument();
+    expect(screen.getByText("estimated yield: 42.123456 HEX")).toBeInTheDocument();
+  });
+
+  it("renders raw hearts as secondary audit detail", () => {
+    renderWithStake(makeEstimatedStake("4212345600"));
+
+    expect(screen.getByText("raw hearts: 4212345600")).toBeInTheDocument();
+  });
+
+  it("renders 148326381855 hearts as 1483.26381855 HEX", () => {
+    renderWithStake(makeEstimatedStake("148326381855"));
+
+    expect(screen.getByText("estimated yield: 1483.26381855 HEX")).toBeInTheDocument();
+    expect(screen.getByText("raw hearts: 148326381855")).toBeInTheDocument();
+  });
+
+  it("renders 1 heart as 0.00000001 HEX", () => {
+    renderWithStake(makeEstimatedStake("1"));
+
+    expect(screen.getByText("estimated yield: 0.00000001 HEX")).toBeInTheDocument();
+  });
+
+  it("renders 100000000 hearts as 1 HEX", () => {
+    renderWithStake(makeEstimatedStake("100000000"));
+
+    expect(screen.getByText("estimated yield: 1 HEX")).toBeInTheDocument();
+  });
+
+  it("renders large bigint hearts strings without precision loss", () => {
+    renderWithStake(makeEstimatedStake("900719925474099312345678901234567891"));
+
+    expect(
+      screen.getByText("estimated yield: 9007199254740993123456789012.34567891 HEX"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("raw hearts: 900719925474099312345678901234567891"),
+    ).toBeInTheDocument();
   });
 
   it("renders yield warnings near estimated yield rows", () => {
