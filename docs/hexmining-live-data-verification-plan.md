@@ -1,16 +1,16 @@
 # HexMining Live-Data / Opt-In Verification Plan
 
-**Status:** Planning record only. No live verification has been executed by this document.
+**Status:** Historical planning record. This document itself did not execute live verification; Gate 10 live-data verification and the Gate 11 production promotion were later completed in PR #252.
 
 ## Purpose
 
-This plan defines the auditable verification record required before the remaining HexMining public estimated-yield gate can be lifted. The verification must prove that a controlled live-data fixture or opt-in wallet on PulseChain can produce canonical backend evidence for a known historical day range, that the estimator reaches the gated `evidence_available` state before promotion, and that the yield formula can be independently reproduced from the canonical payload.
+This plan defined the auditable verification record required before the remaining HexMining public estimated-yield gate could be lifted. The verification had to prove that a controlled live-data fixture or opt-in wallet on PulseChain could produce canonical backend evidence for a known historical day range, that the estimator reached the gated `evidence_available` state before promotion, and that the yield formula could be independently reproduced from the canonical payload.
 
 This verification is backend-only. It must not use frontend state, frontend calculations, DexScreener, fabricated yield values, or live RPC calls from a documentation-only PR.
 
 ## Required inputs
 
-A future verification PR must record all of the following inputs before any public estimated-yield promotion:
+The Gate 10 verification PR had to record all of the following inputs before any public estimated-yield promotion:
 
 - **Chain:** PulseChain only, with `chainId: 369`.
 - **Historical day range:** a known, explicit HEX day range selected before execution.
@@ -26,7 +26,7 @@ Do not invent or backfill historical day ranges, block numbers, RPC endpoints, s
 
 ## Required checks
 
-The future verification must demonstrate each check below and retain enough evidence for review:
+The verification had to demonstrate each check below and retain enough evidence for review:
 
 1. `dailyData` evidence exists for the full required historical range.
 2. The canonical payload validates against the backend decoder/normalizer used by the estimator path.
@@ -47,7 +47,7 @@ The future verification record must include a sanitized summary with:
 - Formula reproduction summary, including the canonical payload source and pass/fail outcome, without exposing private or sensitive data.
 - Final pass/fail decision for the gate-lift prerequisite.
 
-A passing record is necessary but not sufficient by itself to expose public estimated yield. The final gate-lift PR must still update the roadmap, preserve the approved DTO contract, and keep the production change narrowly scoped to the estimator promotion.
+A passing record was necessary but not sufficient by itself to expose public estimated yield. The final gate-lift PR still had to update the roadmap, preserve the approved DTO contract, and keep the production change narrowly scoped to the estimator promotion.
 
 ## Private and sanitized material
 
@@ -60,9 +60,10 @@ The verification record must keep the following private or sanitized:
 
 Use stable labels such as `rpcEndpointLabel` for reviewer-visible provenance, and keep raw secrets out of git, logs, screenshots, and PR comments.
 
-## Not completed by this PR
+## Not completed by this planning document
 
-- No live verification executed.
-- No production gate lifted.
-- No public estimated yield exposed.
-- No code changed.
+- This planning document did not execute live verification.
+- This planning document did not lift the production gate.
+- This planning document did not expose public estimated yield.
+- This planning document did not change code.
+- The live verification, gate lift, and production promotion were completed later by PR #252.

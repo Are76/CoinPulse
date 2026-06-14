@@ -215,7 +215,7 @@ Do not: What must not happen as a result
 
 **Status:** Active
 
-**Evidence:** [E1] `CLAUDE.md`; `docs/v2-hexmining-roadmap.md` §Next PR.
+**Evidence:** [E1] `CLAUDE.md`; `docs/v2-hexmining-roadmap.md`.
 
 **Decision:** Every task must be one independently reviewable, reversible PR. No PR mixes schema changes, frontend changes, and infrastructure changes. No scope creep.
 
@@ -307,35 +307,35 @@ Do not: What must not happen as a result
 
 ---
 
-## D-018: Public Estimated Yield Remains Gated Until Gate 10 Is Satisfied
+## D-018: Public Estimated Yield Gate Was Lifted After Gate 10 Evidence
 
-**Status:** Active — Gate 10 OPEN
+**Status:** Active — Gate 10 satisfied; Gate 11 promotion merged in PR #252
 
-**Evidence:** [E1] `docs/v2-hexmining-roadmap.md` §11.14; `docs/hexmining-gate10-execution-plan.md`.
+**Evidence:** [E1] `docs/v2-hexmining-roadmap.md` §11.14; `docs/hexmining-gate10-execution-plan.md`; [E2] PR #252 merged; [E3] `src/services/hexmining/yield-estimator.ts`, `src/services/hexmining/reader.ts`, `app/api/hexmining/stakes/route.ts`.
 
-**Decision:** Public estimated yield (`status: "estimated"`, non-null `estimatedYieldHex`) must not be exposed until Gate 10 (live-data verification) is satisfied and documented.
+**Decision:** Public estimated yield (`status: "estimated"`, non-null `estimatedYieldHex`) may be exposed only after Gate 10 live-data verification is satisfied and documented. As of PR #252, that condition is satisfied and the production estimator promotion is merged.
 
-**Rationale:** Infrastructure PRs (#234–#237) closed the reader/route/test coverage chain. They are not a gate lift. The gate lift requires verified live-data evidence.
+**Rationale:** Infrastructure PRs (#234–#237) closed the reader/route/test coverage chain but were not themselves a gate lift. PR #252 supplied the required verified live-data evidence and promoted the production estimator path.
 
-**Implications:** Until Gate 10 passes, the production estimator returns `status: "evidence_available"`, `yieldHex: null`. The reader maps this to `status: "unavailable"` in the public DTO.
+**Implications:** Valid evidence paths now return `status: "estimated"` with non-null `yieldHex` from the estimator and map to public `HexStakeYieldDto.status: "estimated"` with non-null `estimatedYieldHex` when provenance is complete. Non-estimated internal states such as `evidence_available`, insufficient observations, invalid observations, unavailable evidence, and unsupported chains still do not expose fabricated yield.
 
-**Do not:** Promote `"estimated"` in public output without a passing Gate 10 evidence package.
+**Do not:** Treat the Gate 11 promotion as approval for ended stake exact-yield discovery, HSI/HTT, HexMining pricing/valuation/PnL, Ethereum eHEX, or frontend yield computation.
 
 ---
 
 ## D-019: Gate 10 Requires Documented Evidence
 
-**Status:** Active — not yet executed
+**Status:** Active — satisfied by PR #252 for the Gate 11 promotion
 
-**Evidence:** [E1] `docs/hexmining-gate10-execution-plan.md`; `docs/hexmining-gate10-evidence-template.md`.
+**Evidence:** [E1] `docs/hexmining-gate10-execution-plan.md`; `docs/hexmining-gate10-evidence-template.md`; `docs/v2-hexmining-roadmap.md`; [E2] PR #252 merged.
 
-**Decision:** Gate 10 requires: a real `HexMiningObservation` record on PulseChain (chain ID 369), a passing verification harness run, and a sanitized evidence package committed in the gate-lift PR.
+**Decision:** Gate 10 required: a real `HexMiningObservation` record on PulseChain (chain ID 369), a passing verification harness run, and a sanitized evidence package committed in the gate-lift PR. PR #252 records that these requirements were met.
 
 **Rationale:** Evidence must be reproducible and reviewable. It cannot be asserted or fabricated.
 
-**Implications:** Gate 10 cannot be executed without a live PostgreSQL instance, a PulseChain RPC endpoint, and real ingested observation data.
+**Implications:** Gate 10 was executed locally with the required database/RPC/evidence resources and is no longer an open blocker for public estimated yield. Any future evidence-sensitive gate must still record reproducible evidence before a gate lift.
 
-**Do not:** Declare Gate 10 passed without a recorded, sanitized evidence package.
+**Do not:** Re-declare, reopen, or reinterpret Gate 10 based on runner/tool existence alone; use the recorded PR #252 evidence as the accepted gate-lift record.
 
 ---
 
@@ -345,13 +345,13 @@ Do not: What must not happen as a result
 
 **Evidence:** [E1] `docs/hexmining-gate10-execution-plan.md`; `docs/v2-hexmining-roadmap.md`.
 
-**Decision:** The existence of operator and runner scripts (`gate10-runner.ts`, `hexmining-dailydata-observation-fetch.ts`, `verification-harness.ts`) does not mean Gate 10 is lifted or that public estimated yield is exposed.
+**Decision:** The existence of operator and runner scripts (`gate10-runner.ts`, `hexmining-dailydata-observation-fetch.ts`, `verification-harness.ts`) did not mean Gate 10 was lifted or that public estimated yield was exposed. Gate 10 / Gate 11 were lifted only by PR #252 with recorded evidence and production promotion.
 
 **Rationale:** Operator tools are execution infrastructure only. The gate is lifted only by a specific gate-lift PR with recorded evidence.
 
-**Implications:** Any AI that sees these scripts must not infer that the gate is open.
+**Implications:** Any AI that sees these scripts must not infer gate status from tooling alone. Current gate status comes from PR #252 and the post-gate code/docs state.
 
-**Do not:** Conclude from the presence of runner/harness scripts that the gate-lift has occurred.
+**Do not:** Conclude future gate or phase status from the presence of runner/harness scripts.
 
 ---
 
@@ -391,15 +391,15 @@ Do not: What must not happen as a result
 
 **Status:** Active
 
-**Evidence:** [E2] PR #247 merged; [E3] `scripts/hexmining-gate10-run.ts`.
+**Evidence:** [E2] PR #247 merged; PR #252 merged; [E3] `scripts/hexmining-gate10-run.ts`; `src/services/hexmining/yield-estimator.ts`.
 
-**Decision:** `stakeShares` must be validated as a non-negative bigint (`>= 0n`) before being used in yield calculations. Negative stakeShares must be rejected with a clear error at the runner boundary. [E3] The current gate10-runner guard rejects `< 0n`; zero passes through to the harness/estimator where it produces a zero-yield result rather than a runner-level error.
+**Decision:** `stakeShares` must be validated before being used in yield calculations. The Gate 10 runner rejects negative stakeShares at the runner boundary. The production estimator rejects non-positive stakeShares (`<= 0n`) before evidence fetch with a clear invalid-observation result.
 
-**Rationale:** A negative stakeShares value would produce an invalid yield estimate. PR #247 added this guard to the Gate 10 runner. Whether zero stakeShares should also be a runner-level hard error is a separate policy question not yet resolved by repo code.
+**Rationale:** A negative stakeShares value would produce an invalid yield estimate. PR #247 added this guard to the Gate 10 runner. After PR #252, the production estimator rejects zero and negative `stakeShares` before evidence fetch with `status: "invalid_observation"` and warning `hexmining-yield-invalid-stake-shares`. The runner still rejects negative `stakeShares` at its boundary.
 
-**Implications:** The runner currently enforces `>= 0n`. Zero stakeShares produces a zero-yield path, not a runner rejection. If the project decides zero must be rejected at the runner, an additional `=== 0n` guard is needed.
+**Implications:** The runner currently enforces no negative `stakeShares`; the estimator enforces strictly positive `stakeShares`. Zero `stakeShares` is rejected by the estimator, not by the runner boundary.
 
-**Do not:** Pass negative `stakeShares` to the yield estimator or Gate 10 runner. Do not assume zero is currently rejected at the runner boundary.
+**Do not:** Pass non-positive `stakeShares` to the yield estimator. Do not assume zero is currently rejected at the runner boundary before reaching estimator policy.
 
 ---
 
@@ -457,10 +457,10 @@ Do not: What must not happen as a result
 
 **Evidence:** [E1] `docs/v2-hexmining-roadmap.md`; [E4] project audit posture.
 
-**Decision:** Documentation must not state that a gate is lifted unless the code, tests, and roadmap docs all agree that the lift has occurred. Docs drift is a hard stop.
+**Decision:** Documentation must not state that a gate is lifted unless the code, tests, and roadmap docs all agree that the lift has occurred. PR #252 is the recorded Gate 10 / Gate 11 lift. Docs drift after the gate lift must be reconciled to that merged state.
 
 **Rationale:** A docs claim that a gate is lifted without code/test confirmation would mislead future AI agents and Are into proceeding with public exposure prematurely.
 
-**Implications:** Any docs PR that updates gate status must include the PR reference that actually lifted the gate, and must not be merged before the implementation PR.
+**Implications:** Any docs PR that updates gate status must include the PR reference that actually lifted the gate. For Gate 10 / Gate 11, that reference is PR #252.
 
-**Do not:** Write "Gate 10 PASSED" or "Gate 10 RESOLVED" in any doc without a recorded, merged gate-lift implementation PR with evidence.
+**Do not:** Write gate-lift claims for future gates or phases without a recorded, merged implementation PR with evidence.

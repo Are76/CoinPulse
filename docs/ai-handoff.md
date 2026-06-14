@@ -69,29 +69,29 @@ These rules apply to every PR. [E1]
 
 ---
 
-## Current Project Status (after PR #249)
+## Current Project Status (after PR #254)
 
 **Backend/DTO truth posture:** The canonical backend pipeline is the source of truth. All DTO contracts expose `schemaVersion`, provenance, freshness, status, and warnings. No production DTO contains mock fallback truth. [E2]
 
 **Frontend query posture:** TanStack Query is used for all reads via hooks in `src/lib/query/use-*.ts`. Query key conventions and staleTime/gcTime policy are documented in `docs/data-fetching-architecture.md`. [E1]
 
-**HexMining / Gate 10 posture:** Phase 4C internal pipeline is complete. Public estimated yield remains intentionally gated. Gate 10 is OPEN — live-data verification has not been executed. [E1] [E2]
+**HexMining / Gate 10 / Gate 11 posture:** Phase 4C is complete and gate-lifted. PR #252 executed Gate 10 live-data verification and promoted the Gate 11 production estimator path. Public estimated yield is live for valid evidence paths: `estimateHexMiningYield` can return `status: "estimated"` with non-null `yieldHex`, and `/api/hexmining/stakes` wires the estimator through the reader. [E1] [E2] [E3]
 
 **Source/RPC policy posture:** PR #249 removed the hardcoded `pulsechainstats.com` RPC default. No third-party RPC default is hardcoded. Runtime/operator/env/CLI-supplied RPC is the authoritative transport. PR #246 established the accepted authoritative PulseChain source reference doc. [E2]
 
 ---
 
-## HexMining / Gate 10 Current State
+## HexMining Post-Gate-11 Current State
 
-> **WARNING: Do not assume Gate 10 is lifted from the existence of runner/operator scripts, tests, or infrastructure PRs.**
+> **WARNING: Gate 10 / Gate 11 were lifted by PR #252 only. Do not infer future HexMining phases from the existence of runner/operator scripts, tests, or infrastructure PRs.**
 
-**Gate 10 status:** OPEN. [E1]
+**Gate 10 status:** PASSED / RESOLVED by PR #252. Gate 10 executed 2026-06-14 using stakeId 942663, stakeShares 1414291579679, lockedDay 2310, rangeStartDay 2310, rangeEndDay 2384 (75 entries), reproducedYieldHex `"20589444841"`, all 9 criteria passed, and the harness returned `verified: true`. [E1] [E2]
 
-**Gate 11 status:** OPEN. Depends on Gate 10 passing. [E1]
+**Gate 11 status:** PASSED / RESOLVED by PR #252. The production estimator promotion is merged. [E1] [E2] [E3]
 
-**Public estimated yield:** NOT exposed. The production estimator returns `status: "evidence_available"`, `yieldHex: null` for valid evidence paths. This is the gated internal state — not public output. [E1] [E3]
+**Public estimated yield:** Exposed for valid evidence paths. The production estimator returns `status: "estimated"`, `yieldHex: string`, `bpdYieldHex: null` for BPD-spanning ranges with the BPD attribution warning, and complete provenance. The reader maps this into public `HexStakeYieldDto.status: "estimated"` with non-null `estimatedYieldHex` when provenance is complete. [E1] [E3]
 
-**What is complete (PRs #208–#237):**
+**What is complete (PRs #208–#252):**
 - Yield formula: complete and internally verified. [E2]
 - BPD attribution gate: resolved at estimator boundary. [E2]
 - DTO contract (`HexStakeYieldDto`): approved in PR #232. [E2]
@@ -99,16 +99,19 @@ These rules apply to every PR. [E1]
 - Route dependency wiring: PR #235 — route passes `estimateYield` into `readNativeHexStakes`. [E2]
 - Contract tests for full DTO path: PR #236. [E2]
 - Closure documentation: PR #237. [E2]
+- Gate 10 live-data evidence: PR #252 — real PulseChain historical day range verified. [E2]
+- Gate 11 production promotion: PR #252 — valid evidence paths surface public `"estimated"` yield. [E2] [E3]
 
-**What is NOT yet done (Gate 10 remaining items):**
-- Item 10: Live-data fixture or opt-in integration verification against a known historical day range on PulseChain (chain ID 369). Must follow `docs/hexmining-live-data-verification-plan.md` and `docs/hexmining-gate10-execution-plan.md`. [E1]
-- Item 11: Final docs record approving the gate lift — roadmap must be updated with gate-lifted evidence and PR reference only after item 10 passes. [E1]
-- Final production promotion: change the gated `evidence_available` return in `yield-estimator.ts` to surface `"estimated"` with non-null `yieldHex`. [E1]
+**What is still deferred after Gate 11:**
+- Ended stake discovery / exact yield (`status: "exact"`) remains Phase 5. [E1]
+- HSI/HTT source families remain Phase 6. [E1]
+- HexMining pricing, valuation, and PnL remain Phase 7; `valuation.status` and `pnl.status` stay `"unsupported"`. [E1] [E3]
+- Ethereum eHEX remains future scope. [E1]
 
 **Operator tools available (do NOT treat as gate-lift):**
-- `scripts/hexmining-gate10-run.ts` — Gate 10 runner script. Operator use only; does not lift the gate. [E3]
-- `scripts/hexmining-dailydata-observation-fetch.ts` — Fetches and persists a dailyData observation from PulseChain. Operator/ingestion tool only; does not lift the gate. [E3]
-- `src/services/hexmining/verification-harness.ts` — Verification harness used during Gate 10 execution. Does not itself lift the gate. [E3]
+- `scripts/hexmining-gate10-run.ts` — Gate 10 runner script. Operator use only; its existence alone did not lift the gate. [E3]
+- `scripts/hexmining-dailydata-observation-fetch.ts` — Fetches and persists a dailyData observation from PulseChain. Operator/ingestion tool only; its existence alone did not lift the gate. [E3]
+- `src/services/hexmining/verification-harness.ts` — Verification harness used during Gate 10 execution. Its existence alone did not lift the gate. [E3]
 
 ---
 
@@ -143,21 +146,25 @@ These rules apply to every PR. [E1]
 | #247 | Negative stakeShares guard added to gate10-runner | [E2] |
 | #248 | dailyData observation fetch operator utility | [E2] |
 | #249 | Hardcoded `pulsechainstats.com` RPC default removed per source policy | [E2] |
+| #250 | AI handoff and project decision docs added | [E2] |
+| #251 | Operator environment reference added | [E2] |
+| #252 | Gate 10 evidence collected and Gate 11 public estimated-yield promotion merged | [E2] |
+| #253 | Materialization warning order assertion stabilized | [E2] |
+| #254 | Materialization negative-balance order assertion stabilized | [E2] |
 
 ---
 
-## Next-Step Posture
+## Post-Gate-11 Posture
 
-Before any public estimated-yield promotion: [E5]
+After PR #252: [E1] [E2] [E3]
 
-1. Collect live-data verification evidence using `docs/hexmining-gate10-execution-plan.md` and the verification harness.
-2. Record the sanitized evidence package.
-3. Review the evidence against all Gate 10 success criteria.
-4. Only after Gate 10 passes: open a separate, bounded gate-lift implementation PR that updates the roadmap, promotes the production estimator, and records Gate 11 evidence.
+1. Gate 10 evidence collection is complete.
+2. Gate 11 public estimated-yield promotion is merged.
+3. Valid evidence paths may surface public `status: "estimated"` with non-null `estimatedYieldHex`.
+4. BPD-spanning ranges still carry unresolved BPD attribution as `bpdYieldHex: null` plus warning.
+5. Pricing, valuation, PnL, ended stakes, HSI/HTT, and Ethereum eHEX remain deferred to their documented phases.
 
-The Gate 10 evidence package must be committed in the gate-lift PR body or as a companion docs record — not in a standalone docs PR. Do not open a Gate 11 gate-lift PR without including the evidence package. [E1]
-
-Do not expose public estimated yield based on the existence of runner or operator tools alone. [E1]
+Do not treat Gate 11 as approval for Phase 5, Phase 6, Phase 7, Ethereum/Base execution, or frontend accounting/pricing/PnL logic. [E1]
 
 ---
 
@@ -170,7 +177,7 @@ Read docs/ai-handoff.md first.
 
 Then read the specific PR, roadmap, or docs I mention.
 
-Do not assume Gate 10 is lifted.
+Treat Gate 10 and Gate 11 as lifted by PR #252, but do not infer later HexMining phases from that gate lift.
 Do not propose runtime changes until you identify:
 1. current latest merged PR,
 2. current gate/status,
