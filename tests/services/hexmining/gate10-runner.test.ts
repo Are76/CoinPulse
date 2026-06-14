@@ -119,7 +119,7 @@ describe("runGate10Verification", () => {
     if ("error" in result) return;
     expect(result.passed).toBe(true);
     expect(result.failureCode).toBeNull();
-    expect(result.estimatorStatus).toBe("evidence_available");
+    expect(result.estimatorStatus).toBe("estimated");
     expect(result.formula.reproducedYieldHex).not.toBeNull();
     expect(result.formula.entryCount).toBe(2);
     expect(result.formula.expectedEntryCount).toBe(2);

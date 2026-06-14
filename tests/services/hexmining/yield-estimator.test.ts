@@ -236,24 +236,24 @@ describe("estimateHexMiningYield", () => {
     });
   });
 
-  describe("evidence available with valid default payload", () => {
-    it("returns evidence_available for valid non-invalidated evidence with valid payload", async () => {
+  describe("estimated result with valid default payload", () => {
+    it("returns estimated for valid non-invalidated evidence with valid payload", async () => {
       const deps = makeDeps();
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("evidence_available");
+      expect(result.status).toBe("estimated");
       expect(result.schemaVersion).toBe("v1");
-      expect(result.yieldHex).toBeNull();
+      expect(result.yieldHex).not.toBeNull();
       expect(result.provenance.observationId).toBe("obs-abc-123");
       expect(result.provenance.rangeStartDay).toBe(1000);
       expect(result.provenance.rangeEndDay).toBe(1199);
     });
 
-    it("propagates evidence warnings into evidence_available result", async () => {
+    it("propagates evidence warnings into estimated result", async () => {
       const deps = makeDeps(makeEvidence({ warnings: ["hexmining-some-upstream-warning"] }));
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("evidence_available");
+      expect(result.status).toBe("estimated");
       expect(result.warnings).toContain("hexmining-some-upstream-warning");
     });
   });
@@ -290,7 +290,7 @@ describe("estimateHexMiningYield", () => {
         BASE_ARGS,
         makeDeps(makeEvidence({ isInvalidated: true })),
       );
-      // Default deps: returns evidence_available (not estimated — public estimated path is gated)
+      // Default deps: returns estimated with non-null yieldHex after gate lift
       const evidenceAvailable = await estimateHexMiningYield(BASE_ARGS, makeDeps());
 
       expect(unsupported.schemaVersion).toBe("v1");
@@ -305,19 +305,16 @@ describe("estimateHexMiningYield", () => {
       expect(result.provenance.sourceFamily).toBe("HEXMINING");
     });
 
-    it("yieldHex is null for all statuses (estimated path is gated)", async () => {
+    it("yieldHex is null for non-estimated statuses", async () => {
       const unsupported = await estimateHexMiningYield({ ...BASE_ARGS, chainId: 1 }, makeDeps());
       const unavailable = await estimateHexMiningYield(BASE_ARGS, {
         fetchEvidence: vi.fn().mockRejectedValue(new Error("fail")),
       });
       const noEvidence = await estimateHexMiningYield(BASE_ARGS, makeDeps(null));
-      // Default deps now returns evidence_available directly (no injectable stub required)
-      const evidenceAvailable = await estimateHexMiningYield(BASE_ARGS, makeDeps());
 
       expect(unsupported.yieldHex).toBeNull();
       expect(unavailable.yieldHex).toBeNull();
       expect(noEvidence.yieldHex).toBeNull();
-      expect(evidenceAvailable.yieldHex).toBeNull();
     });
 
     it("result contains no pricing, valuation, pnl, APY, or yield-calculation fields", async () => {
@@ -490,12 +487,12 @@ describe("estimateHexMiningYield", () => {
 
     // ── Test 8: default pipeline runs and returns evidence_available ──────────
 
-    it("default (no applyCalculation dep) runs pipeline and returns evidence_available", async () => {
+    it("default (no applyCalculation dep) runs pipeline and returns estimated", async () => {
       const deps = makeDeps();
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
       expect(result.provenance.observationId).toBe("obs-abc-123");
     });
 
@@ -797,7 +794,7 @@ describe("estimateHexMiningYield", () => {
   describe("elapsed-days coverage rule", () => {
     // ── Test 1: full elapsed coverage → evidence_available ────────────────
 
-    it("full elapsed coverage returns evidence_available with yieldHex null", async () => {
+    it("full elapsed coverage returns estimated with non-null yieldHex", async () => {
       // lockedDay=1000, stakedDays=365, currentDay=1200
       // elapsedEndDay = min(1199, 1364) = 1199; evidence covers [1000, 1199] exactly
       const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1199 }));
@@ -806,8 +803,8 @@ describe("estimateHexMiningYield", () => {
         deps,
       );
 
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
       expect(result.schemaVersion).toBe("v1");
     });
 
@@ -922,8 +919,8 @@ describe("estimateHexMiningYield", () => {
         deps,
       );
 
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
     });
 
     it("completed stake: evidence ending at currentDay-1 is rejected if stake ended earlier", async () => {
@@ -953,8 +950,8 @@ describe("estimateHexMiningYield", () => {
         deps,
       );
 
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
     });
 
     // ── Test 7: off-by-one protection (inclusive start and end) ────────────
@@ -969,8 +966,8 @@ describe("estimateHexMiningYield", () => {
         deps,
       );
 
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
     });
 
     it("start at lockedDay+1 is rejected (must include lockedDay itself)", async () => {
@@ -1032,35 +1029,41 @@ describe("estimateHexMiningYield", () => {
 
     // ── Test 1: BPD-spanning range → evidence_available with BPD warning ─
 
-    it("stake spanning BPD day 353 returns evidence_available with bpd-attribution-unresolved warning", async () => {
+    it("stake spanning BPD day 353 returns estimated with bpd-attribution-unresolved warning and null bpdYieldHex", async () => {
       const deps = makeDeps(makeBpdEvidence());
       const result = await estimateHexMiningYield(BPD_ARGS, deps);
 
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
       expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
+      if (result.status === "estimated") {
+        expect(result.bpdYieldHex).toBeNull();
+      }
     });
 
     // ── Test 2: non-BPD range → no BPD warning ────────────────────────
 
-    it("stake not spanning BPD day 353 returns evidence_available without BPD warning", async () => {
+    it("stake not spanning BPD day 353 returns estimated without BPD warning", async () => {
       // BASE_ARGS: lockedDay=1000, so BPD day 353 is far before this stake
       const deps = makeDeps();
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
       expect(result.warnings).not.toContain("hexmining-yield-bpd-attribution-unresolved");
     });
 
     // ── Test 3: public status is never "estimated" for BPD-spanning range ─
 
-    it("BPD-spanning range never returns estimated status or non-null yieldHex", async () => {
+    it("BPD-spanning range returns estimated with non-null yieldHex and null bpdYieldHex", async () => {
       const deps = makeDeps(makeBpdEvidence());
       const result = await estimateHexMiningYield(BPD_ARGS, deps);
 
-      expect(result.status).not.toBe("estimated");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
+      if (result.status === "estimated") {
+        expect(result.bpdYieldHex).toBeNull();
+      }
     });
 
     // ── Test 4: applyCalculation is called internally for BPD-spanning range ─
@@ -1118,7 +1121,7 @@ describe("estimateHexMiningYield", () => {
       const deps = makeDeps(makeEvidence({ rangeStartDay: 353, rangeEndDay: 459 }));
       const result = await estimateHexMiningYield(args, deps);
 
-      expect(result.status).toBe("evidence_available");
+      expect(result.status).toBe("estimated");
       expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
     });
 
@@ -1138,7 +1141,7 @@ describe("estimateHexMiningYield", () => {
       const deps = makeDeps(makeEvidence({ rangeStartDay: 300, rangeEndDay: 399 }));
       const result = await estimateHexMiningYield(args, deps);
 
-      expect(result.status).toBe("evidence_available");
+      expect(result.status).toBe("estimated");
       expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
     });
 
@@ -1158,7 +1161,7 @@ describe("estimateHexMiningYield", () => {
       const deps = makeDeps(makeEvidence({ rangeStartDay: 300, rangeEndDay: 399 }));
       const result = await estimateHexMiningYield(args, deps);
 
-      expect(result.status).toBe("evidence_available");
+      expect(result.status).toBe("estimated");
       expect(result.warnings).not.toContain("hexmining-yield-bpd-attribution-unresolved");
     });
 
@@ -1177,7 +1180,7 @@ describe("estimateHexMiningYield", () => {
       const deps = makeDeps(makeEvidence({ rangeStartDay: 354, rangeEndDay: 459 }));
       const result = await estimateHexMiningYield(args, deps);
 
-      expect(result.status).toBe("evidence_available");
+      expect(result.status).toBe("estimated");
       expect(result.warnings).not.toContain("hexmining-yield-bpd-attribution-unresolved");
     });
 
@@ -1197,7 +1200,7 @@ describe("estimateHexMiningYield", () => {
       const deps = makeDeps(makeEvidence({ rangeStartDay: 300, rangeEndDay: 349 }));
       const result = await estimateHexMiningYield(args, deps);
 
-      expect(result.status).toBe("evidence_available");
+      expect(result.status).toBe("estimated");
       expect(result.warnings).not.toContain("hexmining-yield-bpd-attribution-unresolved");
     });
 
@@ -1207,7 +1210,7 @@ describe("estimateHexMiningYield", () => {
       const deps = makeDeps(makeBpdEvidence({ warnings: ["hexmining-some-upstream-warning"] }));
       const result = await estimateHexMiningYield(BPD_ARGS, deps);
 
-      expect(result.status).toBe("evidence_available");
+      expect(result.status).toBe("estimated");
       expect(result.warnings).toContain("hexmining-some-upstream-warning");
       expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
     });
@@ -1227,12 +1230,12 @@ describe("estimateHexMiningYield", () => {
   describe("§11.9 provenance and formula-input audit trail", () => {
     // ── Test 1: all required provenance fields present in evidence_available ──
 
-    it("evidence_available result carries all required provenance fields", async () => {
+    it("estimated result carries all required provenance fields", async () => {
       const deps = makeDeps();
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
       expect(result.provenance.chainId).toBe(369);
       expect(result.provenance.sourceFamily).toBe("HEXMINING");
       expect(result.provenance.observationId).toBe("obs-abc-123");
@@ -1248,7 +1251,7 @@ describe("estimateHexMiningYield", () => {
       const deps = makeDeps(makeEvidence({ rangeStartDay: 999, rangeEndDay: 1250 }));
       const result = await estimateHexMiningYield(BASE_ARGS, deps);
 
-      expect(result.status).toBe("evidence_available");
+      expect(result.status).toBe("estimated");
       expect(result.provenance.rangeStartDay).toBe(999);
       expect(result.provenance.rangeEndDay).toBe(1250);
     });
@@ -1269,8 +1272,8 @@ describe("estimateHexMiningYield", () => {
       const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1049 }));
       const result = await estimateHexMiningYield(args, deps);
 
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
       expect(result.provenance.rangeStartDay).toBe(1000);
       expect(result.provenance.rangeEndDay).toBe(1049);
     });
@@ -1313,8 +1316,8 @@ describe("estimateHexMiningYield", () => {
       const deps = makeDeps(makeEvidence({ rangeStartDay: 1000, rangeEndDay: 1099 }));
       const result = await estimateHexMiningYield(args, deps);
 
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
       expect(result.provenance.rangeStartDay).toBe(1000);
       expect(result.provenance.rangeEndDay).toBe(1099);
     });
@@ -1359,8 +1362,8 @@ describe("estimateHexMiningYield", () => {
       );
       const result = await estimateHexMiningYield(args, deps);
 
-      expect(result.status).toBe("evidence_available");
-      expect(result.yieldHex).toBeNull();
+      expect(result.status).toBe("estimated");
+      expect(result.yieldHex).not.toBeNull();
       expect(result.warnings).toContain("hexmining-yield-bpd-attribution-unresolved");
       expect(result.provenance.chainId).toBe(369);
       expect(result.provenance.sourceFamily).toBe("HEXMINING");
@@ -1434,8 +1437,7 @@ describe("estimateHexMiningYield", () => {
 
     // ── Test 10: no estimated status, no non-null yieldHex in any scenario ─
 
-    it("evidence_available, coverage failure, and no-elapsed-days never expose estimated or non-null yieldHex", async () => {
-      const evidenceAvailable = await estimateHexMiningYield(BASE_ARGS, makeDeps());
+    it("coverage failure and no-elapsed-days never expose estimated or non-null yieldHex", async () => {
       const coverageFailure = await estimateHexMiningYield(
         BASE_ARGS,
         makeDeps(makeEvidence({ rangeStartDay: 1001, rangeEndDay: 1199 })),
@@ -1445,8 +1447,6 @@ describe("estimateHexMiningYield", () => {
         makeDeps(),
       );
 
-      expect(evidenceAvailable.status).not.toBe("estimated");
-      expect(evidenceAvailable.yieldHex).toBeNull();
       expect(coverageFailure.status).not.toBe("estimated");
       expect(coverageFailure.yieldHex).toBeNull();
       expect(noElapsedDays.status).not.toBe("estimated");

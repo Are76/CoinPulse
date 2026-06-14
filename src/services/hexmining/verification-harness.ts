@@ -208,6 +208,13 @@ export async function verifyHexMiningYieldEvidence(
   }
 
   const estimatorResult = await estimateHexMiningYield(args, estimatorDeps);
+
+  // After gate lift, the default pipeline returns "estimated" with non-null yieldHex.
+  // Capture it as the internal yield for mismatch comparison when no estimatorCalculation dep was injected.
+  if (estimatorResult.status === "estimated" && estimatorInternalYieldHex === null) {
+    estimatorInternalYieldHex = estimatorResult.yieldHex;
+  }
+
   const formula = {
     reproducedYieldHex,
     estimatorInternalYieldHex,
@@ -215,7 +222,7 @@ export async function verifyHexMiningYieldEvidence(
     expectedEntryCount,
   };
 
-  if (estimatorResult.status !== "evidence_available") {
+  if (estimatorResult.status !== "estimated" && estimatorResult.status !== "evidence_available") {
     return fail(
       input,
       "hexmining-verification-estimator-not-evidence-available",
