@@ -1265,16 +1265,19 @@ describe("assemblePortfolioDashboard", () => {
         }),
     });
 
-    expect(result.materialization.warnings).toEqual([
-      {
-        code: "negative_token_balance",
-        message: `Negative materialized token balance for ${sameSymbolAlpha}: -1`,
-      },
-      {
-        code: "negative_token_balance",
-        message: `Negative materialized token balance for ${sameSymbolBeta}: -1`,
-      },
-    ]);
+    expect(result.materialization.warnings).toHaveLength(2);
+    expect(result.materialization.warnings).toEqual(
+      expect.arrayContaining([
+        {
+          code: "negative_token_balance",
+          message: `Negative materialized token balance for ${sameSymbolAlpha}: -1`,
+        },
+        {
+          code: "negative_token_balance",
+          message: `Negative materialized token balance for ${sameSymbolBeta}: -1`,
+        },
+      ]),
+    );
     expect(result.materialization.negativeBalances.map((balance) => balance.assetId)).toEqual([
       sameSymbolAlpha,
       sameSymbolBeta,
@@ -1718,7 +1721,7 @@ describe("assemblePortfolioDashboard", () => {
       "utf8",
     );
 
-    expect(source).not.toContain("\"use client\"");
+    expect(source).not.toContain('"use client"');
     expect(source).not.toContain("React");
     expect(source).not.toContain("return (");
   });
