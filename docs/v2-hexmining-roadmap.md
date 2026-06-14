@@ -2,9 +2,9 @@
 
 > **AI USAGE NOTE:** This is the condensed active working document (~200 lines). Full historical context, completed-phase details, PR logs, validation history, and research records are in [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md). **For routine implementation work, read only this file.** Use `grep` to locate specific gates or sections. Do not load the archive into context unless explicitly asked.
 
-**Document status:** Phase 4C internal pipeline complete and gated — PRs #208–#237 merged. Public estimated yield remains intentionally gated. `HexStakeYieldDto` contract APPROVED FOR IMPLEMENTATION (§11.16, OQ-1–OQ-6 resolved, PR #232); reader assembly, route dependency wiring, focused public DTO contract coverage, and route/DTO closure documentation are closed by PRs #234–#237. Remaining gate-lift gates are still explicit in §11.14.
+**Document status:** Phase 4C complete and gate-lifted — PRs #208–#252 merged. Public estimated yield is live. Gate 10 executed 2026-06-14 (PR #252); Gate 11 gate-lift PR #252 promotes valid evidence paths to `status: "estimated"` with non-null `yieldHex`. All §11.14 gates resolved.
 **Created:** 2026-06-06
-**Last updated:** 2026-06-12 (docs/hexmining-gate10-execution-plan: add practical Gate 10 execution instructions referencing PR #239 verification harness)
+**Last updated:** 2026-06-14 (PR #252: Gate 10 evidence collected and Gate 11 production estimator promoted)
 
 **Archive:** [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md) — historical PR logs, completed phase details, research records, validation history, full §1–§15 prose.
 
@@ -54,7 +54,7 @@ See archive §11.14 for full gating rationale, internal behavior details, and re
 
 | File | Current constraint/status |
 |---|---|
-| `src/services/hexmining/yield-estimator.ts` | Public estimator gate remains active: valid evidence paths return `status: "evidence_available"`, `yieldHex: null`; no production promotion to `"estimated"` yet |
+| `src/services/hexmining/yield-estimator.ts` | ✅ PR #252 gate-lifted: valid evidence paths now return `status: "estimated"` with non-null `yieldHex`; `bpdYieldHex: null` with BPD warning for BPD-spanning ranges |
 | `src/services/hexmining/reader.ts` | ✅ PR #234 closed reader assembly: injectable `estimateYield` results can assemble the approved `HexStakeYieldDto` shape; without the dep, yield remains `"unsupported"` |
 | `app/api/hexmining/stakes/route.ts` | ✅ PR #235 closed route wiring: the route passes `estimateYield` into `readNativeHexStakes` using the existing `estimateHexMiningYield` + evidence-provider dependency path |
 | `src/services/hexmining/observation-evidence-provider.ts` | Evidence provider remains backend-only; no canonical payload exposure in public DTO/API response |
@@ -66,7 +66,7 @@ See archive §11.14 for full gating rationale, internal behavior details, and re
 A gate-lift PR may promote `"estimated"` into public output **only** when all of the following are satisfied before release:
 
 1. **Elapsed-days-only coverage rule** — ✅ **RESOLVED (PR #225)**
-2. **BPD attribution gate** — ✅ **RESOLVED at estimator boundary (PR #226)**; reader/route `bpdYieldHex`/`bpdYieldStatus` assembly and contract coverage closed by PRs #234–#236; final production promotion remains gated
+2. **BPD attribution gate** — ✅ **RESOLVED at estimator boundary (PR #226)**; reader/route `bpdYieldHex`/`bpdYieldStatus` assembly and contract coverage closed by PRs #234–#236; production promotion lifted by PR #252
 3. **§11.9 provenance fields** — ✅ **RESOLVED (PR #227)**
 4. **`HexStakeDto.yield` field assembly** — ✅ **RESOLVED (PR #234)** — including `bpdYieldHex`, `bpdYieldStatus`, `estimatedYieldHex`, `provenance`, and `warnings` wiring from injected `estimateYield` results
 5. **`GET /api/hexmining/stakes` route dependency wiring** — ✅ **RESOLVED (PR #235)** — route passes `estimateYield` into `readNativeHexStakes` through the existing `estimateHexMiningYield` + `getObservationEvidenceWithPayloadForRange` path
@@ -74,10 +74,10 @@ A gate-lift PR may promote `"estimated"` into public output **only** when all of
 7. **EES/penalty distribution** — ✅ **RESOLVED (PR #224, Finding A)** — penalties already included in `dayPayoutTotal`; see `docs/hexmining-penalty-distribution-research.md`
 8. **DTO contract approval** — ✅ **RESOLVED (PR #232)** — §11.16 OQ-1–OQ-6 approved
 9. **Explicit contract tests for public estimated-yield DTO path** — ✅ **RESOLVED (PR #236)** — focused route/reader contract tests cover the approved DTO path before public promotion
-10. Live-data fixture or opt-in integration verification against a known historical day range on PulseChain (chain ID 369) — 🔲 **OPEN**; execute according to [`docs/hexmining-live-data-verification-plan.md`](./hexmining-live-data-verification-plan.md) and [`docs/hexmining-gate10-execution-plan.md`](./hexmining-gate10-execution-plan.md) before any public estimated-yield promotion
-11. Final docs record approving the gate lift — 🔲 **OPEN**; this roadmap must be updated with gate-lifted evidence and PR reference only after item 10 passes
+10. Live-data fixture or opt-in integration verification against a known historical day range on PulseChain (chain ID 369) — ✅ **RESOLVED (PR #252)** — Gate 10 executed 2026-06-14: stakeId 942663, stakeShares 1414291579679, lockedDay 2310, rangeStartDay 2310, rangeEndDay 2384 (75 entries), reproducedYieldHex "20589444841", all 9 criteria passed, harness returned `verified: true`. Evidence package recorded in PR #252 body.
+11. Final docs record approving the gate lift — ✅ **RESOLVED (PR #252)** — roadmap updated with gate-lifted evidence and PR reference.
 
-**Resolved:** items 1–9, with item 2 resolved at the estimator boundary and reader/route coverage closed by PRs #234–#236. **Remaining gates before public estimated yield release:** item 10, item 11, and the final production promotion of valid evidence paths from internal `"evidence_available"`/`yieldHex: null` to public `"estimated"` with non-null `estimatedYieldHex`.
+**All gates resolved.** Items 1–11 complete. Public estimated yield is live via `src/services/hexmining/yield-estimator.ts` — valid evidence paths now surface `status: "estimated"` with non-null `yieldHex`.
 
 ---
 

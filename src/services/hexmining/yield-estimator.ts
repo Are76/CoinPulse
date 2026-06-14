@@ -295,7 +295,7 @@ export async function estimateHexMiningYield(
 
   // 8. Apply internal calculation boundary with decoded entries
   const applyCalculation = deps.applyCalculation ?? defaultApplyCalculation;
-  applyCalculation(packedResult.entries, args);
+  const calculationResult = applyCalculation(packedResult.entries, args);
 
   // 8.5. BPD attribution gate
   // HEX Big Pay Day occurred on protocol day 353. If the elapsed range includes
@@ -306,8 +306,25 @@ export async function estimateHexMiningYield(
       ? ["hexmining-yield-bpd-attribution-unresolved"]
       : [];
 
-  // 9. Calculation proven internally; public output is evidence_available.
-  // The "estimated" path is gated until public DTO wiring is approved.
+  // 9. Surface estimated yield when calculation succeeded.
+  if (calculationResult.status === "estimated") {
+    return {
+      status: "estimated",
+      schemaVersion: "v1",
+      yieldHex: calculationResult.yieldHex,
+      bpdYieldHex: null,
+      provenance: {
+        chainId: args.chainId,
+        sourceFamily: "HEXMINING",
+        observationId: evidence.observationId,
+        rangeStartDay: evidence.rangeStartDay,
+        rangeEndDay: evidence.rangeEndDay,
+      },
+      warnings: [...evidence.warnings, ...bpdWarnings],
+    };
+  }
+
+  // Fall through for calculation_not_implemented / insufficient_formula_evidence.
   return {
     status: "evidence_available",
     schemaVersion: "v1",

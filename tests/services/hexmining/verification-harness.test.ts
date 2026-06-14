@@ -40,14 +40,14 @@ const BASE_INPUT: HexMiningVerificationHarnessInput = {
 };
 
 describe("verifyHexMiningYieldEvidence", () => {
-  it("passes valid evidence and keeps the estimator gated at evidence_available", async () => {
+  it("passes valid evidence and surfaces the estimated yield", async () => {
     const result = await verifyHexMiningYieldEvidence(BASE_INPUT);
 
     expect(result.passed).toBe(true);
     expect(result.failureCode).toBeNull();
-    expect(result.estimatorStatus).toBe("evidence_available");
+    expect(result.estimatorStatus).toBe("estimated");
     expect(result.formula.reproducedYieldHex).toBe("500");
-    expect(result.formula.estimatorInternalYieldHex).toBeNull();
+    expect(result.formula.estimatorInternalYieldHex).toBe("500");
     expect(result.formula.entryCount).toBe(2);
     expect(result.formula.expectedEntryCount).toBe(2);
   });
@@ -145,9 +145,9 @@ describe("verifyHexMiningYieldEvidence", () => {
     const result = await verifyHexMiningYieldEvidence(BASE_INPUT);
 
     expect(result.passed).toBe(true);
-    expect(result.estimatorStatus).toBe("evidence_available");
+    expect(result.estimatorStatus).toBe("estimated");
     expect(result.formula.reproducedYieldHex).toBe("500");
-    expect(result.formula.estimatorInternalYieldHex).toBeNull();
+    expect(result.formula.estimatorInternalYieldHex).toBe("500");
   });
 
   it("fails when test-only estimator math does not match independently reproduced bigint math", async () => {
@@ -157,7 +157,7 @@ describe("verifyHexMiningYieldEvidence", () => {
 
     expect(result.passed).toBe(false);
     expect(result.failureCode).toBe("hexmining-verification-estimator-mismatch");
-    expect(result.estimatorStatus).toBe("evidence_available");
+    expect(result.estimatorStatus).toBe("estimated");
     expect(result.formula.reproducedYieldHex).toBe("500");
     expect(result.formula.estimatorInternalYieldHex).toBe("499");
   });
