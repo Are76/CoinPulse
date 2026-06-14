@@ -45,16 +45,17 @@ Each row below describes one numeric or quasi-numeric value currently rendered i
 | PnL coverage: Stale price count | `PortfolioDashboardDto` | `pnlCoverage.stalePricePositionsCount` | integer | integer | `render only` | |
 | PnL coverage: Source disabled count | `PortfolioDashboardDto` | `pnlCoverage.sourceDisabledPositionsCount` | integer | integer | `render only` | |
 | PnL coverage as of timestamp | `PortfolioDashboardDto` | `pnlCoverage.asOf` | ISO 8601 string | formatted timestamp | `display formatting only` | `TimestampLabel` |
-| Token position: balance quantity | `DashboardTokenPositionDto` | `balanceQuantity` | token base unit string | display string | `render only` | Backend provides as string |
+| Token position: balance quantity | `DashboardTokenPositionDto` | `balanceQuantity` | decimal string (via `scaledBigIntToDecimal`) | decimal string | `render only` | Already human-readable decimal from backend; do not treat as raw base units |
 | Token position: valuation | `DashboardTokenPositionDto` | `valuation.valueQuote` | quote asset | quote asset | `render only` | `ValueDisplay` component; null = no value shown |
 | Token position: pricing confidence | `DashboardTokenPositionDto` | `pricing.confidence` | string | string with prefix | `render only` | |
 | Token position: unrealized PnL | `DashboardTokenPositionDto` | `pnl.unrealizedPnl` | quote asset | quote asset | `render only` | `ValueDisplay` |
+| Token position: realized PnL | `DashboardTokenPositionDto` | `pnl.realizedPnl` | quote asset | quote asset | `render only` | `DashboardPnlDto.realizedPnl` exists; not yet displayed in UI |
 | Token position: average cost | `DashboardTokenPositionDto` | `pnl.averageCost` | quote asset | quote asset | `render only` | `ValueDisplay` |
-| LP position: LP token quantity | `DashboardLpPositionDto` | `lpTokenQuantity` | token base unit string | display string | `render only` | |
-| LP position: token0 net quantity | `DashboardLpPositionDto` | `token0NetQuantity` | token base unit string | display string | `render only` | Null displayed as `"n/a"` |
-| LP position: token1 net quantity | `DashboardLpPositionDto` | `token1NetQuantity` | token base unit string | display string | `render only` | Null displayed as `"n/a"` |
+| LP position: LP token quantity | `DashboardLpPositionDto` | `lpTokenQuantity` | decimal string (via `scaledBigIntToDecimal`) | decimal string | `render only` | Already human-readable decimal from backend |
+| LP position: token0 net quantity | `DashboardLpPositionDto` | `token0NetQuantity` | decimal string (via `scaledBigIntToDecimal`) | decimal string | `render only` | Null displayed as `"n/a"` |
+| LP position: token1 net quantity | `DashboardLpPositionDto` | `token1NetQuantity` | decimal string (via `scaledBigIntToDecimal`) | decimal string | `render only` | Null displayed as `"n/a"` |
 | LP position: valuation | `DashboardLpPositionDto` | `valuation.valueQuote` | quote asset | quote asset | `render only` | `ValueDisplay` |
-| Stake position: principal quantity | `DashboardStakePositionDto` | `principalQuantity` | token base unit string | display string | `render only` | |
+| Stake position: principal quantity | `DashboardStakePositionDto` | `principalQuantity` | decimal string (via `scaledBigIntToDecimal`) | decimal string | `render only` | Already human-readable decimal from backend |
 | Stake position: valuation | `DashboardStakePositionDto` | `valuation.valueQuote` | quote asset | quote asset | `render only` | `ValueDisplay` |
 
 ### Debug/Sync (`/debug/sync` → `GET /api/debug/health`, `GET /api/debug/status`)
@@ -181,7 +182,7 @@ Numbers the product will want to display as CoinPulse matures. Each is classifie
 | Per-asset token balance | **BACKEND DTO REQUIRED** | `balanceQuantity` exists in current token positions DTO; decimal precision and display unit must be documented |
 | Per-asset price | **BACKEND ENGINE REQUIRED** | `pricing.confidence` exists but price quote (e.g. `pricing.priceQuote`) must be added to DTO |
 | Valuation coverage percentage | **BACKEND DTO REQUIRED** | `valuationCoverage.valuedPositions / totalPositions` exists as two integers; display as fraction only, no frontend division |
-| Realized PnL | **BACKEND ENGINE REQUIRED** | No backend DTO field exists yet; requires PnL engine with realized trade matching |
+| Realized PnL | **BACKEND DTO REQUIRED** | `DashboardPnlDto.realizedPnl` already exists and is mapped by `assemblePortfolioDashboard()`; field is present but not yet rendered in the token positions table |
 | Unrealized PnL | **BACKEND DTO REQUIRED** | `pnl.unrealizedPnl` exists in token positions DTO; pricing engine must be complete for this to have non-null values |
 | Cost basis | **BACKEND ENGINE REQUIRED** | `pnl.averageCost` exists in DTO; average-cost engine must be complete and return non-null values |
 | Transaction totals (amounts) | **BACKEND DTO REQUIRED** | Transactions DTO exists; per-entry amounts are rendered but total aggregation must come from backend, not frontend |
