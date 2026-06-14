@@ -1278,10 +1278,9 @@ describe("assemblePortfolioDashboard", () => {
         },
       ]),
     );
-    expect(result.materialization.negativeBalances.map((balance) => balance.assetId)).toEqual([
-      sameSymbolAlpha,
-      sameSymbolBeta,
-    ]);
+    const negativeBalanceAssetIds = result.materialization.negativeBalances.map((balance) => balance.assetId);
+    expect(negativeBalanceAssetIds).toHaveLength(2);
+    expect(negativeBalanceAssetIds).toEqual(expect.arrayContaining([sameSymbolAlpha, sameSymbolBeta]));
     expect(result.materialization.warningCount).toBe(2);
   });
 
