@@ -79,15 +79,16 @@ export function HexMiningScreen() {
           <h1 className="mt-2 text-3xl font-semibold tracking-tight">HexMining</h1>
           <p className="mt-3 max-w-3xl leading-7 text-[color:var(--color-text-muted)]">
             Native PulseChain HEX stake monitoring. Phase 2 scope: PulseChain (chainId 369) pHEX
-            native stakes only. Yield, pricing, valuation, and PnL are not yet supported.
-            eHEX (Ethereum) and HSI/HTT stakes are deferred to later phases.
+            native stakes only. Backend-estimated yield is shown when backend evidence is
+            available. Pricing, valuation, and PnL remain unsupported. eHEX (Ethereum) and
+            HSI/HTT stakes are deferred to later phases.
           </p>
         </div>
       </SurfaceCard>
 
       <SectionCard
         title="Query pHEX stakes"
-        subtitle="Enter a PulseChain wallet address to fetch native pHEX stake data. ChainId is fixed to 369. All values are backend-provided — yield, pricing, valuation, and PnL are not computed in the frontend."
+        subtitle="Enter a PulseChain wallet address to fetch native pHEX stake data. ChainId is fixed to 369. All values are backend-provided; estimated yield is rendered from backend evidence only, and pricing, valuation, and PnL remain unsupported."
       >
         <form
           className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]"
@@ -203,7 +204,7 @@ function StakeTable({
   return (
     <DataTableShell
       title={`Native pHEX stakes (${stakes.length})`}
-      subtitle="PulseChain chainId 369. All fields are backend-provided. Yield, pricing, valuation, and PnL are not available in Phase 2."
+      subtitle="PulseChain chainId 369. Backend-estimated yield is shown when provided. Pricing, valuation, and PnL remain unsupported."
     >
       <thead>
         <tr>
@@ -216,7 +217,7 @@ function StakeTable({
           <th scope="col" className={thClassName}>Staked days</th>
           <th scope="col" className={thClassName}>Unlocked day</th>
           <th scope="col" className={thClassName}>Auto</th>
-          <th scope="col" className={thClassName}>Unsupported fields</th>
+          <th scope="col" className={thClassName}>Backend fields</th>
           <th scope="col" className={thClassName}>Provenance</th>
         </tr>
       </thead>
@@ -276,10 +277,18 @@ function StakeRow({ stake }: { stake: HexStakeDto }) {
         <span className="cp-data">{stake.isAutoStake ? "yes" : "no"}</span>
       </td>
       <td className={tdClassName}>
-        <div className="flex flex-wrap gap-1">
-          <ProvenanceChip tone="neutral">yield: {stake.yield.status}</ProvenanceChip>
-          <ProvenanceChip tone="neutral">pricing: {stake.pricing.status}</ProvenanceChip>
-          <ProvenanceChip tone="neutral">pnl: {stake.pnl.status}</ProvenanceChip>
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-wrap gap-1">
+            <ProvenanceChip tone="neutral">yield: {stake.yield.status}</ProvenanceChip>
+            <ProvenanceChip tone="neutral">pricing: {stake.pricing.status}</ProvenanceChip>
+            <ProvenanceChip tone="neutral">valuation: {stake.valuation.status}</ProvenanceChip>
+            <ProvenanceChip tone="neutral">pnl: {stake.pnl.status}</ProvenanceChip>
+          </div>
+          {stake.yield.status === "estimated" ? (
+            <span className="cp-data text-xs">
+              estimated yield: {stake.yield.estimatedYieldHex} HEX
+            </span>
+          ) : null}
         </div>
       </td>
       <td className={tdClassName}>

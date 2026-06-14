@@ -302,9 +302,104 @@ describe("HexMiningScreen — stake table rendering", () => {
     expect(screen.getByText(/pricing: unsupported/i)).toBeInTheDocument();
   });
 
+  it("renders valuation unsupported provenance chip", () => {
+    renderWithStake(MOCK_STAKE);
+    expect(screen.getByText(/valuation: unsupported/i)).toBeInTheDocument();
+  });
+
   it("renders pnl unsupported provenance chip", () => {
     renderWithStake(MOCK_STAKE);
     expect(screen.getByText(/pnl: unsupported/i)).toBeInTheDocument();
+  });
+
+  it("renders backend-provided estimated yield for estimated yield rows", () => {
+    renderWithStake({
+      ...MOCK_STAKE,
+      yield: {
+        status: "estimated",
+        estimatedYieldHex: "42.123456",
+        bpdYieldStatus: "not_applicable",
+        bpdYieldHex: null,
+        provenance: {
+          chainId: 369,
+          sourceFamily: "native",
+          observationId: "11111111-1111-1111-1111-111111111111",
+          rangeStartDay: 5000,
+          rangeEndDay: 5365,
+        },
+        warnings: [],
+      },
+    });
+
+    expect(screen.getByText(/yield: estimated/i)).toBeInTheDocument();
+    expect(screen.getByText("estimated yield: 42.123456 HEX")).toBeInTheDocument();
+  });
+
+  it("does not fabricate yield values for unavailable rows", () => {
+    renderWithStake({
+      ...MOCK_STAKE,
+      yield: {
+        status: "unavailable",
+        estimatedYieldHex: null,
+        bpdYieldStatus: "unknown",
+        bpdYieldHex: null,
+        provenance: null,
+        warnings: ["hexmining-yield-unavailable"],
+      },
+    });
+
+    expect(screen.getByText(/yield: unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/estimated yield:/i)).not.toBeInTheDocument();
+  });
+
+  it("does not fabricate yield values for unsupported rows", () => {
+    renderWithStake(MOCK_STAKE);
+    expect(screen.getByText(/yield: unsupported/i)).toBeInTheDocument();
+    expect(screen.queryByText(/estimated yield:/i)).not.toBeInTheDocument();
+  });
+
+  it("does not show estimated yield values for non-estimated yield statuses", () => {
+    renderWithStake({
+      ...MOCK_STAKE,
+      yield: {
+        status: "exact",
+        estimatedYieldHex: "99.000000",
+        bpdYieldStatus: "not_applicable",
+        bpdYieldHex: null,
+        provenance: {
+          chainId: 369,
+          sourceFamily: "native",
+          observationId: "22222222-2222-2222-2222-222222222222",
+          rangeStartDay: 5000,
+          rangeEndDay: 5365,
+        },
+        warnings: [],
+      },
+    });
+
+    expect(screen.getByText(/yield: exact/i)).toBeInTheDocument();
+    expect(screen.queryByText(/estimated yield:/i)).not.toBeInTheDocument();
+  });
+
+  it("explains estimated yield without saying yield is generally unavailable", () => {
+    renderWithStake(MOCK_STAKE);
+
+    expect(
+      screen.getByText(/Backend-estimated yield is shown when backend evidence is available/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Yield, pricing, valuation, and PnL are not yet supported/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Yield, pricing, valuation, and PnL are not available in Phase 2/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps pricing, valuation, and PnL unsupported in UI copy", () => {
+    renderWithStake(MOCK_STAKE);
+    expect(
+      screen.getAllByText(/pricing, valuation, and PnL remain unsupported/i).length,
+    ).toBeGreaterThan(0);
   });
 
   it("renders stake warnings inline", () => {
