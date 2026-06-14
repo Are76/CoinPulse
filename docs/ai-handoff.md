@@ -155,7 +155,7 @@ Before any public estimated-yield promotion: [E5]
 3. Review the evidence against all Gate 10 success criteria.
 4. Only after Gate 10 passes: open a separate, bounded gate-lift implementation PR that updates the roadmap, promotes the production estimator, and records Gate 11 evidence.
 
-Do not combine Gate 10 evidence collection with the gate-lift promotion PR. [E1]
+The Gate 10 evidence package must be committed in the gate-lift PR body or as a companion docs record — not in a standalone docs PR. Do not open a Gate 11 gate-lift PR without including the evidence package. [E1]
 
 Do not expose public estimated yield based on the existence of runner or operator tools alone. [E1]
 
@@ -182,7 +182,7 @@ Before heavy work:
 1. verify repo (git status -sb, git remote -v, git rev-parse --show-toplevel),
 2. verify origin/main (git fetch origin, git checkout main, git pull --ff-only origin main),
 3. verify GitHub auth (git ls-remote origin HEAD),
-4. verify push capability (git push -u origin HEAD with an empty branch before doing heavy analysis),
+4. verify push capability (create the task branch first, then git push -u origin HEAD to confirm push works before doing heavy analysis),
 5. inspect large docs by headings first (wc -l, grep "^#").
 
 Always separate verified repo facts from assumptions.

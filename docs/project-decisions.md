@@ -125,9 +125,9 @@ Do not: What must not happen as a result
 
 **Rationale:** Third-party aggregators are not PulseChain-controlled, may lag or fabricate data, and are categorized as Tier 3 (out of scope) in the authoritative source policy. [E1]
 
-**Implications:** `PriceObservation` records must originate from on-chain sources (reserve-derived). External market data may supplement but not replace this.
+**Implications:** `DEXSCREENER` is the only currently disallowed primary source type in the resolver (`DISALLOWED_PRIMARY_SOURCES`). [E3] `ORACLE`, `MANUAL`, and reserve-derived `DEX` source types are all permitted. The rule prohibits Tier 3 commercial aggregators (DexScreener, CoinGecko, CoinMarketCap) as primary backend truth — not all non-reserve sources.
 
-**Do not:** Add a DexScreener or CoinGecko fetch as a primary pricing source.
+**Do not:** Add a DexScreener or other Tier 3 commercial aggregator fetch as a primary pricing source. Do not read this decision as requiring every `PriceObservation` to be reserve-derived — `ORACLE` and `MANUAL` source types are valid.
 
 ---
 
@@ -377,13 +377,13 @@ Do not: What must not happen as a result
 
 **Evidence:** [E3] `src/services/hexmining/observation-store.ts`; [E2] PRs #199–#206 merged.
 
-**Decision:** HexMining observations are persisted as `HexMiningObservation` records. Deduplication uses `chainId + rangeStartDay + rangeEndDay`. Raw audit records are never deleted; invalidated records are marked `isInvalidated: true`. Source family is always `"HEXMINING"`.
+**Decision:** HexMining observations are persisted as `RawHexDailyDataObservation` records. Deduplication uses the composite key `chainId + sourceFamily + rangeStartDay + rangeEndDay + observedAtBlock + rpcEndpointLabel + payloadHash` — multiple rows for the same day range are allowed if block, endpoint, or payload differs. [E3] Invalidation is recorded in the separate append-only `RawHexDailyDataObservationInvalidation` table — there is no `isInvalidated` flag on the observation row itself. Source family is always `"HEXMINING"`.
 
-**Rationale:** Immutable audit trail. Dedup prevents duplicate observation records for the same day range.
+**Rationale:** Immutable audit trail. The full composite dedup key preserves legitimate retry, endpoint, and payload variants for the same day range. Append-only invalidation preserves all ingestion history.
 
-**Implications:** Any new observation fetch must check for existing non-invalidated records before inserting.
+**Implications:** A new observation fetch will create a new record if any of the composite dedup fields differ from existing records. Legitimate re-fetches from a different block or endpoint are preserved, not collapsed.
 
-**Do not:** Delete or overwrite existing observation records.
+**Do not:** Delete or overwrite existing observation records. Do not treat day range alone as a sufficient dedup key — doing so would collapse valid multi-endpoint or multi-block observations.
 
 ---
 
@@ -393,13 +393,13 @@ Do not: What must not happen as a result
 
 **Evidence:** [E2] PR #247 merged; [E3] `scripts/hexmining-gate10-run.ts`.
 
-**Decision:** `stakeShares` must be validated as a positive bigint (`> 0n`) before being used in yield calculations. Negative or zero stakeShares must be rejected with a clear error.
+**Decision:** `stakeShares` must be validated as a non-negative bigint (`>= 0n`) before being used in yield calculations. Negative stakeShares must be rejected with a clear error at the runner boundary. [E3] The current gate10-runner guard rejects `< 0n`; zero passes through to the harness/estimator where it produces a zero-yield result rather than a runner-level error.
 
-**Rationale:** A negative or zero stakeShares value would produce invalid or misleading yield estimates. PR #247 added this guard to the Gate 10 runner.
+**Rationale:** A negative stakeShares value would produce an invalid yield estimate. PR #247 added this guard to the Gate 10 runner. Whether zero stakeShares should also be a runner-level hard error is a separate policy question not yet resolved by repo code.
 
-**Implications:** Any code path that uses `stakeShares` as a yield calculation input must validate it first.
+**Implications:** The runner currently enforces `>= 0n`. Zero stakeShares produces a zero-yield path, not a runner rejection. If the project decides zero must be rejected at the runner, an additional `=== 0n` guard is needed.
 
-**Do not:** Pass unvalidated `stakeShares` to the yield estimator or Gate 10 runner.
+**Do not:** Pass negative `stakeShares` to the yield estimator or Gate 10 runner. Do not assume zero is currently rejected at the runner boundary.
 
 ---
 
