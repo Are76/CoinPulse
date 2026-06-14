@@ -2,7 +2,9 @@
 
 > **AI USAGE NOTE:** This is the historical archive. It contains completed-phase details, PR-by-PR logs, validation history, research records, and resolved decisions. **Do not load this file into context for routine implementation work.** For active work, read [`docs/v2-hexmining-roadmap.md`](./v2-hexmining-roadmap.md) instead. Use `grep` to locate specific sections in this file if needed.
 
-**Active roadmap:** [`docs/v2-hexmining-roadmap.md`](./v2-hexmining-roadmap.md) — current gate state, approved DTO contract, immediate next PR.
+**Active roadmap:** [`docs/v2-hexmining-roadmap.md`](./v2-hexmining-roadmap.md) — current gate state, approved DTO contract, and current implementation state.
+
+**Current status note (2026-06-14):** This archive preserves pre-gate-lift history. Gate 10 live-data verification and Gate 11 production promotion were completed later by PR #252; PRs #253 and #254 were post-gate materialization test-stabilization PRs. Use the active roadmap, not this archive body, for current Gate 10 / Gate 11 status.
 
 **What this archive contains:** full historical record from PRs #188–#232 including §1–§10 (scope, principles, inventory, research, phases), §11.1–§11.13 (completed phase evidence, decisions, ABI blocker resolution), §11.14 full gating rationale, §11.15 EES penalty-distribution research, §11.16 original proposed-then-approved contract with full prose, Validation Notes, and Final Status ledger.
 
@@ -10,9 +12,9 @@
 
 # V2 HexMining Roadmap
 
-**Document status:** Living roadmap — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). Phase 4C yield estimation is in progress — PRs #208–#228 merged; yield formula implemented (§8 test vectors A–E pass); elapsed-days coverage rule enforced at estimator boundary (PR #225); BPD attribution gate active at estimator boundary (PR #226); §11.9 provenance audit trail verified (PR #227); reader/route gated wiring contract-tested (PR #228); public estimated yield intentionally gated: `estimateHexMiningYield` always returns `evidence_available` with `yieldHex: null` for valid evidence; `"estimated"` path requires a separate future DTO/API contract approval — see §11.14; EES/penalty gate resolved (Finding A — penalties included in `dayPayoutTotal`) — see §11.15; proposed public `HexStakeYieldDto` contract documented in §11.16 (APPROVED FOR IMPLEMENTATION — OQ-1–OQ-6 resolved; see §11.16).
+**Document status:** Historical roadmap snapshot — Phases 0–3 complete and merged. Phase 4A observation/status chain complete (PRs #199–#202). Phase 4B dailyDataRange read boundary, persistence wiring, and gated operator route complete (PRs #204–#206). The archived body below preserves the Phase 4C in-progress/gated state as it stood before the later PR #252 gate lift.
 **Created:** 2026-06-06
-**Last updated:** 2026-06-11 (docs/hexmining-approve-yield-dto-contract: §11.16 OQ-1–OQ-6 resolved and contract APPROVED FOR IMPLEMENTATION — public estimated yield remains NOT exposed until gate-lift implementation PR)
+**Last updated:** 2026-06-11 as a historical archive snapshot. Current post-gate status is maintained in `docs/v2-hexmining-roadmap.md`.
 
 ## Phase completion status
 
@@ -1528,7 +1530,7 @@ OQ-1 through OQ-6 are resolved below. Implementation may proceed per the §11.14
 
 ---
 
-## 12. Proposed Next PR (updated)
+## 12. Historical Proposed PR Record (archived)
 
 **Phase 4B is complete.** PRs #204, #205, and #206 delivered the full read boundary, persistence wiring, and gated operator route.
 

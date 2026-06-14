@@ -68,6 +68,12 @@ Rules:
   - Stateful screen: `src/components/transactions/transaction-history-screen.tsx`
   - Currently observed frontend fetch targets:
     - `GET /api/transactions`
+- `/hexmining`
+  - Current page: HexMining native PulseChain stake monitor
+  - Frontend shell: `src/app/hexmining/page.tsx`
+  - Stateful screen: `src/components/hexmining/hexmining-screen.tsx`
+  - Currently observed frontend fetch targets:
+    - `GET /api/hexmining/stakes`
 
 ### API route handlers verified in the current repo
 
@@ -79,10 +85,13 @@ The following handlers exist in `app/api`, verified from the repository:
 - `GET /api/prices/status`
 - `GET /api/wallets/tracked`
 - `GET /api/transactions`
+- `GET /api/hexmining/stakes`
+- `GET /api/hexmining/observations/status`
 - `POST /api/wallets/import`
 - `POST /api/sync/manual`
 - `POST /api/rebuild`
 - `POST /api/prices/ingest`
+- `POST /api/hexmining/observations`
 
 ### Backend surface present, but no first-class page yet
 
