@@ -165,7 +165,7 @@ Do not expose public estimated yield based on the existence of runner or operato
 
 Copy and paste this block at the start of any new AI session for CoinPulse:
 
-```
+```text
 Read docs/ai-handoff.md first.
 
 Then read the specific PR, roadmap, or docs I mention.

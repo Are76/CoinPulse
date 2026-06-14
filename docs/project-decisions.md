@@ -24,7 +24,7 @@ This is the durable decision record for CoinPulse. It records why decisions were
 
 Each decision uses the following format:
 
-```
+```text
 Status: Accepted / Active / Deferred / Rejected / Superseded
 Evidence: [E1–E5] tags
 Decision: What was decided
