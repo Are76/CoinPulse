@@ -7,6 +7,11 @@
 > `/debug/prices/status`, `/transactions`) have been added. The findings below remain accurate as a
 > historical record of the state at the time of audit (PR #22); they describe a gap that is now
 > closed.
+>
+> **Status (2026-06): Completed.** TanStack Query is now wired through QueryProvider, shared query
+> keys, query defaults, API clients, and useQuery/useMutation hooks across dashboard, debug, pricing,
+> wallets, transactions, and HexMining reads. This document is historical and must not be used as
+> current implementation status.
 
 ## Purpose
 
