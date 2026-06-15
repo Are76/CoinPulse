@@ -51,7 +51,13 @@ export function EvidenceMissingDebug() {
       return;
     }
     setValidationError(null);
-    setSubmittedParams({ walletAddress: trimmed, chainId: PULSECHAIN_CHAIN_ID });
+    const next = { walletAddress: trimmed, chainId: PULSECHAIN_CHAIN_ID };
+    if (submittedParams?.walletAddress === next.walletAddress && submittedParams?.chainId === next.chainId) {
+      // Same params — query key unchanged, so manually trigger a fresh fetch.
+      void reportQuery.refetch();
+    } else {
+      setSubmittedParams(next);
+    }
   }
 
   const isIdle = submittedParams === null && validationError === null;
@@ -85,7 +91,7 @@ export function EvidenceMissingDebug() {
 
       <SectionCard
         title="Run diagnostic"
-        subtitle="Enter a PulseChain wallet address. ChainId is fixed to 369. The diagnostic reads active native pHEX stakes and checks database evidence coverage. No RPC evidence fetching or observation writes occur."
+        subtitle="Enter a PulseChain wallet address. ChainId is fixed to 369. The diagnostic calls the backend route, which reads active native pHEX stakes and checks database evidence coverage. No direct frontend RPC. No observation writes."
       >
         <form
           className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]"
@@ -123,7 +129,7 @@ export function EvidenceMissingDebug() {
       {isIdle ? (
         <EmptyState
           title="No diagnostic run"
-          message="Enter a PulseChain wallet address above and click Run diagnostic. No RPC calls, no observation writes."
+          message="Enter a PulseChain wallet address above and click Run diagnostic. No direct frontend RPC. No observation writes."
         />
       ) : null}
 
@@ -259,8 +265,10 @@ function EvidenceRow({ stake }: { stake: HexMiningEvidenceCoverageStakeDto }) {
       <td className={tdClassName}>
         {stake.covered ? (
           <ProvenanceChip tone="fresh">covered</ProvenanceChip>
+        ) : stake.missingReason === "no_elapsed_days" ? (
+          <ProvenanceChip tone="neutral">not applicable — no elapsed days</ProvenanceChip>
         ) : (
-          <ProvenanceChip tone="warn">missing</ProvenanceChip>
+          <ProvenanceChip tone="warn">missing evidence</ProvenanceChip>
         )}
       </td>
       <td className={tdClassName}>

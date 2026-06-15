@@ -1,4 +1,4 @@
-import { cleanup, render, screen, fireEvent } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
@@ -189,6 +189,19 @@ describe("EvidenceMissingDebug — wallet validation and request", () => {
     );
   });
 
+  it("trims whitespace from wallet address before querying", () => {
+    vi.mocked(useHexMiningEvidenceMissingQuery).mockReturnValue(makeIdleQuery() as never);
+    render(<EvidenceMissingDebug />, { wrapper: makeWrapper() });
+    const input = screen.getByLabelText("Wallet address");
+    fireEvent.change(input, { target: { value: "  0xABCDEF1234567890ABCDEF1234567890ABCDEF12  " } });
+    fireEvent.submit(input.closest("form")!);
+    expect(vi.mocked(useHexMiningEvidenceMissingQuery)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walletAddress: "0xabcdef1234567890abcdef1234567890abcdef12",
+      }),
+    );
+  });
+
   it("submit button disabled while loading", () => {
     vi.mocked(useHexMiningEvidenceMissingQuery).mockReturnValue(makeLoadingQuery() as never);
     render(<EvidenceMissingDebug />, { wrapper: makeWrapper() });
@@ -315,14 +328,14 @@ describe("EvidenceMissingDebug — per-stake table", () => {
 
   it("missing stake row shows '—' for observationId when absent", () => {
     renderWithStakes([MISSING_STAKE]);
-    const cells = screen.getAllByText("—");
-    expect(cells.length).toBeGreaterThanOrEqual(1);
+    const row = screen.getByText("99002").closest("tr")!;
+    expect(within(row).getByText("—")).toBeInTheDocument();
   });
 
   it("covered stake row shows '—' for missingReason when null", () => {
     renderWithStakes([COVERED_STAKE]);
-    const cells = screen.getAllByText("—");
-    expect(cells.length).toBeGreaterThanOrEqual(1);
+    const row = screen.getByText("99001").closest("tr")!;
+    expect(within(row).getByText("—")).toBeInTheDocument();
   });
 
   it("no_elapsed_days missingReason does not imply missing yield or zero yield", () => {
@@ -337,12 +350,20 @@ describe("EvidenceMissingDebug — per-stake table", () => {
     expect(screen.queryAllByText(/missing yield/i)).toHaveLength(0);
   });
 
+  it("no_elapsed_days stake shows 'not applicable' chip, not 'missing evidence'", () => {
+    renderWithStakes([NO_ELAPSED_STAKE]);
+    const row = screen.getByText("99003").closest("tr")!;
+    expect(within(row).getByText(/not applicable/i)).toBeInTheDocument();
+    expect(within(row).queryByText(/^missing evidence$/i)).not.toBeInTheDocument();
+  });
+
   it("renders lockedDay, currentDay, rangeStartDay, rangeEndDay from stake DTO", () => {
     renderWithStakes([COVERED_STAKE]);
-    // These values appear in the stake table rows; getAllByText handles multiple occurrences
-    expect(screen.getAllByText("5000").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("5300").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("5299").length).toBeGreaterThanOrEqual(1);
+    const row = screen.getByText("99001").closest("tr")!;
+    // lockedDay and rangeStartDay both equal 5000 in this fixture — confirm at least two cells with that value
+    expect(within(row).getAllByText("5000").length).toBeGreaterThanOrEqual(2);
+    expect(within(row).getByText("5300")).toBeInTheDocument(); // currentDay
+    expect(within(row).getByText("5299")).toBeInTheDocument(); // rangeEndDay
   });
 
   it("empty stakes array shows empty state, not a table", () => {

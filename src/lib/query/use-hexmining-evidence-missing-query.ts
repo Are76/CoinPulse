@@ -22,7 +22,7 @@ export function useHexMiningEvidenceMissingQuery({
     queryKey: queryKeys.hexmining.evidenceMissing({ walletAddress: normalizedAddress, chainId }),
     queryFn: () =>
       fetchHexMiningEvidenceMissing({
-        walletAddress: address.trim(),
+        walletAddress: normalizedAddress,
         chainId,
       }),
     enabled: enabled && address.trim().length > 0,
