@@ -35,7 +35,7 @@ export async function GET(request: Request) {
   try {
     const input = parseSearchParams(hexminingMissingEvidenceRequestSchema, request);
     const publicClient =
-      createPublicClientForChain() as unknown as HexMiningReadClient;
+      createPublicClientForChain() as HexMiningReadClient;
 
     const currentDayResult = await readCurrentDay({ publicClient });
     if (!currentDayResult.ok) {
@@ -54,6 +54,8 @@ export async function GET(request: Request) {
       chainId: input.chainId,
       currentDay: currentDayResult.currentDay,
       stakes: stakeList.stakes,
+      stakeReadIsComplete: stakeList.isComplete,
+      stakeReadWarnings: stakeList.warnings,
       fetchEvidence: getObservationEvidenceForRange,
     });
 

@@ -31,6 +31,8 @@ export type HexMiningEvidenceCoverageReportDto = {
     totalActiveStakes: number;
     coveredStakes: number;
     missingEvidenceStakes: number;
+    stakeReadIsComplete: boolean;
+    stakeReadWarnings: string[];
   };
   stakes: HexMiningEvidenceCoverageStakeDto[];
 };
@@ -39,6 +41,8 @@ export type HexMiningEvidenceCoverageReportArgs = {
   chainId: number;
   currentDay: number;
   stakes: readonly HexStakeDto[];
+  stakeReadIsComplete: boolean;
+  stakeReadWarnings: string[];
   fetchEvidence: (args: {
     chainId: number;
     rangeStartDay: number;
@@ -93,12 +97,15 @@ export async function buildHexMiningEvidenceCoverageReport(
       rangeStartDay,
       rangeEndDay,
       covered: coverage.covered,
-      observationId: coverage.covered ? evidence!.observationId : null,
+      observationId: evidence?.observationId ?? null,
       missingReason: coverage.missingReason,
     });
   }
 
   const coveredStakes = rows.filter((row) => row.covered).length;
+  const missingEvidenceStakes = rows.filter(
+    (row) => !row.covered && row.missingReason !== "no_elapsed_days",
+  ).length;
 
   return {
     schemaVersion: "v1",
@@ -107,7 +114,9 @@ export async function buildHexMiningEvidenceCoverageReport(
       sourceFamily: SOURCE_FAMILY,
       totalActiveStakes: rows.length,
       coveredStakes,
-      missingEvidenceStakes: rows.length - coveredStakes,
+      missingEvidenceStakes,
+      stakeReadIsComplete: args.stakeReadIsComplete,
+      stakeReadWarnings: args.stakeReadWarnings,
     },
     stakes: rows,
   };
@@ -120,6 +129,7 @@ function isActiveNativeStake(
 ): boolean {
   if (stake.chainId !== chainId) return false;
   if (stake.stakeSource !== "native") return false;
+  if (stake.stakeStatus === "ended") return false;
   if (stake.lockedDay === null || stake.stakedDays === null) return false;
   if (stake.stakedDays <= 0) return false;
   return (

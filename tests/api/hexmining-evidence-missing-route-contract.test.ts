@@ -119,6 +119,8 @@ describe("GET /api/hexmining/evidence/missing route contract", () => {
       totalActiveStakes: 1,
       coveredStakes: 1,
       missingEvidenceStakes: 0,
+      stakeReadIsComplete: true,
+      stakeReadWarnings: [],
     });
     expect(body.data.stakes).toEqual([
       {

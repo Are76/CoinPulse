@@ -74,6 +74,8 @@ describe("buildHexMiningEvidenceCoverageReport", () => {
       chainId: 369,
       currentDay: 1050,
       stakes: [makeStake({ stakeId: "1001", lockedDay: 1000, stakedDays: 365 })],
+      stakeReadIsComplete: true,
+      stakeReadWarnings: [],
       fetchEvidence,
     });
 
@@ -98,6 +100,8 @@ describe("buildHexMiningEvidenceCoverageReport", () => {
       totalActiveStakes: 1,
       coveredStakes: 1,
       missingEvidenceStakes: 0,
+      stakeReadIsComplete: true,
+      stakeReadWarnings: [],
     });
   });
 
@@ -108,6 +112,8 @@ describe("buildHexMiningEvidenceCoverageReport", () => {
       chainId: 369,
       currentDay: 1050,
       stakes: [makeStake({ stakeId: "1002", lockedDay: 1000, stakedDays: 365 })],
+      stakeReadIsComplete: true,
+      stakeReadWarnings: [],
       fetchEvidence,
     });
 
@@ -128,6 +134,8 @@ describe("buildHexMiningEvidenceCoverageReport", () => {
       chainId: 369,
       currentDay: 2385,
       stakes: [makeStake({ stakeId: "942663", lockedDay: 2310, stakedDays: 5555 })],
+      stakeReadIsComplete: true,
+      stakeReadWarnings: [],
       fetchEvidence,
     });
 
@@ -165,7 +173,10 @@ describe("buildHexMiningEvidenceCoverageReport", () => {
         makeStake({ stakeId: "missing", lockedDay: 900, stakedDays: 365 }),
         makeStake({ stakeId: "pending", lockedDay: 2000, stakedDays: 365 }),
         makeStake({ stakeId: "overdue", lockedDay: 1, stakedDays: 10 }),
+        makeStake({ stakeId: "ended-early", lockedDay: 900, stakedDays: 365, stakeStatus: "ended" }),
       ],
+      stakeReadIsComplete: true,
+      stakeReadWarnings: [],
       fetchEvidence,
     });
 
@@ -175,7 +186,96 @@ describe("buildHexMiningEvidenceCoverageReport", () => {
       totalActiveStakes: 2,
       coveredStakes: 1,
       missingEvidenceStakes: 1,
+      stakeReadIsComplete: true,
+      stakeReadWarnings: [],
     });
     expect(report.stakes.map((stake) => stake.stakeId)).toEqual(["covered", "missing"]);
+  });
+
+  it("preserves observationId for invalidated evidence", async () => {
+    const fetchEvidence = vi.fn().mockResolvedValue({
+      observationId: "obs-bad",
+      chainId: 369,
+      sourceFamily: "HEXMINING",
+      rangeStartDay: 1000,
+      rangeEndDay: 1049,
+      observedAtBlock: "234",
+      observedAt: "2026-06-15T00:00:00.000Z",
+      payloadVersion: "v1",
+      payloadSchemaValid: true,
+      isInvalidated: true,
+      warnings: [],
+    });
+
+    const report = await buildHexMiningEvidenceCoverageReport({
+      chainId: 369,
+      currentDay: 1050,
+      stakes: [makeStake({ stakeId: "1003", lockedDay: 1000, stakedDays: 365 })],
+      stakeReadIsComplete: true,
+      stakeReadWarnings: [],
+      fetchEvidence,
+    });
+
+    expect(report.stakes[0]).toMatchObject({
+      covered: false,
+      observationId: "obs-bad",
+      missingReason: "invalidated_observation",
+    });
+  });
+
+  it("does not count no_elapsed_days stake as missing evidence", async () => {
+    const fetchEvidence = vi.fn();
+
+    const report = await buildHexMiningEvidenceCoverageReport({
+      chainId: 369,
+      currentDay: 1000,
+      stakes: [makeStake({ stakeId: "new-stake", lockedDay: 1000, stakedDays: 365 })],
+      stakeReadIsComplete: true,
+      stakeReadWarnings: [],
+      fetchEvidence,
+    });
+
+    expect(fetchEvidence).not.toHaveBeenCalled();
+    expect(report.stakes[0]).toMatchObject({
+      covered: false,
+      missingReason: "no_elapsed_days",
+    });
+    expect(report.summary.missingEvidenceStakes).toBe(0);
+    expect(report.summary.totalActiveStakes).toBe(1);
+  });
+
+  it("excludes ended stakes from active coverage", async () => {
+    const fetchEvidence = vi.fn().mockResolvedValue(null);
+
+    const report = await buildHexMiningEvidenceCoverageReport({
+      chainId: 369,
+      currentDay: 1050,
+      stakes: [
+        makeStake({ stakeId: "active", lockedDay: 1000, stakedDays: 365 }),
+        makeStake({ stakeId: "ended-early", lockedDay: 1000, stakedDays: 365, stakeStatus: "ended" }),
+      ],
+      stakeReadIsComplete: true,
+      stakeReadWarnings: [],
+      fetchEvidence,
+    });
+
+    expect(report.summary.totalActiveStakes).toBe(1);
+    expect(report.stakes.map((s) => s.stakeId)).toEqual(["active"]);
+  });
+
+  it("surfaces incomplete stake read in summary", async () => {
+    const fetchEvidence = vi.fn().mockResolvedValue(null);
+
+    const report = await buildHexMiningEvidenceCoverageReport({
+      chainId: 369,
+      currentDay: 1050,
+      stakes: [],
+      stakeReadIsComplete: false,
+      stakeReadWarnings: ["hexmining-provenance-block-unavailable"],
+      fetchEvidence,
+    });
+
+    expect(report.summary.stakeReadIsComplete).toBe(false);
+    expect(report.summary.stakeReadWarnings).toEqual(["hexmining-provenance-block-unavailable"]);
   });
 });
