@@ -772,6 +772,70 @@ describe("materializeCurrentPortfolioPositions", () => {
       .toMatchObject({ balanceQuantity: "999" });
   });
 
+  it("does not merge balances for distinct contracts that share a display symbol", async () => {
+    const stores = createMemoryDb();
+
+    const alphaAssetId = "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const betaAssetId = "chain:369:erc20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    stores.tokens.set(alphaAssetId, {
+      assetId: alphaAssetId,
+      addressLower: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      decimals: 18,
+      isNative: false,
+      chainId: CHAIN_ID,
+    });
+    stores.tokens.set(betaAssetId, {
+      assetId: betaAssetId,
+      addressLower: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      decimals: 18,
+      isNative: false,
+      chainId: CHAIN_ID,
+    });
+
+    await seedLedger(stores.db, [
+      createDraft({
+        txHash: "0xreceive-alpha",
+        actionGroupKey: "g1",
+        dedupeKey: "d1",
+        assetId: alphaAssetId,
+        quantity: "10",
+        entryType: "RECEIVE",
+        sourceLogKey: "log:0xreceive-alpha:receive",
+      }),
+      createDraft({
+        txHash: "0xreceive-beta",
+        actionGroupKey: "g2",
+        dedupeKey: "d2",
+        assetId: betaAssetId,
+        quantity: "25",
+        entryType: "RECEIVE",
+        sourceLogKey: "log:0xreceive-beta:receive",
+      }),
+    ]);
+
+    const report = await materializeCurrentPortfolioPositions({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      db: stores.db as never,
+    });
+
+    expect(report.tokenBalancesWritten).toBe(2);
+
+    const alphaBalance = stores.portfolioTokenBalances.get(`${WALLET_ID}:${CHAIN_ID}:${alphaAssetId}`);
+    const betaBalance = stores.portfolioTokenBalances.get(`${WALLET_ID}:${CHAIN_ID}:${betaAssetId}`);
+
+    expect(alphaBalance).toMatchObject({
+      assetId: alphaAssetId,
+      assetAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      balanceQuantity: "10",
+    });
+    expect(betaBalance).toMatchObject({
+      assetId: betaAssetId,
+      assetAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      balanceQuantity: "25",
+    });
+  });
+
   it("materializes canonical quantities without token metadata or RPC", async () => {
     const stores = createMemoryDb();
     await seedLedger(stores.db, [
