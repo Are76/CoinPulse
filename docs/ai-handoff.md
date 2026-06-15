@@ -154,6 +154,7 @@ These rules apply to every PR. [E1]
 | #255 | Post-Gate-11 status reconciliation docs | [E2] |
 | #256 | HexMining estimated yield rendered in stake table UI | [E2] |
 | #257 | HexMining missing evidence coverage report added | [E2] |
+| #258 | HexMining estimated yield display units formatted (hearts → HEX decimal) | [E2] |
 | #259 | Displayed numbers inventory doc added | [E2] |
 | #260 | Pricing status numbers surfaced as read-only cards | [E2] |
 | #261 | Missing evidence debug UI added at `/debug/hexmining/evidence/missing` | [E2] |
