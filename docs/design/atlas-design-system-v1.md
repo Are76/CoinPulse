@@ -30,7 +30,7 @@ CoinPulse is a backend-truth-first DeFi/Web3 portfolio and analytics application
 | Evidence available | May be user-visible (short, explanatory) and operator-visible (deeper diagnostic detail). |
 | Evidence missing | May be user-visible (short, explanatory) and operator-visible (deeper diagnostic detail). |
 | User-facing provenance | Must be short and explanatory — avoid raw technical identifiers. |
-| Operator/debug provenance | May expose deeper diagnostic details (source family, endpoint, warning codes, observed block). |
+| Operator/debug provenance | May expose deeper diagnostic details (source family, sanitized endpoint label, warning codes, observed block). |
 
 ---
 
@@ -39,8 +39,8 @@ CoinPulse is a backend-truth-first DeFi/Web3 portfolio and analytics application
 | Subject | Constraint |
 |---|---|
 | Estimated badge | Not generally approved. May only render when a backend DTO **explicitly** provides `estimated` status/value together with provenance and warnings. |
-| Fallback states | Permitted fallbacks are: `Unsupported`, `Evidence missing`, `Evidence available` — derived from backend-provided state only. |
-| Confidence field | `confidence` is **not** an approved provenance field. |
+| Fallback states | Permitted display fallbacks include: `Unsupported`, `Evidence missing`, `Evidence available`, `Unavailable`, `Stale`, and low-confidence indicators — all derived from backend-provided state only. The active dashboard DTO already exposes `unavailable`, `stale_price`, and `low_confidence_price` statuses that must be preserved, not collapsed. |
+| Confidence field | `confidence` is a backend-assigned provenance field that must be **passed through** from the backend DTO when present. Frontend must not invent or infer confidence; it must not silently drop backend-provided confidence values. |
 | HexMining yield UI | Concrete HexMining yield UI is **deferred**. |
 | Fabricated data | No pricing, valuation, PnL, yield, APY, or portfolio totals may be fabricated in design or implementation. |
 
@@ -100,7 +100,7 @@ CoinPulse is a backend-truth-first DeFi/Web3 portfolio and analytics application
 ### TokenAssetRow
 
 - **Intended use:** Display a single token asset row (token identity, balance, value) within a list.
-- **Safe placeholder behavior:** Display `Unavailable` for balance and value independently. Asset identity must use `chainId + tokenAddress` (assetId format: `chain:369:erc20:0x…`), never symbol/name alone.
+- **Safe placeholder behavior:** Display `Unavailable` for balance and value independently. Asset identity must be chain-aware and backend-canonical — ERC-20 assets use `chain:369:erc20:0x…`; the native gas asset uses `chain:369:native:PLS`. Never use symbol/name/ticker alone as identity.
 - **Backend-truth constraint:** All balance and value fields must come from the backend DTO. No frontend calculations.
 - **Visibility:** User-facing.
 
@@ -145,7 +145,7 @@ CoinPulse is a backend-truth-first DeFi/Web3 portfolio and analytics application
 |---|---|
 | Source family | Broad category of the data source (e.g., `on-chain`, `rpc`, `indexed`). |
 | Observed block | The block number at which the data was observed. |
-| Endpoint | The RPC or API endpoint that produced the raw data. |
+| Endpoint label | A sanitized label for the RPC or API endpoint that produced the raw data. Never expose raw endpoint URLs or provider credentials — use the `rpcEndpointLabel` convention (sanitized, not the raw `PULSECHAIN_RPC_URL` value). |
 | Sync status | Current sync lifecycle state from `SyncRun`. |
 | Warning codes | Machine-readable codes from backend `summary.warnings`. |
 
@@ -192,7 +192,7 @@ CoinPulse is a backend-truth-first DeFi/Web3 portfolio and analytics application
 - PostgreSQL/canonical backend data is the source of truth.
 - RPC is ingestion/input only — never a frontend truth source.
 - The frontend consumes backend DTO/API contracts only.
-- Asset identity must be chain-aware and backend-canonical: `chain:369:erc20:0x…` (never symbol/name/ticker alone).
+- Asset identity must be chain-aware and backend-canonical. ERC-20 assets use `chain:369:erc20:0x…`; the native gas asset uses `chain:369:native:PLS`. Never use symbol/name/ticker alone.
 - Crypto/token values must be bigint/string-safe throughout the stack.
 - Avoid floating point for token units, hearts, wei, shares, balances, prices, yield, and PnL.
 - No frontend calculations for valuation, pricing, PnL, yield, or staking results unless explicitly approved as display-only formatting from backend-provided values.
