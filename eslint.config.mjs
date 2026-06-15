@@ -19,6 +19,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local AI-agent / worktree artifacts (Claude Code, Codex, Cursor, etc.)
+    ".claude/**",
+    ".codex/**",
+    ".cursor/**",
   ]),
 ]);
 
