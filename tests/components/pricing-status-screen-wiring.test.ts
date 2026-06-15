@@ -110,6 +110,45 @@ describe("pricing-status-screen wiring", () => {
     expect(source).not.toMatch(/balance\s*[+\-*/]/);
   });
 
+  it("null staleAfterSeconds renders 'Not provided', never '0' or zero", () => {
+    const source = readScreenSource();
+    // Must use an explicit null-check branch, not a nullish coalesce to zero
+    expect(source).toContain('source.staleAfterSeconds === null');
+    expect(source).toContain('"Not provided"');
+    // Must not coerce null to "0" or 0
+    expect(source).not.toContain('staleAfterSeconds ?? "0"');
+    expect(source).not.toContain('staleAfterSeconds ?? 0');
+  });
+
+  it("latestObservedAt metric card uses TimestampLabel, not raw string", () => {
+    const source = readScreenSource();
+    // TimestampLabel must be used for the latestObservedAt metric card
+    expect(source).toContain("TimestampLabel");
+    // Must not show latestObservedAt as a raw ?? "Not provided" string coerce
+    expect(source).not.toContain('source.latestObservedAt ?? "Not provided"');
+  });
+
+  it("source count badge uses sources.length from DTO", () => {
+    const source = readScreenSource();
+    expect(source).toContain("data.sources.length");
+  });
+
+  it("per-source metric cards render observations and rejected counts from DTO integers", () => {
+    const source = readScreenSource();
+    // Both counts must come from backend DTO via String() conversion — no arithmetic
+    expect(source).toContain("String(source.observationsCount)");
+    expect(source).toContain("String(source.rejectedCount)");
+    // Must not add, subtract, or divide counts
+    expect(source).not.toMatch(/observationsCount\s*[+\-*/]/);
+    expect(source).not.toMatch(/rejectedCount\s*[+\-*/]/);
+  });
+
+  it("MetricValue uses bordered card styling, not bare div", () => {
+    const source = readScreenSource();
+    // Bordered card class must be present in the MetricValue component
+    expect(source).toContain("border border-[color:var(--color-border-soft)]");
+  });
+
   it("does not load or invalidate dashboard queries", () => {
     const source = readScreenSource();
     expect(source).not.toContain("useDashboard");
