@@ -122,8 +122,10 @@ describe("pricing-status-screen wiring", () => {
 
   it("latestObservedAt metric card uses TimestampLabel, not raw string", () => {
     const source = readScreenSource();
-    // TimestampLabel must be used for the latestObservedAt metric card
-    expect(source).toContain("TimestampLabel");
+    // TimestampLabel must be scoped inside the "Latest observed at" MetricValue card
+    expect(source).toMatch(
+      /<MetricValue label="Latest observed at">[\s\S]*?<TimestampLabel[\s\S]*?<\/MetricValue>/,
+    );
     // Must not show latestObservedAt as a raw ?? "Not provided" string coerce
     expect(source).not.toContain('source.latestObservedAt ?? "Not provided"');
   });
@@ -145,8 +147,10 @@ describe("pricing-status-screen wiring", () => {
 
   it("MetricValue uses bordered card styling, not bare div", () => {
     const source = readScreenSource();
-    // Bordered card class must be present in the MetricValue component
-    expect(source).toContain("border border-[color:var(--color-border-soft)]");
+    // Bordered card class must be scoped inside the MetricValue component definition
+    expect(source).toMatch(
+      /function MetricValue\([\s\S]*?className="[^"]*border border-\[color:var\(--color-border-soft\)\][^"]*"/,
+    );
   });
 
   it("does not load or invalidate dashboard queries", () => {
