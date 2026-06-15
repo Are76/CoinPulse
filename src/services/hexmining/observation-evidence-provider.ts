@@ -3,6 +3,7 @@ import "server-only";
 import { SourceFamily } from "@prisma/client";
 
 import { getDb } from "@/lib/db";
+import { decodeDailyDataPayload } from "@/services/hexmining/daily-data-payload-decoder";
 
 const PULSECHAIN_CHAIN_ID = 369;
 
@@ -90,35 +91,6 @@ export type EvidenceProviderDeps = {
   db?: EvidenceProviderClient;
 };
 
-// ─── Internal payload validation ─────────────────────────────────────────────
-
-function rejectNumericJsonValues(value: unknown): void {
-  if (typeof value === "number") throw new Error("numeric-value");
-  if (Array.isArray(value)) {
-    for (const item of value) rejectNumericJsonValues(item);
-    return;
-  }
-  if (value !== null && typeof value === "object") {
-    for (const v of Object.values(value as Record<string, unknown>)) {
-      rejectNumericJsonValues(v);
-    }
-  }
-}
-
-function isPayloadSchemaValid(canonicalPayload: string): boolean {
-  try {
-    const parsed = JSON.parse(canonicalPayload);
-    rejectNumericJsonValues(parsed);
-    return (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      typeof (parsed as Record<string, unknown>).schemaVersion === "string" &&
-      Array.isArray((parsed as Record<string, unknown>).dailyData)
-    );
-  } catch {
-    return false;
-  }
-}
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
 
@@ -196,7 +168,7 @@ async function getObservationEvidence(
     observedAtBlock: row.observedAtBlock.toString(),
     observedAt: row.observedAt.toISOString(),
     payloadVersion: row.payloadVersion,
-    payloadSchemaValid: isPayloadSchemaValid(row.canonicalPayload),
+    payloadSchemaValid: decodeDailyDataPayload(row.canonicalPayload).ok,
     isInvalidated: invalidation !== null,
     warnings: row.warnings,
   };

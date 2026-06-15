@@ -225,6 +225,22 @@ describe("getObservationEvidenceForRange", () => {
 
       expect(result!.payloadSchemaValid).toBe(false);
     });
+
+    it("sets payloadSchemaValid: false for unsupported schemaVersion", async () => {
+      const badPayload = JSON.stringify({ schemaVersion: "v2", dailyData: ["100", "200"] });
+      const db = makeDb(makeRow({ canonicalPayload: badPayload }));
+      const result = await getObservationEvidenceForRange(BASE_ARGS, { db });
+
+      expect(result!.payloadSchemaValid).toBe(false);
+    });
+
+    it("sets payloadSchemaValid: false for dailyData items that are not decimal strings", async () => {
+      const badPayload = JSON.stringify({ schemaVersion: "v1", dailyData: ["0x1f", "abc"] });
+      const db = makeDb(makeRow({ canonicalPayload: badPayload }));
+      const result = await getObservationEvidenceForRange(BASE_ARGS, { db });
+
+      expect(result!.payloadSchemaValid).toBe(false);
+    });
   });
 
   describe("DB failure", () => {
