@@ -1,5 +1,13 @@
 import type { PortfolioDashboardDto } from "@/services/dashboard/types";
 
+import {
+  ApiClientError,
+  fetchJson,
+  type ApiDataResponse,
+} from "@/lib/api/api-client";
+
+export { ApiClientError };
+
 export type HealthReportDto = {
   status: "ok" | "degraded";
   timestamp: string;
@@ -34,43 +42,6 @@ export type DebugStatusReportDto = {
   };
 };
 
-type ApiErrorPayload = {
-  error?: {
-    code?: string;
-    message?: string;
-    details?: Array<{
-      path?: string;
-      message?: string;
-      code?: string;
-    }>;
-  };
-};
-
-type ApiDataResponse<T> = {
-  data: T;
-};
-
-type ApiErrorDetails = NonNullable<ApiErrorPayload["error"]>["details"];
-
-export class ApiClientError extends Error {
-  status: number;
-  code: string;
-  details: ApiErrorDetails;
-
-  constructor(args: {
-    status: number;
-    code: string;
-    message: string;
-    details?: ApiErrorDetails;
-  }) {
-    super(args.message);
-    this.name = "ApiClientError";
-    this.status = args.status;
-    this.code = args.code;
-    this.details = args.details;
-  }
-}
-
 export async function fetchPortfolioDashboard(args: {
   walletAddress: string;
   chainId: number;
@@ -101,25 +72,4 @@ export async function fetchDebugHealth() {
 export async function fetchDebugStatus() {
   const response = await fetchJson<ApiDataResponse<DebugStatusReportDto>>("/api/debug/status");
   return response.data;
-}
-
-async function fetchJson<T>(input: string): Promise<T> {
-  const response = await fetch(input, {
-    headers: {
-      Accept: "application/json",
-    },
-    cache: "no-store",
-  });
-
-  const payload = (await response.json()) as T & ApiErrorPayload;
-  if (!response.ok) {
-    throw new ApiClientError({
-      status: response.status,
-      code: payload.error?.code ?? "UNKNOWN_ERROR",
-      message: payload.error?.message ?? "Request failed.",
-      details: payload.error?.details,
-    });
-  }
-
-  return payload;
 }
