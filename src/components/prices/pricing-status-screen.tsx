@@ -117,7 +117,7 @@ export function PricingStatusScreen() {
               title="Sources"
               subtitle={`Schema version: ${data.schemaVersion} · ${data.sources.length} source${data.sources.length === 1 ? "" : "s"} reported by the backend.`}
             >
-              <div className="flex flex-col divide-y divide-[color:var(--color-border-soft)]">
+              <div className="flex flex-col gap-4">
                 {data.sources.map((source) => (
                   <PricingSourceRow key={source.sourceType} source={source} />
                 ))}
@@ -132,7 +132,7 @@ export function PricingStatusScreen() {
 
 function PricingSourceRow({ source }: { source: PricingStatusSourceDto }) {
   return (
-    <div className="flex flex-col gap-4 py-4">
+    <SurfaceCard className="flex flex-col gap-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <LabelBadge label={source.sourceType} tone="neutral" />
@@ -148,9 +148,9 @@ function PricingSourceRow({ source }: { source: PricingStatusSourceDto }) {
         />
       </div>
 
-      <dl className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <dl className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <MetricValue
-          label="staleAfterSeconds"
+          label="Stale after (s)"
           value={
             source.staleAfterSeconds === null
               ? "Not provided"
@@ -158,23 +158,25 @@ function PricingSourceRow({ source }: { source: PricingStatusSourceDto }) {
           }
         />
         <MetricValue
-          label="observationsCount"
+          label="Observations"
           value={String(source.observationsCount)}
         />
         <MetricValue
-          label="rejectedCount"
+          label="Rejected"
           value={String(source.rejectedCount)}
         />
         <MetricValue
-          label="reason"
+          label="Reason"
           value={source.reason ?? "Not provided"}
         />
-        <MetricValue
-          label="latestObservedAt"
-          value={source.latestObservedAt ?? "Not provided"}
-        />
+        <MetricValue label="Latest observed at">
+          <TimestampLabel
+            value={source.latestObservedAt}
+            fallback="Not provided"
+          />
+        </MetricValue>
       </dl>
-    </div>
+    </SurfaceCard>
   );
 }
 
@@ -200,16 +202,16 @@ function SummaryValue({
 function MetricValue({
   label,
   value,
+  children,
 }: {
   label: string;
-  value: string;
-}) {
+} & ({ value: string; children?: never } | { value?: never; children: ReactNode })) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1 rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] px-3 py-2">
       <dt className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
         {label}
       </dt>
-      <dd className="text-sm">{value}</dd>
+      <dd className="text-sm font-medium">{children ?? value}</dd>
     </div>
   );
 }
