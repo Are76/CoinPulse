@@ -1,6 +1,6 @@
 # CoinPulse AI Handoff
 
-**Last updated:** 2026-06-14
+**Last updated:** 2026-06-15
 
 ---
 
@@ -69,7 +69,7 @@ These rules apply to every PR. [E1]
 
 ---
 
-## Current Project Status (after PR #254)
+## Current Project Status (after PR #265)
 
 **Backend/DTO truth posture:** The canonical backend pipeline is the source of truth. All DTO contracts expose `schemaVersion`, provenance, freshness, status, and warnings. No production DTO contains mock fallback truth. [E2]
 
@@ -151,6 +151,17 @@ These rules apply to every PR. [E1]
 | #252 | Gate 10 evidence collected and Gate 11 public estimated-yield promotion merged | [E2] |
 | #253 | Materialization warning order assertion stabilized | [E2] |
 | #254 | Materialization negative-balance order assertion stabilized | [E2] |
+| #255 | Post-Gate-11 status reconciliation docs | [E2] |
+| #256 | HexMining estimated yield rendered in stake table UI | [E2] |
+| #257 | HexMining missing evidence coverage report added | [E2] |
+| #258 | HexMining estimated yield display units formatted (hearts → HEX decimal) | [E2] |
+| #259 | Displayed numbers inventory doc added | [E2] |
+| #260 | Pricing status numbers surfaced as read-only cards | [E2] |
+| #261 | Missing evidence debug UI added at `/debug/hexmining/evidence/missing` | [E2] |
+| #262 | AI-agent worktree folders added to `.gitignore` and ESLint ignore | [E2] |
+| #263 | API client fetch helper consolidated (frontend chore) | [E2] |
+| #264 | PnL edge-status route contract tests added (low-confidence price, summary warning deduplication) | [E2] |
+| #265 | Token metadata stale/conflicting provenance route contract tests added | [E2] |
 
 ---
 
