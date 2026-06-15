@@ -114,7 +114,7 @@ The template should not be extracted into a separate repo until **all** of the f
 - C1. CoinPulse V1 dashboard, debug/health, and debug/status DTOs are stable across at least one full sync→materialize→rebuild cycle in production-like conditions.
 - C2. Failure-path contract tests exist for every operator-facing read DTO route (dashboard ✓ PR #22, debug/status ✓ PR #21; future `prices/status` and `transactions` would extend this).
 - C3. Persisted materialization provenance (PR #17) and dashboard materialization metadata (PR #18) are stable consumers of the canonical ledger and have not had to change DTO shape for at least one full release.
-- C4. Frontend has migrated to TanStack Query per `docs/frontend-query-standardization-audit.md`, so the consumption contract is exercised by real screens.
+- C4. ~~Frontend has migrated to TanStack Query per `docs/frontend-query-standardization-audit.md`, so the consumption contract is exercised by real screens.~~ **Status (2026-06): Satisfied.** The frontend has migrated to TanStack Query — `QueryProvider`, shared query keys, query defaults, API clients, and `useQuery`/`useMutation` hooks are wired across dashboard, debug, pricing, wallets, transactions, and HexMining reads. The consumption contract is now exercised in CoinPulse. C4 is no longer a blocking gate; C1–C3, C5, and C6 remain.
 - C5. A second backend surface inside CoinPulse (e.g. `prices/status` or canonical `transactions`) has been added using the same DTO contract style, proving the contract style is reusable across more than one DTO.
 - C6. A documented compatibility-period strategy exists for route normalization (`/api/portfolio/dashboard` → `/api/dashboard` and similar), so an extracted template does not lock the original repo into silent breakage.
 
@@ -122,12 +122,12 @@ Until C1–C6 are satisfied, extraction is premature and would freeze accidental
 
 ## Recommended Sequence (each step = its own bounded PR; nothing here is part of this slice)
 
-1. Land `docs/frontend-query-standardization-audit.md` (this PR).
-2. Land `docs/reusable-backend-template-plan.md` (this PR).
-3. (Future, separate PR) Wire `QueryClient` + shared `src/lib/query/` per the audit; do not extract anything.
-4. (Future, separate PR) Migrate dashboard reads to `useQuery`.
-5. (Future, separate PR) Migrate debug/sync reads to `useQuery` and operator mutations to `useMutation`.
-6. (Future, separate PR) Add `GET /api/prices/status` DTO and contract tests using the existing DTO contract style.
+1. Land `docs/frontend-query-standardization-audit.md` (this PR). *(Done.)*
+2. Land `docs/reusable-backend-template-plan.md` (this PR). *(Done.)*
+3. ~~(Future, separate PR) Wire `QueryClient` + shared `src/lib/query/` per the audit; do not extract anything.~~ *(Done — PRs #23–#177.)*
+4. ~~(Future, separate PR) Migrate dashboard reads to `useQuery`.~~ *(Done.)*
+5. ~~(Future, separate PR) Migrate debug/sync reads to `useQuery` and operator mutations to `useMutation`.~~ *(Done.)*
+6. ~~(Future, separate PR) Add `GET /api/prices/status` DTO and contract tests using the existing DTO contract style.~~ *(Done — source-level route exists; per-asset coverage diagnostics remain open.)*
 7. (Future, separate PR) Add canonical `GET /api/transactions` DTO and contract tests using the existing DTO contract style.
 8. (Future, only after C1–C6) Open a *separate* extraction PR in a *separate* repo to lift the template out of CoinPulse. That PR is explicitly out of scope here.
 
@@ -136,7 +136,7 @@ Until C1–C6 are satisfied, extraction is premature and would freeze accidental
 - **R1. Premature extraction.** If the template is extracted before C1–C6, accidental decisions (DTO field names, error envelope shape, materialization warning vocabulary) become a public contract that is expensive to revise. Mitigation: enforce the readiness gate.
 - **R2. Drift between repos.** A separate template repo, once it exists, will tend to drift from CoinPulse. Mitigation: keep CoinPulse as the canonical reference implementation, and treat the template as a documented distillation of it, not a parallel codebase.
 - **R3. Over-generalization.** The template should not try to abstract over chains, ledgers, or pricing strategies that CoinPulse does not yet exercise. Mitigation: only generalize what has shipped twice inside CoinPulse.
-- **R4. Frontend coupling.** The reusable template's frontend consumption contract (T7) is only meaningful if CoinPulse itself uses it. Mitigation: gate extraction on C4 (frontend has migrated to TanStack Query in CoinPulse).
+- **R4. Frontend coupling.** The reusable template's frontend consumption contract (T7) is only meaningful if CoinPulse itself uses it. Mitigation: gate extraction on C4. *(C4 is now satisfied — see updated criterion above. The remaining extraction gate is C1–C3, C5, and C6.)*
 - **R5. Chain extensibility appearance.** Listing chain-agnostic seams here must not be read as approval to start Ethereum/Base execution. PulseChain remains the only execution target until V1 is stable.
 - **R6. Scope creep within CoinPulse.** This document must not be used to justify schema, accounting, pricing/PnL, or worker changes. It is descriptive of current discipline, not a license to evolve it.
 
