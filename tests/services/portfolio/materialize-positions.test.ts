@@ -772,7 +772,10 @@ describe("materializeCurrentPortfolioPositions", () => {
       .toMatchObject({ balanceQuantity: "999" });
   });
 
-  it("does not merge balances for distinct contracts that share a display symbol", async () => {
+  it("writes separate balance rows for two distinct assetIds regardless of shared contract address prefix", async () => {
+    // Materialization keys positions by assetId (chain:chainId:type:address), never by symbol or name.
+    // Token metadata in this layer has no symbol field; same-symbol same-address identity guards live
+    // in average-cost and price-resolver tests where symbol metadata exists in those fixtures.
     const stores = createMemoryDb();
 
     const alphaAssetId = "chain:369:erc20:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
