@@ -46,3 +46,8 @@ yarn-error.log*
 next-env.d.ts
 
 .vs/
+
+# Local AI-agent / worktree artifacts (Claude Code, Codex, Cursor, etc.)
+.claude/
+.codex/
+.cursor/
