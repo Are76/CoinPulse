@@ -205,9 +205,7 @@ function MetricValue({
   children,
 }: {
   label: string;
-  value?: string;
-  children?: ReactNode;
-}) {
+} & ({ value: string; children?: never } | { value?: never; children: ReactNode })) {
   return (
     <div className="flex flex-col gap-1 rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] px-3 py-2">
       <dt className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
