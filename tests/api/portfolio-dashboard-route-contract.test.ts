@@ -48,7 +48,7 @@ type TokenRecord = {
   chainId: number;
   assetId: string;
   decimalsSource: string | null;
-  metadataSources?: Array<{ sourceKind: "SEED" | "RPC" | "MANUAL" | string; observedAt: Date | null }>;
+  metadataSources?: Array<{ sourceKind: "SEED" | "RPC" | "MANUAL" | string; observedAt: Date | null; decimals?: number | null }>;
 };
 
 type LpPositionRecord = {
@@ -1865,5 +1865,133 @@ describe("GET /api/portfolio/dashboard route contract", () => {
       confidence: "medium",
       conflictReason: null,
     });
+  });
+
+  it("token metadata provenance status is stale when RPC observation exceeds the stale threshold", async () => {
+    // asOf is 2026-05-08T12:04:00.000Z; stale threshold is 30 days.
+    // 2026-04-01T00:00:00.000Z is 37 days before asOf — past the threshold.
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        priceObservations: [createPriceObservation()],
+        tokens: [
+          {
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            decimalsSource: "RPC",
+            metadataSources: [{ sourceKind: "RPC", observedAt: new Date("2026-04-01T00:00:00.000Z") }],
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.tokenPositions[0].metadataProvenance).toEqual({
+      status: "stale",
+      source: "chain",
+      observedAt: "2026-04-01T00:00:00.000Z",
+      confidence: "medium",
+      conflictReason: null,
+    });
+    // Stale metadata is advisory — balance and decimals are unchanged
+    expect(body.data.tokenPositions[0].balanceQuantity).toBe("5");
+    expect(body.data.tokenPositions[0].decimals).toBe(18);
+    // Stale metadata status does not affect pricing or PnL fields
+    expect(body.data.tokenPositions[0].pricing.status).not.toBeUndefined();
+    expect(body.data.tokenPositions[0]).not.toHaveProperty("price");
+    expect(body.data.tokenPositions[0]).not.toHaveProperty("peg");
+  });
+
+  it("token metadata provenance status is conflicting when source rows disagree on decimals", async () => {
+    // Two metadataSources with different decimals (18 vs 8) trigger conflicting status.
+    getDb.mockReturnValue(
+      createMemoryDb({
+        wallets: [
+          {
+            id: WALLET_ID,
+            address: WALLET_ADDRESS,
+            addressLower: WALLET_ADDRESS.toLowerCase(),
+            chainId: CHAIN_ID,
+          },
+        ],
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: 100n,
+            updatedToBlock: 120n,
+          },
+        ],
+        priceObservations: [createPriceObservation()],
+        tokens: [
+          {
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            decimalsSource: "RPC",
+            metadataSources: [
+              { sourceKind: "RPC", observedAt: new Date("2026-05-08T11:00:00.000Z"), decimals: 18 },
+              { sourceKind: "SEED", observedAt: new Date("2026-05-07T10:00:00.000Z"), decimals: 8 },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/portfolio/dashboard/route");
+    const response = await GET(
+      new Request(
+        `http://localhost/api/portfolio/dashboard?walletAddress=${WALLET_ADDRESS}&chainId=${CHAIN_ID}&quoteAsset=${encodeURIComponent(QUOTE_ASSET)}&asOf=2026-05-08T12:04:00.000Z`,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data.tokenPositions[0].metadataProvenance).toEqual({
+      status: "conflicting",
+      source: "chain",
+      observedAt: "2026-05-08T11:00:00.000Z",
+      confidence: "medium",
+      conflictReason: "decimals-mismatch",
+    });
+    // Conflicting metadata is advisory — balance and decimals from canonical ledger are unchanged
+    expect(body.data.tokenPositions[0].balanceQuantity).toBe("5");
+    expect(body.data.tokenPositions[0].decimals).toBe(18);
+    // Conflicting metadata status does not bleed into pricing or PnL fields
+    expect(body.data.tokenPositions[0].pricing.status).not.toBeUndefined();
+    expect(body.data.tokenPositions[0]).not.toHaveProperty("price");
+    expect(body.data.tokenPositions[0]).not.toHaveProperty("peg");
   });
 });
