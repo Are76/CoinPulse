@@ -364,9 +364,9 @@ describe("GET /api/portfolio/dashboard — PnL/pricing edge status contracts", (
     expect(warnings.filter((w) => w === pricingWarnA)).toHaveLength(1);
     expect(warnings.filter((w) => w === pricingWarnB)).toHaveLength(1);
 
-    // The shared pnl-warning key must appear at most once even though two positions emit it
+    // The shared pnl-warning key must appear exactly once even though two positions emit it
     const pnlWarnCount = warnings.filter((w) => w === "pnl-warning:MARK_PRICE_UNAVAILABLE").length;
-    expect(pnlWarnCount).toBeLessThanOrEqual(1);
+    expect(pnlWarnCount).toBe(1);
 
     // Summary valuation is unavailable — not coerced to zero
     expect(body.data.summary.totalValueQuote).toBeNull();
