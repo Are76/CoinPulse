@@ -223,7 +223,7 @@ The following ordered sequence represents the correct bounded PR approach to PnL
 
 3. **Add pricing status endpoint** (future PR) — `GET /api/prices/status` does not yet exist. Implement it with source hierarchy, confidence distribution, freshness metadata, and coverage by asset/chain before surfacing pricing quality in the UI.
 
-   > **Status (2026-06): Completed.** `GET /api/prices/status` exists with route contract coverage, client/query wiring, and debug/status UI coverage. This item is no longer open V1 work.
+   > **Status (2026-06): Partially completed.** `GET /api/prices/status` exists with route contract coverage, client/query wiring, and debug/status UI coverage. The source-level route is no longer future work. However, per-asset pricing/metadata coverage diagnostics and confidence distribution remain open (see `docs/v1-remaining-guardrail-checklist.md` §3). Do not treat this sequence item as fully closed until those diagnostics prerequisites are satisfied.
 
 4. **Add PnL status contract tests** (future PR) — Add route-level and service-level tests asserting that the `pnl.status` field, `pnl.warnings`, and the `DashboardPnlDto` shape are stable across PnL engine changes. Verify that `INSUFFICIENT_COST_BASIS`, `MARK_PRICE_UNAVAILABLE`, `UNSUPPORTED_LP_ACTION`, and `UNSUPPORTED_STAKE_ACTION` warning codes are propagated correctly into the DTO.
 
