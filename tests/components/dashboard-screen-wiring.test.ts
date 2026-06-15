@@ -444,4 +444,15 @@ describe("dashboard-screen TanStack Query read migration", () => {
     expect(source).toContain("DISABLE_REFETCH_INTERVAL");
     expect(source).toContain("refetchInterval: DISABLE_REFETCH_INTERVAL");
   });
+
+  it("screen imports useQueryClient for cache management on explicit submit", () => {
+    const source = readScreen();
+    expect(source).toContain('import { useQueryClient } from "@tanstack/react-query"');
+  });
+
+  it("handleSubmit purges stale dashboard cache via queryClient.removeQueries to preserve always-shows-loading UX on explicit submit", () => {
+    const source = readScreen();
+    expect(source).toContain("queryClient.removeQueries(");
+    expect(source).toContain("queryKey: queryKeys.dashboard(");
+  });
 });
