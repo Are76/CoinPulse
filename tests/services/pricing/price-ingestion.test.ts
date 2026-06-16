@@ -25,6 +25,13 @@ const PLS_ASSET: { assetId: string; tokenAddress: `0x${string}`; tokenDecimals: 
   quoteAsset: QUOTE_ASSET,
 };
 
+const PDAI_ASSET: { assetId: string; tokenAddress: `0x${string}`; tokenDecimals: number; quoteAsset: string } = {
+  assetId: "chain:369:erc20:0xefd766ccb38eaf1dfd701853bfce31359239f305",
+  tokenAddress: "0xefD766cCb38EaF1dfd701853BFCe31359239F305",
+  tokenDecimals: 18,
+  quoteAsset: QUOTE_ASSET,
+};
+
 function makeDraft(assetId: string): PriceObservationDraft {
   return {
     chainId: CHAIN_ID,
@@ -215,5 +222,82 @@ describe("runPriceIngestion", () => {
     // Fetched 1, but store reported 0 created (duplicate)
     expect(result.fetchedCount).toBe(1);
     expect(result.persistedCount).toBe(0);
+  });
+
+  describe("pDAI routing reference skip", () => {
+    it("does not count pDAI as a failed asset when the fetcher returns pdai_routing_reference", async () => {
+      const store = makeCapturingStore();
+
+      const result = await runPriceIngestion(
+        { chainId: CHAIN_ID, blockNumber: BLOCK_NUMBER, observedAt: OBSERVED_AT, assets: [PHEX_ASSET, PDAI_ASSET] },
+        {
+          publicClient: {} as never,
+          fetchPrice: async (args) => {
+            if (args.assetId === PDAI_ASSET.assetId) {
+              return { ok: false, reason: "pdai_routing_reference" };
+            }
+            return { ok: true, draft: makeDraft(args.assetId) };
+          },
+          persistObservations: store.persistObservations,
+        },
+      );
+
+      expect(result.failedCount).toBe(0);
+      expect(result.failedAssets).toEqual([]);
+      expect(result.skippedCount).toBe(1);
+      expect(result.skippedAssets).toEqual([PDAI_ASSET.assetId]);
+      // Only PHEX is persisted — pDAI produces no observation
+      expect(result.fetchedCount).toBe(1);
+      expect(store.persisted).toHaveLength(1);
+      expect(store.persisted[0]?.assetId).toBe(PHEX_ASSET.assetId);
+    });
+
+    it("returns skippedCount: 0 when no asset returns pdai_routing_reference", async () => {
+      const store = makeCapturingStore();
+
+      const result = await runPriceIngestion(
+        { chainId: CHAIN_ID, blockNumber: BLOCK_NUMBER, observedAt: OBSERVED_AT, assets: [PHEX_ASSET] },
+        {
+          publicClient: {} as never,
+          fetchPrice: makeSuccessFetcher(PHEX_ASSET.assetId),
+          persistObservations: store.persistObservations,
+        },
+      );
+
+      expect(result.skippedCount).toBe(0);
+      expect(result.skippedAssets).toEqual([]);
+    });
+
+    it("distinguishes pdai_routing_reference skip from a real fetch failure", async () => {
+      const store = makeCapturingStore();
+
+      const result = await runPriceIngestion(
+        {
+          chainId: CHAIN_ID,
+          blockNumber: BLOCK_NUMBER,
+          observedAt: OBSERVED_AT,
+          assets: [PHEX_ASSET, PDAI_ASSET, PLS_ASSET],
+        },
+        {
+          publicClient: {} as never,
+          fetchPrice: async (args) => {
+            if (args.assetId === PDAI_ASSET.assetId) {
+              return { ok: false, reason: "pdai_routing_reference" };
+            }
+            if (args.assetId === PLS_ASSET.assetId) {
+              return { ok: false, reason: "zero_amount_out" };
+            }
+            return { ok: true, draft: makeDraft(args.assetId) };
+          },
+          persistObservations: store.persistObservations,
+        },
+      );
+
+      expect(result.failedCount).toBe(1);
+      expect(result.failedAssets).toEqual([PLS_ASSET.assetId]);
+      expect(result.skippedCount).toBe(1);
+      expect(result.skippedAssets).toEqual([PDAI_ASSET.assetId]);
+      expect(result.fetchedCount).toBe(1);
+    });
   });
 });
