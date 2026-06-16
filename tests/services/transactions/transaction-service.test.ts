@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Wallet lookup and DB are mocked so listCanonicalTransactions tests do not
 // require a live database. Default: wallet not found → empty unknown page.
@@ -9,9 +9,12 @@ vi.mock("@/services/api/wallets", () => ({
 vi.mock("@/lib/db", () => ({
   getDb: vi.fn(() => ({
     ledgerActionGroup: { findMany: vi.fn().mockResolvedValue([]) },
+    portfolioMaterializationState: { findUnique: vi.fn().mockResolvedValue(null) },
   })),
 }));
 
+import { getDb } from "@/lib/db";
+import { resolveTrackedWalletByAddress } from "@/services/api/wallets";
 import {
   buildEmptyTransactionsPage,
   buildTransactionPageInfo,
@@ -372,7 +375,7 @@ describe("listCanonicalTransactions — cursor defaults", () => {
     expect(result.pageInfo.nextCursor).toBeNull();
   });
 
-  it("hasNextPage is always false (cursor pagination not yet implemented)", async () => {
+  it("hasNextPage is false when wallet is not tracked (empty page)", async () => {
     const result = await listCanonicalTransactions({
       walletAddress: WALLET,
       chainId: CHAIN_ID,
@@ -548,5 +551,177 @@ describe("listCanonicalTransactions — ledgerCoverage", () => {
     expect(result.transactions).toEqual([]);
     expect(result.pageInfo.hasNextPage).toBe(false);
     expect(result.pageInfo.nextCursor).toBeNull();
+  });
+});
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const WALLET_ID = "wallet-id-123";
+
+function makeActionGroup(id: string) {
+  return {
+    id,
+    txHash: `0x${id}`,
+    chainId: CHAIN_ID,
+    walletId: WALLET_ID,
+    occurredAt: new Date("2026-01-01T00:00:00Z"),
+    actionType: "TRANSFER",
+    entries: [],
+  };
+}
+
+function makeDb(overrides: {
+  findMany?: ReturnType<typeof vi.fn>;
+  findUnique?: ReturnType<typeof vi.fn>;
+}) {
+  return {
+    ledgerActionGroup: {
+      findMany: overrides.findMany ?? vi.fn().mockResolvedValue([]),
+    },
+    portfolioMaterializationState: {
+      findUnique: overrides.findUnique ?? vi.fn().mockResolvedValue(null),
+    },
+  } as never;
+}
+
+// ─── Coverage from PortfolioMaterializationState ───────────────────────────────
+
+describe("listCanonicalTransactions — ledger coverage from PortfolioMaterializationState", () => {
+  beforeEach(() => {
+    vi.mocked(resolveTrackedWalletByAddress).mockResolvedValue({ id: WALLET_ID } as never);
+  });
+
+  it("returns unknown when no matState row exists for the wallet", async () => {
+    vi.mocked(getDb).mockReturnValueOnce(makeDb({ findUnique: vi.fn().mockResolvedValue(null) }));
+
+    const result = await listCanonicalTransactions({ walletAddress: WALLET, chainId: CHAIN_ID });
+
+    expect(result.ledgerCoverage.status).toBe("unknown");
+    expect(result.ledgerCoverage.reason).toContain("materialization record");
+  });
+
+  it("returns covered when both sourceLedgerFromBlock and sourceLedgerToBlock are set", async () => {
+    vi.mocked(getDb).mockReturnValueOnce(
+      makeDb({
+        findUnique: vi.fn().mockResolvedValue({
+          sourceLedgerFromBlock: 1_000_000n,
+          sourceLedgerToBlock: 2_000_000n,
+        }),
+      }),
+    );
+
+    const result = await listCanonicalTransactions({ walletAddress: WALLET, chainId: CHAIN_ID });
+
+    expect(result.ledgerCoverage.status).toBe("covered");
+    expect(result.ledgerCoverage.reason).toBeNull();
+  });
+
+  it("returns partial when only sourceLedgerFromBlock is set", async () => {
+    vi.mocked(getDb).mockReturnValueOnce(
+      makeDb({
+        findUnique: vi.fn().mockResolvedValue({
+          sourceLedgerFromBlock: 1_000_000n,
+          sourceLedgerToBlock: null,
+        }),
+      }),
+    );
+
+    const result = await listCanonicalTransactions({ walletAddress: WALLET, chainId: CHAIN_ID });
+
+    expect(result.ledgerCoverage.status).toBe("partial");
+    expect(typeof result.ledgerCoverage.reason).toBe("string");
+  });
+
+  it("returns unknown when matState exists but both block fields are null", async () => {
+    vi.mocked(getDb).mockReturnValueOnce(
+      makeDb({
+        findUnique: vi.fn().mockResolvedValue({
+          sourceLedgerFromBlock: null,
+          sourceLedgerToBlock: null,
+        }),
+      }),
+    );
+
+    const result = await listCanonicalTransactions({ walletAddress: WALLET, chainId: CHAIN_ID });
+
+    expect(result.ledgerCoverage.status).toBe("unknown");
+  });
+
+  it("never fabricates covered status without a persisted matState", async () => {
+    vi.mocked(getDb).mockReturnValueOnce(makeDb({ findUnique: vi.fn().mockResolvedValue(null) }));
+
+    const result = await listCanonicalTransactions({ walletAddress: WALLET, chainId: CHAIN_ID });
+
+    expect(result.ledgerCoverage.status).not.toBe("covered");
+  });
+});
+
+// ─── Cursor pagination ─────────────────────────────────────────────────────────
+
+describe("listCanonicalTransactions — cursor pagination", () => {
+  beforeEach(() => {
+    vi.mocked(resolveTrackedWalletByAddress).mockResolvedValue({ id: WALLET_ID } as never);
+  });
+
+  it("hasNextPage is true when DB returns limit+1 rows", async () => {
+    const rows = Array.from({ length: 51 }, (_, i) => makeActionGroup(`ag-${i}`));
+    vi.mocked(getDb).mockReturnValueOnce(makeDb({ findMany: vi.fn().mockResolvedValue(rows) }));
+
+    const result = await listCanonicalTransactions({ walletAddress: WALLET, chainId: CHAIN_ID });
+
+    expect(result.pageInfo.hasNextPage).toBe(true);
+    expect(result.transactions).toHaveLength(50);
+  });
+
+  it("nextCursor is the id of the last item on the page when hasNextPage is true", async () => {
+    const rows = Array.from({ length: 51 }, (_, i) => makeActionGroup(`ag-${String(i).padStart(2, "0")}`));
+    vi.mocked(getDb).mockReturnValueOnce(makeDb({ findMany: vi.fn().mockResolvedValue(rows) }));
+
+    const result = await listCanonicalTransactions({ walletAddress: WALLET, chainId: CHAIN_ID });
+
+    expect(result.pageInfo.nextCursor).toBe("ag-49");
+  });
+
+  it("hasNextPage is false and nextCursor is null when DB returns exactly limit rows", async () => {
+    const rows = Array.from({ length: 50 }, (_, i) => makeActionGroup(`ag-${i}`));
+    vi.mocked(getDb).mockReturnValueOnce(makeDb({ findMany: vi.fn().mockResolvedValue(rows) }));
+
+    const result = await listCanonicalTransactions({ walletAddress: WALLET, chainId: CHAIN_ID });
+
+    expect(result.pageInfo.hasNextPage).toBe(false);
+    expect(result.pageInfo.nextCursor).toBeNull();
+  });
+
+  it("passes cursor and skip to the DB query when a cursor is supplied", async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    vi.mocked(getDb).mockReturnValueOnce(makeDb({ findMany }));
+
+    await listCanonicalTransactions({ walletAddress: WALLET, chainId: CHAIN_ID, cursor: "ag-49" });
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor: { id: "ag-49" }, skip: 1 }),
+    );
+  });
+
+  it("does not pass cursor or skip to DB query on first page", async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    vi.mocked(getDb).mockReturnValueOnce(makeDb({ findMany }));
+
+    await listCanonicalTransactions({ walletAddress: WALLET, chainId: CHAIN_ID });
+
+    const callArg = findMany.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(callArg).not.toHaveProperty("cursor");
+    expect(callArg).not.toHaveProperty("skip");
+  });
+
+  it("uses take: limit+1 in the DB query", async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    vi.mocked(getDb).mockReturnValueOnce(makeDb({ findMany }));
+
+    await listCanonicalTransactions({ walletAddress: WALLET, chainId: CHAIN_ID, limit: 10 });
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 11 }),
+    );
   });
 });

@@ -73,11 +73,19 @@ function makeActionGroup(
 }
 
 // Helper: wire up both mocks for a test. mockDb controls what findMany returns.
-function setupMocks(wallet: typeof MOCK_WALLET | null, actionGroups: unknown[]) {
+// matState defaults to a covered block range when wallet is non-null, null otherwise.
+function setupMocks(
+  wallet: typeof MOCK_WALLET | null,
+  actionGroups: unknown[],
+  matState: { sourceLedgerFromBlock: bigint | null; sourceLedgerToBlock: bigint | null } | null = wallet
+    ? { sourceLedgerFromBlock: 1_000_000n, sourceLedgerToBlock: 2_000_000n }
+    : null,
+) {
   const mockFindMany = vi.fn().mockResolvedValue(actionGroups);
   vi.mocked(resolveTrackedWalletByAddress).mockResolvedValue(wallet as never);
   vi.mocked(getDb).mockReturnValue({
     ledgerActionGroup: { findMany: mockFindMany },
+    portfolioMaterializationState: { findUnique: vi.fn().mockResolvedValue(matState) },
   } as unknown as ReturnType<typeof getDb>);
   return { mockFindMany };
 }
@@ -348,33 +356,33 @@ describe("listCanonicalTransactions — walletAddress normalization", () => {
 // ── 5. Limit behaviour ────────────────────────────────────────────────────────
 
 describe("listCanonicalTransactions — limit", () => {
-  it("passes default limit to the db query when no limit is supplied", async () => {
+  it("passes default limit + 1 to the db query when no limit is supplied", async () => {
     const { mockFindMany } = setupMocks(MOCK_WALLET, []);
 
     await listCanonicalTransactions({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID });
 
     expect(mockFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ take: TRANSACTIONS_DEFAULT_LIMIT }),
+      expect.objectContaining({ take: TRANSACTIONS_DEFAULT_LIMIT + 1 }),
     );
   });
 
-  it("passes the requested limit to the db query when within bounds", async () => {
+  it("passes the requested limit + 1 to the db query when within bounds", async () => {
     const { mockFindMany } = setupMocks(MOCK_WALLET, []);
 
     await listCanonicalTransactions({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID, limit: 10 });
 
     expect(mockFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ take: 10 }),
+      expect.objectContaining({ take: 11 }),
     );
   });
 
-  it("caps limit at TRANSACTIONS_MAX_LIMIT in the db query", async () => {
+  it("caps take at TRANSACTIONS_MAX_LIMIT + 1 in the db query", async () => {
     const { mockFindMany } = setupMocks(MOCK_WALLET, []);
 
     await listCanonicalTransactions({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID, limit: 9999 });
 
     expect(mockFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ take: TRANSACTIONS_MAX_LIMIT }),
+      expect.objectContaining({ take: TRANSACTIONS_MAX_LIMIT + 1 }),
     );
   });
 
@@ -495,6 +503,7 @@ describe("listCanonicalTransactions — error propagation", () => {
     const mockFindMany = vi.fn().mockRejectedValue(new Error("db connection refused"));
     vi.mocked(getDb).mockReturnValue({
       ledgerActionGroup: { findMany: mockFindMany },
+      portfolioMaterializationState: { findUnique: vi.fn().mockResolvedValue(null) },
     } as unknown as ReturnType<typeof getDb>);
 
     await expect(

@@ -87,6 +87,27 @@ export function buildEmptyTransactionsPage(args: {
 }
 
 /**
+ * Derive TransactionLedgerCoverageDto from a persisted PortfolioMaterializationState row.
+ * "covered" only when both fromBlock and toBlock are recorded — never assumed.
+ */
+function deriveLedgerCoverage(
+  matState: { sourceLedgerFromBlock: bigint | null; sourceLedgerToBlock: bigint | null } | null,
+): TransactionLedgerCoverageDto {
+  if (!matState) {
+    return { status: "unknown", reason: "No materialization record exists for this wallet and chain." };
+  }
+  const hasFrom = matState.sourceLedgerFromBlock != null;
+  const hasTo = matState.sourceLedgerToBlock != null;
+  if (hasFrom && hasTo) {
+    return { status: "covered", reason: null };
+  }
+  if (hasFrom || hasTo) {
+    return { status: "partial", reason: "Only a partial block range is recorded in the materialization state." };
+  }
+  return { status: "unknown", reason: "No block range recorded in the materialization state." };
+}
+
+/**
  * Map a single LedgerEntry (with optional token join) to a TransactionEntryDto.
  * valueUsd drives pricingStatus/valuationStatus: priced/valued when present,
  * unavailable otherwise. No raw-log fields are included.
@@ -125,15 +146,15 @@ function mapEntry(entry: {
  *
  * Reads LedgerActionGroup rows for the resolved wallet, ordered by occurredAt
  * descending, and maps each group with its entries to a TransactionDto.
+ * Ledger coverage is derived from PortfolioMaterializationState — never assumed.
  * Raw logs, RPC, and frontend reconstruction are never used.
  */
 export async function listCanonicalTransactions(
   args: ListTransactionsArgs,
 ): Promise<TransactionsPageDto> {
   const limit = resolveTransactionLimit(args.limit);
-  // Normalise once; args.walletAddress is already lowercased by schema transform,
-  // but we use this single variable throughout to avoid mixing sources.
   const walletAddress = args.walletAddress.toLowerCase();
+  const cursor = resolveTransactionCursor(args.cursor);
 
   const wallet = await resolveTrackedWalletByAddress({
     walletAddress,
@@ -150,21 +171,34 @@ export async function listCanonicalTransactions(
   }
 
   const db = getDb();
-  const actionGroups = await db.ledgerActionGroup.findMany({
-    where: { walletId: wallet.id, chainId: args.chainId },
-    orderBy: [{ occurredAt: "desc" }, { id: "asc" }],
-    take: limit,
-    include: {
-      entries: {
-        orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
-        include: {
-          token: { select: { address: true, decimals: true } },
+
+  const [matState, actionGroupsRaw] = await Promise.all([
+    db.portfolioMaterializationState.findUnique({
+      where: {
+        walletId_chainId: { walletId: wallet.id, chainId: args.chainId },
+      },
+      select: { sourceLedgerFromBlock: true, sourceLedgerToBlock: true },
+    }),
+    db.ledgerActionGroup.findMany({
+      where: { walletId: wallet.id, chainId: args.chainId },
+      orderBy: [{ occurredAt: "desc" }, { id: "asc" }],
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      include: {
+        entries: {
+          orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+          include: {
+            token: { select: { address: true, decimals: true } },
+          },
         },
       },
-    },
-  });
+    }),
+  ]);
 
-  const txCoverage: TransactionLedgerCoverageDto = { status: "covered", reason: null };
+  const hasNextPage = actionGroupsRaw.length > limit;
+  const actionGroups = hasNextPage ? actionGroupsRaw.slice(0, limit) : actionGroupsRaw;
+  const nextCursor = hasNextPage ? (actionGroups[actionGroups.length - 1]?.id ?? null) : null;
+  const txCoverage = deriveLedgerCoverage(matState);
 
   const transactions: TransactionDto[] = actionGroups.map((ag) => ({
     transactionId: ag.id,
@@ -192,7 +226,7 @@ export async function listCanonicalTransactions(
     walletAddress,
     chainId: args.chainId,
     ledgerCoverage: txCoverage,
-    pageInfo: buildTransactionPageInfo({ limit }),
+    pageInfo: buildTransactionPageInfo({ limit, hasNextPage, nextCursor }),
     transactions,
   };
 }
