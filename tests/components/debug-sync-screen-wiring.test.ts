@@ -72,6 +72,52 @@ describe("debug-sync-screen TanStack Query wiring", () => {
   });
 });
 
+describe("debug-sync-screen operator guardrails", () => {
+  it("imports OPERATOR_MAX_BLOCK_SPAN from the debug client for UX guidance", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).toContain("OPERATOR_MAX_BLOCK_SPAN");
+    expect(source).toContain('} from "@/lib/api/debug-client"');
+  });
+
+  it("renders max block span guidance in the manual sync form", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).toContain("OPERATOR_MAX_BLOCK_SPAN");
+    expect(source).toContain("Max block span");
+    expect(source).toContain("run families separately");
+  });
+
+  it("renders max block span guidance in the rebuild form", () => {
+    const source = readDebugSyncScreenSource();
+
+    const rebuildIdx = source.indexOf("handleRebuild");
+    const afterRebuild = source.slice(rebuildIdx);
+
+    expect(afterRebuild).toContain("OPERATOR_MAX_BLOCK_SPAN");
+  });
+
+  it("does not call RPC directly from the frontend", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).not.toContain("eth_getBlockByNumber");
+    expect(source).not.toContain("getLogs");
+    expect(source).not.toContain("getTransactionReceipt");
+    expect(source).not.toContain("ethers");
+    expect(source).not.toContain("viem");
+  });
+
+  it("does not calculate portfolio, token, pricing, valuation, or PnL values", () => {
+    const source = readDebugSyncScreenSource();
+
+    expect(source).not.toContain("computeBalance");
+    expect(source).not.toContain("computePrice");
+    expect(source).not.toContain("calculatePnl");
+    expect(source).not.toContain("calculateValuation");
+    expect(source).not.toContain("computeYield");
+  });
+});
+
 describe("debug-sync-screen TanStack Query read migration", () => {
   it("does not import any direct fetch functions from debug-client", () => {
     const source = readDebugSyncScreenSource();

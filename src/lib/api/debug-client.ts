@@ -8,6 +8,13 @@ import {
 
 export { ApiClientError };
 
+/**
+ * Mirrors MANUAL_SYNC_MAX_BLOCK_SPAN / REBUILD_MAX_BLOCK_SPAN from the backend
+ * validation module. Keep in sync manually — the backend enforces the real limit;
+ * this constant is for UX guidance only.
+ */
+export const OPERATOR_MAX_BLOCK_SPAN = 1_000;
+
 export const SOURCE_FAMILY_OPTIONS = [
   "TRANSFERS",
   "DEX",
