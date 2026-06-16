@@ -22,7 +22,8 @@
  *
  * Exit behaviour:
  *   - Exits 0 on full or partial success (prints JSON summary to stdout).
- *   - Exits 1 if environment is invalid or RPC is unreachable.
+ *   - Exits 1 if environment is invalid, RPC is unreachable, wrong chain,
+ *     or zero prices were fetched.
  *   - Never persists fabricated or hardcoded price values.
  *   - Never bypasses the existing pricing ingestion service.
  */
@@ -87,6 +88,46 @@ export function checkEnv(env: Record<string, string | undefined>): EnvCheckResul
   return missing.length === 0 ? { ok: true } : { ok: false, missing };
 }
 
+// ─── RPC error sanitizer ───────────────────────────────────────────────────────
+
+/**
+ * Strips the RPC URL and any embedded credentials or API keys from an error
+ * message so they are never written to stderr or structured error fields.
+ */
+export function sanitizeRpcError(rpcUrl: string, message: string): string {
+  if (!rpcUrl) return message;
+  let sanitized = message;
+  // Replace the full URL first — covers the most common case.
+  sanitized = sanitized.split(rpcUrl).join("[RPC_URL]");
+  try {
+    const parsed = new URL(rpcUrl);
+    // Strip username and password individually.
+    if (parsed.username) {
+      sanitized = sanitized.split(decodeURIComponent(parsed.username)).join("[REDACTED]");
+      sanitized = sanitized.split(parsed.username).join("[REDACTED]");
+    }
+    if (parsed.password) {
+      sanitized = sanitized.split(decodeURIComponent(parsed.password)).join("[REDACTED]");
+      sanitized = sanitized.split(parsed.password).join("[REDACTED]");
+    }
+    // Strip each query-param value (API keys, tokens, etc.).
+    parsed.searchParams.forEach((value) => {
+      if (value) {
+        sanitized = sanitized.split(decodeURIComponent(value)).join("[REDACTED]");
+        sanitized = sanitized.split(value).join("[REDACTED]");
+      }
+    });
+    // Also strip the credential-bearing URL variant (with auth but without query).
+    if (parsed.username || parsed.password) {
+      const withCreds = `${parsed.protocol}//${parsed.username}:${parsed.password}@${parsed.host}${parsed.pathname}`;
+      sanitized = sanitized.split(withCreds).join("[RPC_URL]");
+    }
+  } catch {
+    // URL parse failed — full-URL replacement above is the best we can do.
+  }
+  return sanitized;
+}
+
 // ─── Core seed logic ───────────────────────────────────────────────────────────
 
 type IngestionArgs = {
@@ -98,6 +139,8 @@ type IngestionArgs = {
 
 export type SeedPricesDeps = {
   publicClient: PublicClient;
+  /** RPC URL string used only for error sanitization — never used for requests. */
+  rpcUrl?: string;
   runIngestion?: (args: IngestionArgs) => Promise<PriceIngestionResult>;
 };
 
@@ -108,6 +151,28 @@ export type SeedPricesResult =
 export async function runDevPriceSeed(
   deps: SeedPricesDeps,
 ): Promise<SeedPricesResult> {
+  const sanitize = (msg: string) => sanitizeRpcError(deps.rpcUrl ?? "", msg);
+
+  // Verify the RPC endpoint is PulseChain (chainId 369) before doing anything.
+  let chainId: number;
+  try {
+    chainId = await deps.publicClient.getChainId();
+  } catch (err) {
+    return {
+      ok: false,
+      code: "rpc-unavailable",
+      detail: sanitize(err instanceof Error ? err.message : String(err)),
+    };
+  }
+
+  if (chainId !== PULSECHAIN_REFERENCE.id) {
+    return {
+      ok: false,
+      code: "wrong-chain",
+      detail: `Expected chainId ${PULSECHAIN_REFERENCE.id} (PulseChain) but RPC reported chainId ${chainId}`,
+    };
+  }
+
   let blockNumber: bigint;
   try {
     blockNumber = await deps.publicClient.getBlockNumber();
@@ -115,7 +180,7 @@ export async function runDevPriceSeed(
     return {
       ok: false,
       code: "rpc-unavailable",
-      detail: err instanceof Error ? err.message : String(err),
+      detail: sanitize(err instanceof Error ? err.message : String(err)),
     };
   }
 
@@ -146,7 +211,7 @@ export async function runDevPriceSeed(
     return {
       ok: false,
       code: "ingestion-failed",
-      detail: err instanceof Error ? err.message : String(err),
+      detail: sanitize(err instanceof Error ? err.message : String(err)),
     };
   }
 }
@@ -181,18 +246,37 @@ async function main(): Promise<void> {
     transport: http(rpcUrl),
   });
 
-  const result = await runDevPriceSeed({ publicClient });
+  let result: SeedPricesResult;
+  try {
+    result = await runDevPriceSeed({ publicClient, rpcUrl });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`seed-prices error: ${sanitizeRpcError(rpcUrl, message)}`);
+    process.exitCode = 1;
+    return;
+  }
 
   if (!result.ok) {
     console.error(`seed-prices: ${result.code} — ${result.detail}`);
-    console.error(
-      "Prices were not persisted. Check PULSECHAIN_RPC_URL and try again.",
-    );
+    if (result.code === "wrong-chain") {
+      console.error("Prices were not persisted. Verify PULSECHAIN_RPC_URL points to PulseChain (chainId 369).");
+    } else {
+      console.error(
+        "Prices were not persisted. Check PULSECHAIN_RPC_URL and try again.",
+      );
+    }
     process.exitCode = 1;
     return;
   }
 
   console.log(safeStringify(result.result));
+
+  if (result.result.fetchedCount === 0) {
+    console.error(
+      "seed-prices: no prices were fetched or persisted. Check RPC connectivity and try again.",
+    );
+    process.exitCode = 1;
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
