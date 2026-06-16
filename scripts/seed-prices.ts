@@ -154,9 +154,12 @@ export async function runDevPriceSeed(
   const sanitize = (msg: string) => sanitizeRpcError(deps.rpcUrl ?? "", msg);
 
   // Verify the RPC endpoint is PulseChain (chainId 369) before doing anything.
+  // publicClient.getChainId() returns the constructor-configured chain.id and
+  // never makes a network call, so we must use request() to hit the actual RPC.
   let chainId: number;
   try {
-    chainId = await deps.publicClient.getChainId();
+    const chainIdHex = await deps.publicClient.request({ method: "eth_chainId" });
+    chainId = parseInt(chainIdHex as string, 16);
   } catch (err) {
     return {
       ok: false,

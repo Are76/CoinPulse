@@ -61,7 +61,6 @@ import type { PriceIngestAsset, PriceIngestionResult } from "@/services/pricing/
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
 const PULSECHAIN_CHAIN_ID = 369;
-const WRONG_CHAIN_ID = 1; // Ethereum Mainnet
 const QUOTE_ASSET = "fiat:usd";
 const CANONICAL_ID_RE = /^chain:369:(erc20:0x[a-f0-9]{40}|native:PLS)$/;
 
@@ -81,10 +80,16 @@ function makeIngestionResult(overrides?: Partial<PriceIngestionResult>): PriceIn
   };
 }
 
+const PULSECHAIN_CHAIN_ID_HEX = "0x171"; // 369 in hex
+const WRONG_CHAIN_ID_HEX = "0x1"; // 1 (Ethereum Mainnet) in hex
+
 /** Minimal publicClient mock for happy-path tests (correct chain). */
 function makeOkClient(blockNumber = 20_000_001n) {
   return {
-    getChainId: async () => PULSECHAIN_CHAIN_ID,
+    request: async ({ method }: { method: string }) => {
+      if (method === "eth_chainId") return PULSECHAIN_CHAIN_ID_HEX;
+      throw new Error(`unmocked request method: ${method}`);
+    },
     getBlockNumber: async () => blockNumber,
   } as never;
 }
@@ -256,10 +261,10 @@ describe("sanitizeRpcError", () => {
 
 describe("runDevPriceSeed", () => {
   // Chain ID verification
-  it("returns rpc-unavailable when getChainId throws", async () => {
+  it("returns rpc-unavailable when eth_chainId request throws", async () => {
     const deps: SeedPricesDeps = {
       publicClient: {
-        getChainId: async () => { throw new Error("connection refused"); },
+        request: async () => { throw new Error("connection refused"); },
         getBlockNumber: async () => { throw new Error("should not be reached"); },
       } as never,
       runIngestion: async () => { throw new Error("should not be reached"); },
@@ -277,7 +282,7 @@ describe("runDevPriceSeed", () => {
     let ingestionCalled = false;
     const deps: SeedPricesDeps = {
       publicClient: {
-        getChainId: async () => { throw new Error("timeout"); },
+        request: async () => { throw new Error("timeout"); },
         getBlockNumber: async () => 1n,
       } as never,
       runIngestion: async () => {
@@ -293,7 +298,7 @@ describe("runDevPriceSeed", () => {
   it("returns wrong-chain error when chainId is not 369", async () => {
     const deps: SeedPricesDeps = {
       publicClient: {
-        getChainId: async () => WRONG_CHAIN_ID,
+        request: async () => WRONG_CHAIN_ID_HEX,
         getBlockNumber: async () => { throw new Error("should not be reached"); },
       } as never,
       runIngestion: async () => { throw new Error("should not be reached"); },
@@ -304,7 +309,7 @@ describe("runDevPriceSeed", () => {
     if (!result.ok) {
       expect(result.code).toBe("wrong-chain");
       expect(result.detail).toContain("369");
-      expect(result.detail).toContain(String(WRONG_CHAIN_ID));
+      expect(result.detail).toContain("1"); // Ethereum Mainnet chainId
     }
   });
 
@@ -314,7 +319,7 @@ describe("runDevPriceSeed", () => {
 
     const deps: SeedPricesDeps = {
       publicClient: {
-        getChainId: async () => WRONG_CHAIN_ID,
+        request: async () => WRONG_CHAIN_ID_HEX,
         getBlockNumber: async () => { blockNumberCalled = true; return 1n; },
       } as never,
       runIngestion: async () => { ingestionCalled = true; return makeIngestionResult(); },
@@ -325,21 +330,24 @@ describe("runDevPriceSeed", () => {
     expect(ingestionCalled).toBe(false);
   });
 
-  it("getChainId is called before getBlockNumber and ingestion", async () => {
+  it("eth_chainId RPC call is made before getBlockNumber and ingestion", async () => {
     const callOrder: string[] = [];
 
     const deps: SeedPricesDeps = {
       publicClient: {
-        getChainId: async () => { callOrder.push("getChainId"); return PULSECHAIN_CHAIN_ID; },
+        request: async ({ method }: { method: string }) => {
+          if (method === "eth_chainId") { callOrder.push("eth_chainId"); return PULSECHAIN_CHAIN_ID_HEX; }
+          throw new Error(`unmocked: ${method}`);
+        },
         getBlockNumber: async () => { callOrder.push("getBlockNumber"); return 1n; },
       } as never,
       runIngestion: async () => { callOrder.push("ingestion"); return makeIngestionResult(); },
     };
 
     await runDevPriceSeed(deps);
-    expect(callOrder[0]).toBe("getChainId");
-    expect(callOrder.indexOf("getChainId")).toBeLessThan(callOrder.indexOf("getBlockNumber"));
-    expect(callOrder.indexOf("getChainId")).toBeLessThan(callOrder.indexOf("ingestion"));
+    expect(callOrder[0]).toBe("eth_chainId");
+    expect(callOrder.indexOf("eth_chainId")).toBeLessThan(callOrder.indexOf("getBlockNumber"));
+    expect(callOrder.indexOf("eth_chainId")).toBeLessThan(callOrder.indexOf("ingestion"));
   });
 
   it("correct chain (369) proceeds to getBlockNumber and ingestion", async () => {
@@ -348,7 +356,7 @@ describe("runDevPriceSeed", () => {
 
     const deps: SeedPricesDeps = {
       publicClient: {
-        getChainId: async () => PULSECHAIN_CHAIN_ID,
+        request: async () => PULSECHAIN_CHAIN_ID_HEX,
         getBlockNumber: async () => { blockNumberCalled = true; return 1n; },
       } as never,
       runIngestion: async () => { ingestionCalled = true; return makeIngestionResult(); },
@@ -363,7 +371,7 @@ describe("runDevPriceSeed", () => {
   it("returns rpc-unavailable when getBlockNumber throws (after correct chain)", async () => {
     const deps: SeedPricesDeps = {
       publicClient: {
-        getChainId: async () => PULSECHAIN_CHAIN_ID,
+        request: async () => PULSECHAIN_CHAIN_ID_HEX,
         getBlockNumber: async () => { throw new Error("timeout after chain check"); },
       } as never,
       runIngestion: async () => { throw new Error("should not be reached"); },
@@ -487,9 +495,7 @@ describe("runDevPriceSeed", () => {
     const deps: SeedPricesDeps = {
       rpcUrl: SECRET_RPC_URL,
       publicClient: {
-        getChainId: async () => {
-          throw new Error(`Failed to fetch: ${SECRET_RPC_URL}`);
-        },
+        request: async () => { throw new Error(`Failed to fetch: ${SECRET_RPC_URL}`); },
         getBlockNumber: async () => 1n,
       } as never,
       runIngestion: async () => makeIngestionResult(),
@@ -511,7 +517,7 @@ describe("runDevPriceSeed", () => {
     const deps: SeedPricesDeps = {
       rpcUrl: SECRET_RPC_URL,
       publicClient: {
-        getChainId: async () => WRONG_CHAIN_ID,
+        request: async () => WRONG_CHAIN_ID_HEX,
         getBlockNumber: async () => 1n,
       } as never,
       runIngestion: async () => makeIngestionResult(),
