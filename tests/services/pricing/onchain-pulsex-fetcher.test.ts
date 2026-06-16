@@ -718,11 +718,11 @@ describe("fetchOnchainPulseXPrice", () => {
     });
   });
 
-  describe("pDAI par observation", () => {
+  describe("pDAI routing reference — not priced", () => {
     const PDAI_ASSET_ID = `chain:369:erc20:${PDAI_ADDRESS.toLowerCase()}`;
 
-    it("returns ok: true with price 1 without any RPC calls", async () => {
-      // Client that throws on any call — should never be invoked for pDAI
+    it("returns ok: false with reason pdai_routing_reference — never makes RPC calls", async () => {
+      // Client that throws on any call — must never be invoked for pDAI
       const client = buildMockClient(({ functionName }) => {
         throw new Error(`Unexpected RPC call for pDAI: ${functionName}`);
       });
@@ -738,12 +738,14 @@ describe("fetchOnchainPulseXPrice", () => {
         observedAt: OBSERVED_AT,
       });
 
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.draft.price).toBe("1");
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("pdai_routing_reference");
     });
 
-    it("uses ORACLE sourceType and pulsex:pdai:par sourceId", async () => {
+    it("does not persist a fabricated par observation for pDAI", async () => {
+      // Regression: previously returned { price:"1", confidence:"1" } which violated
+      // the project guardrail "Treat pDAI as volatile — never force pDAI to $1."
       const client = buildMockClient(() => {
         throw new Error("should not be called");
       });
@@ -759,23 +761,23 @@ describe("fetchOnchainPulseXPrice", () => {
         observedAt: OBSERVED_AT,
       });
 
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.draft.sourceType).toBe("ORACLE");
-      expect(result.draft.sourceId).toBe("pulsex:pdai:par");
+      expect(result.ok).toBe(false);
+      // Ingestion must treat this as a skip (not a real failure)
+      if (result.ok) return;
+      expect(result.reason).toBe("pdai_routing_reference");
     });
+  });
 
-    it("sets assetAddress to PDAI_ADDRESS and preserves observedAt and blockNumber", async () => {
-      const client = buildMockClient(() => {
-        throw new Error("should not be called");
-      });
+  describe("pdaiParAssumption metadata on transitive observations", () => {
+    it("includes pdaiParAssumption: true in routeMetadata for non-pDAI assets", async () => {
+      const client = buildHappyV1Client();
 
       const result = await fetchOnchainPulseXPrice({
         publicClient: client,
         chainId: CHAIN_ID,
-        assetId: PDAI_ASSET_ID,
-        tokenAddress: PDAI_ADDRESS,
-        tokenDecimals: 18,
+        assetId: PHEX_ASSET_ID,
+        tokenAddress: PHEX_ADDRESS,
+        tokenDecimals: PHEX_DECIMALS,
         quoteAsset: QUOTE_ASSET,
         blockNumber: BLOCK_NUMBER,
         observedAt: OBSERVED_AT,
@@ -783,10 +785,24 @@ describe("fetchOnchainPulseXPrice", () => {
 
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.draft.assetAddress).toBe(PDAI_ADDRESS);
-      expect(result.draft.observedAt).toBe(OBSERVED_AT);
-      expect(result.draft.blockNumber).toBe(BLOCK_NUMBER);
-      expect(result.draft.confidence).toBe("1");
+      expect(result.draft.routeMetadata?.pdaiParAssumption).toBe(true);
+    });
+
+    it("includes pdaiParAssumption: true for native PLS observations", async () => {
+      const result = await fetchOnchainPulseXPrice({
+        publicClient: buildHappyV1PlsClient(),
+        chainId: CHAIN_ID,
+        assetId: PLS_ASSET_ID,
+        tokenAddress: PLS_ZERO_ADDRESS,
+        tokenDecimals: PLS_DECIMALS,
+        quoteAsset: QUOTE_ASSET,
+        blockNumber: BLOCK_NUMBER,
+        observedAt: OBSERVED_AT,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.draft.routeMetadata?.pdaiParAssumption).toBe(true);
     });
   });
 

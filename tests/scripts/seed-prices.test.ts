@@ -76,6 +76,8 @@ function makeIngestionResult(overrides?: Partial<PriceIngestionResult>): PriceIn
     persistedCount: 3,
     failedCount: 0,
     failedAssets: [],
+    skippedCount: 0,
+    skippedAssets: [],
     ...overrides,
   };
 }

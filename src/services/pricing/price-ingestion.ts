@@ -33,6 +33,9 @@ export type PriceIngestionResult = {
   persistedCount: number;
   failedCount: number;
   failedAssets: readonly string[];
+  /** Assets skipped for an expected, non-error reason (e.g. pDAI routing reference). */
+  skippedCount: number;
+  skippedAssets: readonly string[];
 };
 
 export async function runPriceIngestion(
@@ -50,6 +53,7 @@ export async function runPriceIngestion(
 
   const drafts: PriceObservationDraft[] = [];
   const failedAssets: string[] = [];
+  const skippedAssets: string[] = [];
 
   for (const asset of args.assets) {
     const result = await fetchPrice({
@@ -65,6 +69,14 @@ export async function runPriceIngestion(
 
     if (result.ok) {
       drafts.push(result.draft);
+    } else if (result.reason === "pdai_routing_reference") {
+      // pDAI is the routing leg — pricing it is circular and fabricating price:"1"
+      // violates the project guardrail. This is an expected skip, not an error.
+      logInfo("Skipping pDAI price ingestion — pDAI is the routing reference asset", {
+        assetId: asset.assetId,
+        chainId: args.chainId,
+      });
+      skippedAssets.push(asset.assetId);
     } else {
       logError("Price fetch failed during ingestion", {
         assetId: asset.assetId,
@@ -98,5 +110,7 @@ export async function runPriceIngestion(
     persistedCount,
     failedCount: failedAssets.length,
     failedAssets,
+    skippedCount: skippedAssets.length,
+    skippedAssets,
   };
 }
