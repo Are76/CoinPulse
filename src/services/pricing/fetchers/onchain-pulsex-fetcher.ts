@@ -104,13 +104,20 @@ export type FetchOnchainPriceResult =
   | { ok: false; reason: string };
 
 /**
- * Fetches a USD spot price for a PulseChain token by routing through the
- * official PulseX V1 router, falling back to V2 if V1 returns zero or throws.
+ * Fetches a pDAI-denominated spot price for a PulseChain token by routing
+ * through the official PulseX V1 router, falling back to V2 if V1 returns
+ * zero or throws.
  *
  * Route: tokenAddress → WPLS → pDAI  (or WPLS → pDAI for native PLS)
  *
- * Special case: pDAI is the USD quote reference asset — its price is returned
- * as a deterministic par observation (1 USD) without any pool routing.
+ * All returned prices are expressed in pDAI units. The project treats pDAI as
+ * volatile ("never force pDAI to $1"), so callers must not silently relabel
+ * the result as a USD price without surfacing the pDAI-par assumption.
+ *
+ * pDAI itself is not priced by this fetcher: routing pDAI→WPLS→pDAI is
+ * circular, and fabricating price:"1" violates the project guardrail. Requests
+ * for pDAI return `ok: false` with reason `"pdai_routing_reference"`. Ingestion
+ * treats this as an expected skip, not a real error.
  *
  * The observation is persisted as ONCHAIN_POOL with a confidence score derived
  * from the first-hop pair's reserve size.
@@ -122,10 +129,11 @@ export async function fetchOnchainPulseXPrice(
     return { ok: false, reason: `unsupported_chain_id:${args.chainId}` };
   }
 
-  // pDAI is the USD reference asset — routing pDAI→WPLS→pDAI is circular.
-  // Return a deterministic par observation rather than a pool quote.
+  // pDAI is the routing reference leg — pDAI→WPLS→pDAI would be circular,
+  // and hardcoding price:"1" violates "Treat pDAI as volatile — never force
+  // pDAI to $1." Ingestion must not count this as a real failure.
   if (args.tokenAddress.toLowerCase() === PDAI_ADDRESS.toLowerCase()) {
-    return buildPdaiParDraft(args);
+    return { ok: false, reason: "pdai_routing_reference" };
   }
 
   // Native PLS has no contract — route via WPLS instead
@@ -379,32 +387,6 @@ function toObservationPrice(value: Decimal): string {
 }
 
 /**
- * Returns a deterministic par observation for pDAI, the USD quote reference
- * asset. pDAI→WPLS→pDAI routing is circular and meaningless; the price is 1
- * by definition of the pricing unit.
- */
-function buildPdaiParDraft(args: FetchOnchainPriceArgs): FetchOnchainPriceResult {
-  const draft: PriceObservationDraft = {
-    chainId: args.chainId,
-    assetId: args.assetId,
-    assetAddress: PDAI_ADDRESS,
-    quoteAsset: args.quoteAsset,
-    price: "1",
-    sourceType: "ORACLE",
-    sourceId: "pulsex:pdai:par",
-    routeMetadata: {
-      note: "pDAI is the USD quote reference asset; price 1 is deterministic",
-    },
-    liquidityUsd: null,
-    confidence: "1",
-    observedAt: args.observedAt,
-    blockNumber: args.blockNumber,
-    staleAfterSeconds: STALE_AFTER_SECONDS,
-  };
-  return { ok: true, draft };
-}
-
-/**
  * Assembles a `PriceObservationDraft` from a successful router result, attaching
  * route metadata, liquidity, and a confidence score derived from pool depth.
  */
@@ -434,6 +416,8 @@ function buildDraft(
       path: result.routePath,
       factoryAddress: result.factoryAddress,
       pairAddress: result.pairAddress,
+      // Price is pDAI-denominated; USD equivalence assumes pDAI ≡ $1
+      pdaiParAssumption: true,
     },
     liquidityUsd: result.liquidityUsd?.toFixed(2) ?? null,
     confidence: confidence.toString(),
