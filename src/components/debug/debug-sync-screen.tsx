@@ -17,6 +17,7 @@ import { SurfaceCard } from "@/components/ui/surface-card";
 import { TimestampLabel } from "@/components/ui/value/timestamp-label";
 import {
   ApiClientError,
+  OPERATOR_MAX_BLOCK_SPAN,
   SOURCE_FAMILY_OPTIONS,
   type DebugStatusReportDto,
   type HealthReportDto,
@@ -389,6 +390,9 @@ export function DebugSyncScreen() {
           subtitle="POST /api/sync/manual. The page sends the exact operator inputs and renders the backend response verbatim."
         >
           <form className="grid gap-4" onSubmit={handleManualSync}>
+            <WarningBanner>
+              Max block span: <strong>{OPERATOR_MAX_BLOCK_SPAN.toLocaleString()} blocks</strong>. For heavy source families (DEX, LP, STAKING) use a smaller range or run families separately.
+            </WarningBanner>
             <div className="grid gap-4 md:grid-cols-2">
               <LabeledField label="Start block (optional)">
                 <input
@@ -439,6 +443,9 @@ export function DebugSyncScreen() {
           subtitle="POST /api/rebuild. Rebuild stays backend-owned; the frontend only submits scope and renders the response."
         >
           <form className="grid gap-4" onSubmit={handleRebuild}>
+            <WarningBanner>
+              Max block span: <strong>{OPERATOR_MAX_BLOCK_SPAN.toLocaleString()} blocks</strong>. For heavy source families (DEX, LP, STAKING) use a smaller range or run families separately.
+            </WarningBanner>
             <div className="grid gap-4 md:grid-cols-2">
               <LabeledField label="From block">
                 <input

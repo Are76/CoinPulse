@@ -167,6 +167,95 @@ describe("POST /api/sync/manual", () => {
     expect(JSON.stringify(body)).not.toContain("rpc token secret leaked");
   });
 
+  it("rejects block spans above the safe limit before calling the sync service", async () => {
+    const { POST } = await import("../../app/api/sync/manual/route");
+    const response = await POST(
+      new Request("http://localhost/api/sync/manual", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          sourceFamilies: ["TRANSFERS", "DEX", "LP", "STAKING"],
+          startBlock: "26740000",
+          endBlock: "26797360",
+          policyLabel: "manual-dashboard-sync",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error.code).toBe("INVALID_INPUT");
+    expect(body.error.message).toBe("Invalid request input.");
+    expect(body.error.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: expect.stringContaining("Block span exceeds") }),
+      ]),
+    );
+    expect(runWalletSync).not.toHaveBeenCalled();
+  });
+
+  it("accepts block spans at or below the safe limit", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-1",
+      address: "0x1111111111111111111111111111111111111111",
+      chainId: 369,
+    });
+    runWalletSync.mockResolvedValue({
+      runId: "sync-run-safe",
+      counts: { rawLogs: 2, actionGroups: 1, ledgerEntries: 2 },
+      warningCount: 0,
+      latestSafeBlock: 1000n,
+    });
+
+    const { POST } = await import("../../app/api/sync/manual/route");
+    const response = await POST(
+      new Request("http://localhost/api/sync/manual", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          sourceFamilies: ["TRANSFERS"],
+          startBlock: "0",
+          endBlock: "1000",
+          policyLabel: "manual-dashboard-sync",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(runWalletSync).toHaveBeenCalled();
+  });
+
+  it("returns a structured 400 with a safe message that does not leak secrets", async () => {
+    const { POST } = await import("../../app/api/sync/manual/route");
+    const response = await POST(
+      new Request("http://localhost/api/sync/manual", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          sourceFamilies: ["TRANSFERS"],
+          startBlock: "0",
+          endBlock: "99999",
+          policyLabel: "manual-dashboard-sync",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    const bodyStr = JSON.stringify(body);
+    expect(bodyStr).not.toMatch(/rpc/i);
+    expect(bodyStr).not.toMatch(/secret/i);
+    expect(bodyStr).not.toMatch(/stack/i);
+    expect(bodyStr).not.toMatch(/env\b/i);
+    expect(runWalletSync).not.toHaveBeenCalled();
+  });
+
   it("returns a structured 409 conflict when manual sync is blocked by an active rebuild", async () => {
     resolveTrackedWalletByAddress.mockResolvedValue({
       id: "wallet-1",
@@ -329,6 +418,34 @@ describe("POST /api/rebuild", () => {
       toBlock: 200n,
       sourceFamilies: ["TRANSFERS", "DEX"],
     });
+  });
+
+  it("rejects rebuild block spans above the safe limit before calling the rebuild service", async () => {
+    const { POST } = await import("../../app/api/rebuild/route");
+    const response = await POST(
+      new Request("http://localhost/api/rebuild", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: "0x1111111111111111111111111111111111111111",
+          chainId: 369,
+          fromBlock: "26740000",
+          toBlock: "26797360",
+          sourceFamilies: ["TRANSFERS", "DEX"],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error.code).toBe("INVALID_INPUT");
+    expect(body.error.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: expect.stringContaining("Block span exceeds") }),
+      ]),
+    );
+    expect(resolveTrackedWalletByAddress).not.toHaveBeenCalled();
+    expect(runRebuildOperation).not.toHaveBeenCalled();
   });
 
   it("returns a structured validation error for invalid rebuild input", async () => {

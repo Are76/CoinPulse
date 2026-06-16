@@ -4,6 +4,15 @@ import { z, ZodError } from "zod";
 
 const SOURCE_FAMILY_VALUES = ["TRANSFERS", "DEX", "LP", "STAKING", "NATIVE"] as const;
 
+/**
+ * Conservative block-span limit for operator manual sync/rebuild.
+ * DEX, LP, and STAKING source families expand the RPC payload substantially
+ * per block. At 57k blocks × 4 families the Node process runs out of heap.
+ * Backend enforces this limit; the frontend mirrors it for UX only.
+ */
+export const MANUAL_SYNC_MAX_BLOCK_SPAN = 1_000n;
+export const REBUILD_MAX_BLOCK_SPAN = 1_000n;
+
 const walletAddressSchema = z
   .string()
   .trim()
@@ -48,10 +57,19 @@ export const manualSyncRequestSchema = z
     endBlock: blockNumberSchema,
     policyLabel: z.string().trim().min(1).max(128),
   })
-  .refine((value) => !value.startBlock || value.startBlock <= value.endBlock, {
+  .refine((value) => value.startBlock === undefined || value.startBlock <= value.endBlock, {
     path: ["startBlock"],
     message: "startBlock must be less than or equal to endBlock.",
-  });
+  })
+  .refine(
+    (value) =>
+      value.startBlock === undefined ||
+      value.endBlock - value.startBlock <= MANUAL_SYNC_MAX_BLOCK_SPAN,
+    {
+      path: ["endBlock"],
+      message: `Block span exceeds the safe operator limit of ${MANUAL_SYNC_MAX_BLOCK_SPAN} blocks. Use a smaller range or run source families separately.`,
+    },
+  );
 
 export const rebuildRequestSchema = z
   .object({
@@ -64,7 +82,14 @@ export const rebuildRequestSchema = z
   .refine((value) => value.fromBlock <= value.toBlock, {
     path: ["fromBlock"],
     message: "fromBlock must be less than or equal to toBlock.",
-  });
+  })
+  .refine(
+    (value) => value.toBlock - value.fromBlock <= REBUILD_MAX_BLOCK_SPAN,
+    {
+      path: ["toBlock"],
+      message: `Block span exceeds the safe operator limit of ${REBUILD_MAX_BLOCK_SPAN} blocks. Use a smaller range or run source families separately.`,
+    },
+  );
 
 export const walletImportRequestSchema = z.object({
   walletAddress: walletAddressSchema,
