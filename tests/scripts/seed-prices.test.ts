@@ -301,6 +301,22 @@ describe("runDevPriceSeed", () => {
     }
   });
 
+  it("returns ingestion-failed when runIngestion throws", async () => {
+    const deps: SeedPricesDeps = {
+      publicClient: { getBlockNumber: async () => 100n } as never,
+      runIngestion: async () => {
+        throw new Error("db connection refused");
+      },
+    };
+
+    const result = await runDevPriceSeed(deps);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("ingestion-failed");
+      expect(result.detail).toContain("db connection refused");
+    }
+  });
+
   it("no hardcoded price value is present in args passed to ingestion", async () => {
     let capturedAssets: readonly PriceIngestAsset[] = [];
 

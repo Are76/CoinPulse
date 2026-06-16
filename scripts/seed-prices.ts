@@ -134,14 +134,21 @@ export async function runDevPriceSeed(
       return runPriceIngestion(args, { publicClient: deps.publicClient });
     });
 
-  const result = await ingestionFn({
-    chainId: PULSECHAIN_REFERENCE.id,
-    blockNumber,
-    observedAt,
-    assets,
-  });
-
-  return { ok: true, result };
+  try {
+    const result = await ingestionFn({
+      chainId: PULSECHAIN_REFERENCE.id,
+      blockNumber,
+      observedAt,
+      assets,
+    });
+    return { ok: true, result };
+  } catch (err) {
+    return {
+      ok: false,
+      code: "ingestion-failed",
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 // ─── CLI entrypoint ────────────────────────────────────────────────────────────
