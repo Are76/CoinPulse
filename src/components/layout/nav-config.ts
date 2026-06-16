@@ -12,6 +12,7 @@ export const PRIMARY_NAV_LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/transactions", label: "Transactions" },
   { href: "/hexmining", label: "HexMining" },
+  { href: "/portfolio/assets", label: "Holdings" },
 ] as const;
 
 export const OPERATOR_NAV_LINKS = [

@@ -31,6 +31,7 @@ describe("src/app canonical pages exist", () => {
     "debug/wallets/tracked",
     "debug/prices/status",
     "transactions",
+    "portfolio/assets",
   ];
 
   for (const route of routes) {
@@ -50,6 +51,7 @@ describe("root app/ re-export pages exist for all src/app pages", () => {
     "debug/wallets/tracked",
     "debug/prices/status",
     "transactions",
+    "portfolio/assets",
   ];
 
   for (const route of routes) {
@@ -69,6 +71,7 @@ describe("root app/ re-export files are thin (no direct hook/client imports)", (
     { route: "debug/wallets/tracked", label: "/debug/wallets/tracked" },
     { route: "debug/prices/status", label: "/debug/prices/status" },
     { route: "transactions", label: "/transactions" },
+    { route: "portfolio/assets", label: "/portfolio/assets" },
   ];
 
   for (const { route, label } of routes) {
