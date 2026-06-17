@@ -113,6 +113,14 @@ describe("runWalletSync", () => {
         stage: "COMPLETED",
       }),
     );
+    expect(runStore.updates[0]).toEqual(
+      expect.objectContaining({
+        runId: "run_1",
+        status: "RUNNING",
+        stage: "INGESTING_RAW_LOGS",
+        startBlock: 121n,
+      }),
+    );
     expect(result.counts).toEqual({
       rawLogs: 2,
       actionGroups: 1,
@@ -259,6 +267,48 @@ describe("runWalletSync", () => {
       }),
     ).rejects.toThrow(
       "Unsupported source families for the current concrete sync path: DEX. Supported families: TRANSFERS.",
+    );
+  });
+
+  it("marks a pre-reserved run failed when unsupported families fail before ingestion", async () => {
+    const runStore = createRunStore();
+
+    await expect(
+      runWalletSync({
+        wallet: {
+          id: "wallet_1",
+          chainId: 369,
+          address: "0x1111111111111111111111111111111111111111",
+        },
+        sourceFamilies: ["NATIVE"],
+        startBlock: 10n,
+        endBlock: 20n,
+        policyLabel: "unsupported-family",
+        dependencies: {
+          supportedSourceFamilies: ["TRANSFERS"],
+          runStore,
+          cursorStore: {
+            getCursor: vi.fn(async () => null),
+            upsertCursor: vi.fn(async () => undefined),
+          },
+          reserveOperationRun: vi.fn(async () => ({ id: "pre-reserved-run" })),
+          ingestSourceFamily: vi.fn(),
+          normalizeSourceFamily: vi.fn(),
+          persistLedger: vi.fn(),
+        },
+      }),
+    ).rejects.toThrow(
+      "Unsupported source families for the current concrete sync path: NATIVE. Supported families: TRANSFERS.",
+    );
+
+    expect(runStore.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "pre-reserved-run",
+        status: "FAILED",
+        stage: "PENDING",
+        startBlock: 10n,
+        errorMessage: expect.stringContaining("unknown-range"),
+      }),
     );
   });
 

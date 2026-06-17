@@ -63,10 +63,10 @@ export async function runWalletSync<TLog = unknown>(args: {
   trigger?: SyncTrigger;
   dependencies?: Partial<SyncRunDependencies<TLog>>;
 }) {
-  const defaultDeps = createSyncDependencies() as unknown as SyncRunDependencies<TLog>;
-  const dependencies: SyncRunDependencies<TLog> = args.dependencies
-    ? { ...defaultDeps, ...args.dependencies }
-    : defaultDeps;
+  const defaultDeps = needsConcreteSyncDefaults(args.dependencies)
+    ? createSyncDependencies()
+    : undefined;
+  const dependencies = buildSyncDependencies<TLog>(args.dependencies, defaultDeps);
   const unsupportedSourceFamilies = (dependencies.supportedSourceFamilies
     ? args.sourceFamilies.filter(
         (sourceFamily) =>
@@ -74,12 +74,17 @@ export async function runWalletSync<TLog = unknown>(args: {
       )
     : []) as SourceFamily[];
 
-  if (unsupportedSourceFamilies.length > 0) {
-    throw new Error(
-      `Unsupported source families for the current concrete sync path: ${unsupportedSourceFamilies.join(
-        ", ",
-      )}. Supported families: ${dependencies.supportedSourceFamilies?.join(", ") ?? "none"}.`,
-    );
+  const unsupportedSourceFamiliesError =
+    unsupportedSourceFamilies.length > 0
+      ? new Error(
+          `Unsupported source families for the current concrete sync path: ${unsupportedSourceFamilies.join(
+            ", ",
+          )}. Supported families: ${dependencies.supportedSourceFamilies?.join(", ") ?? "none"}.`,
+        )
+      : null;
+
+  if (unsupportedSourceFamiliesError && !args.dependencies?.reserveOperationRun) {
+    throw unsupportedSourceFamiliesError;
   }
 
   const runStore = dependencies.runStore ?? createPrismaSyncRunStore();
@@ -107,6 +112,7 @@ export async function runWalletSync<TLog = unknown>(args: {
       };
     }),
   );
+  const plannedStartBlock = minBlock(syncPlans.map((plan) => plan.fromBlock));
 
   const run = await reserveRun({
     walletId: args.wallet.id,
@@ -115,7 +121,7 @@ export async function runWalletSync<TLog = unknown>(args: {
     status: "PENDING",
     stage: "PENDING",
     sourceFamilies: args.sourceFamilies,
-    startBlock: minBlock(syncPlans.map((plan) => plan.fromBlock)),
+    startBlock: plannedStartBlock,
     endBlock: args.endBlock,
     policyLabel: args.policyLabel,
   });
@@ -138,6 +144,10 @@ export async function runWalletSync<TLog = unknown>(args: {
   };
 
   try {
+    if (unsupportedSourceFamiliesError) {
+      throw unsupportedSourceFamiliesError;
+    }
+
     for (const plan of syncPlans) {
       if (plan.fromBlock > args.endBlock) {
         latestSafeBlock = args.endBlock;
@@ -155,6 +165,7 @@ export async function runWalletSync<TLog = unknown>(args: {
         runId: run.id,
         status: "RUNNING",
         stage: currentStage,
+        startBlock: plannedStartBlock,
         latestSafeBlock,
         warningCount,
         warningDetails,
@@ -258,6 +269,7 @@ export async function runWalletSync<TLog = unknown>(args: {
       runId: run.id,
       status: "FAILED",
       stage: currentStage,
+      startBlock: plannedStartBlock,
       latestSafeBlock,
       warningCount,
       warningDetails,
@@ -276,6 +288,43 @@ export async function runWalletSync<TLog = unknown>(args: {
 
     throw error;
   }
+}
+
+function needsConcreteSyncDefaults<TLog>(
+  dependencies: Partial<SyncRunDependencies<TLog>> | undefined,
+) {
+  return (
+    !dependencies ||
+    !dependencies.ingestSourceFamily ||
+    !dependencies.normalizeSourceFamily
+  );
+}
+
+function buildSyncDependencies<TLog>(
+  dependencies: Partial<SyncRunDependencies<TLog>> | undefined,
+  defaultDeps: ReturnType<typeof createSyncDependencies> | undefined,
+): SyncRunDependencies<TLog> {
+  const ingestSourceFamily =
+    dependencies?.ingestSourceFamily ??
+    (defaultDeps?.ingestSourceFamily as SyncRunDependencies<TLog>["ingestSourceFamily"] | undefined);
+  const normalizeSourceFamily =
+    dependencies?.normalizeSourceFamily ??
+    (defaultDeps?.normalizeSourceFamily as SyncRunDependencies<TLog>["normalizeSourceFamily"] | undefined);
+
+  if (!ingestSourceFamily || !normalizeSourceFamily) {
+    throw new Error("runWalletSync requires ingest and normalization dependencies.");
+  }
+
+  return {
+    supportedSourceFamilies:
+      dependencies?.supportedSourceFamilies ?? defaultDeps?.supportedSourceFamilies,
+    runStore: dependencies?.runStore ?? defaultDeps?.runStore,
+    cursorStore: dependencies?.cursorStore ?? defaultDeps?.cursorStore,
+    reserveOperationRun: dependencies?.reserveOperationRun,
+    ingestSourceFamily,
+    normalizeSourceFamily,
+    persistLedger: dependencies?.persistLedger ?? defaultDeps?.persistLedger,
+  };
 }
 
 function buildSyncFailureMessage(args: {
