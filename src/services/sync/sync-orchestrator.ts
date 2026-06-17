@@ -61,10 +61,12 @@ export async function runWalletSync<TLog = unknown>(args: {
   startBlock?: bigint;
   policyLabel: string;
   trigger?: SyncTrigger;
-  dependencies?: SyncRunDependencies<TLog>;
+  dependencies?: Partial<SyncRunDependencies<TLog>>;
 }) {
-  const dependencies =
-    args.dependencies ?? (createSyncDependencies() as unknown as SyncRunDependencies<TLog>);
+  const defaultDeps = createSyncDependencies() as unknown as SyncRunDependencies<TLog>;
+  const dependencies: SyncRunDependencies<TLog> = args.dependencies
+    ? { ...defaultDeps, ...args.dependencies }
+    : defaultDeps;
   const unsupportedSourceFamilies = (dependencies.supportedSourceFamilies
     ? args.sourceFamilies.filter(
         (sourceFamily) =>
