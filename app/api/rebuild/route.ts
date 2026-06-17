@@ -3,6 +3,7 @@ import { ZodError } from "zod";
 
 import { isOperationConflictError, reserveOperationRun } from "@/services/operations/operation-lock";
 import { runRebuildOperation } from "@/services/rebuild";
+import { classifySyncError } from "@/services/sync/sync-error-classifier";
 import {
   buildConflictResponse,
   buildInternalErrorResponse,
@@ -56,6 +57,7 @@ export async function POST(request: Request) {
           route: "POST /api/rebuild",
           runId: run.id,
           errorName: error instanceof Error ? error.name : typeof error,
+          errorCategory: classifySyncError(error),
         });
       }
     });
