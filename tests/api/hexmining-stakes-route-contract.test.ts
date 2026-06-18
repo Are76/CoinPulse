@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HexStakeDto, HexStakeListDto } from "@/services/hexmining/types";
 
@@ -7,6 +7,8 @@ const readNativeHexStakes = vi.fn();
 const createPublicClientForChain = vi.fn();
 const estimateHexMiningYield = vi.fn();
 const getObservationEvidenceWithPayloadForRange = vi.fn();
+const readFreshHexStakeSnapshot = vi.fn();
+const writeHexStakeSnapshot = vi.fn();
 
 vi.mock("@/services/hexmining/reader", () => ({
   readNativeHexStakes,
@@ -22,6 +24,11 @@ vi.mock("@/services/hexmining/yield-estimator", () => ({
 
 vi.mock("@/services/hexmining/observation-evidence-provider", () => ({
   getObservationEvidenceWithPayloadForRange,
+}));
+
+vi.mock("@/services/hexmining/stake-snapshot-store", () => ({
+  readFreshHexStakeSnapshot,
+  writeHexStakeSnapshot,
 }));
 
 const WALLET_ADDRESS = "0x1111111111111111111111111111111111111111";
@@ -319,6 +326,11 @@ function makeUrl(params: Record<string, string | number | undefined>): string {
 }
 
 describe("GET /api/hexmining/stakes route contract", () => {
+  beforeEach(() => {
+    readFreshHexStakeSnapshot.mockResolvedValue(null);
+    writeHexStakeSnapshot.mockResolvedValue(undefined);
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
     vi.resetModules();

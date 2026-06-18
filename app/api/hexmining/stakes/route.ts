@@ -8,6 +8,10 @@ import { readNativeHexStakes } from "@/services/hexmining/reader";
 import { getObservationEvidenceWithPayloadForRange } from "@/services/hexmining/observation-evidence-provider";
 import { estimateHexMiningYield } from "@/services/hexmining/yield-estimator";
 import {
+  readFreshHexStakeSnapshot,
+  writeHexStakeSnapshot,
+} from "@/services/hexmining/stake-snapshot-store";
+import {
   buildInternalErrorResponse,
   buildInvalidInputResponse,
   parseSearchParams,
@@ -29,6 +33,20 @@ const hexminingStakesRequestSchema = z.object({
 export async function GET(request: Request) {
   try {
     const input = parseSearchParams(hexminingStakesRequestSchema, request);
+
+    let cached = null;
+    try {
+      cached = await readFreshHexStakeSnapshot({
+        walletAddress: input.walletAddress,
+        chainId: input.chainId,
+      });
+    } catch {
+      // Snapshot read failure is non-fatal — fall through to live RPC.
+    }
+    if (cached) {
+      return Response.json({ data: cached });
+    }
+
     const publicClient =
       createPublicClientForChain() as unknown as HexMiningReadClient;
     const stakes = await readNativeHexStakes({
@@ -40,6 +58,19 @@ export async function GET(request: Request) {
           fetchEvidence: getObservationEvidenceWithPayloadForRange,
         }),
     });
+
+    if (stakes.isComplete && stakes.warnings.length === 0) {
+      try {
+        await writeHexStakeSnapshot({
+          walletAddress: input.walletAddress,
+          chainId: input.chainId,
+          dto: stakes,
+        });
+      } catch {
+        // Snapshot write failure is non-fatal — live data is still returned.
+      }
+    }
+
     return Response.json({ data: stakes });
   } catch (error) {
     if (error instanceof ZodError) {
