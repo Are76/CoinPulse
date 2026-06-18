@@ -392,7 +392,7 @@ describe("GET /api/debug/status route contract", () => {
     await expect(response.json()).resolves.toMatchObject({
       data: {
         status: "ok",
-        sourceFamilies: ["TRANSFERS", "DEX", "LP", "STAKING", "NATIVE"],
+        sourceFamilies: ["TRANSFERS", "DEX", "LP", "STAKING"],
         operationState: {
           ingestionDiagnostics: [
             {
