@@ -134,7 +134,7 @@ describe("hexmining client — fetchHexMiningStakes", () => {
           },
           yield: {
             status: "unsupported",
-            estimatedYieldHex: null,
+            estimatedYieldHearts: null,
             bpdYieldHex: null,
             bpdYieldStatus: null,
             provenance: null,
@@ -172,7 +172,7 @@ describe("hexmining client — fetchHexMiningStakes", () => {
     expect(stake.pnl.status).toBe("unsupported");
     expect(stake.pnl.averageCost).toBeNull();
     expect(stake.yield.status).toBe("unsupported");
-    expect(stake.yield.estimatedYieldHex).toBeNull();
+    expect(stake.yield.estimatedYieldHearts).toBeNull();
   });
 
   it("returns unsupported-chain DTO unchanged when route returns degraded response", async () => {

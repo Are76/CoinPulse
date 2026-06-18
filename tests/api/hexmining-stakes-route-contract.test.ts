@@ -115,7 +115,7 @@ function makeSingleStakeDto(): HexStakeListDto {
     },
     yield: {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,
@@ -178,7 +178,7 @@ function makeYieldDtoFromEstimate(result: {
     if (result.bpdYieldHex !== undefined && result.bpdYieldHex !== null) {
       return {
         status: "estimated",
-        estimatedYieldHex: result.yieldHex,
+        estimatedYieldHearts: result.yieldHex,
         bpdYieldHex: result.bpdYieldHex,
         bpdYieldStatus: "applicable",
         provenance,
@@ -188,7 +188,7 @@ function makeYieldDtoFromEstimate(result: {
 
     return {
       status: "estimated",
-      estimatedYieldHex: result.yieldHex,
+      estimatedYieldHearts: result.yieldHex,
       bpdYieldHex: null,
       bpdYieldStatus: "unknown",
       provenance,
@@ -199,7 +199,7 @@ function makeYieldDtoFromEstimate(result: {
   if (result.status === "unsupported") {
     return {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,
@@ -223,7 +223,7 @@ function makeYieldDtoFromEstimate(result: {
 
   return {
     status: "unavailable",
-    estimatedYieldHex: null,
+    estimatedYieldHearts: null,
     bpdYieldHex: null,
     bpdYieldStatus: "unknown",
     provenance,
@@ -561,7 +561,7 @@ describe("GET /api/hexmining/stakes route contract", () => {
     expect(stake.pnl.costBasisPolicy).toBeNull();
 
     expect(stake.yield.status).toBe("unsupported");
-    expect(stake.yield.estimatedYieldHex).toBeNull();
+    expect(stake.yield.estimatedYieldHearts).toBeNull();
     expect(stake.yield.bpdYieldHex).toBeNull();
     expect(stake.yield.bpdYieldStatus).toBeNull();
   });
@@ -711,7 +711,7 @@ describe("GET /api/hexmining/stakes route contract", () => {
       const body = await response.json();
       const yieldDto = body.data.stakes[0].yield;
       expect(yieldDto.status).toBe("unavailable");
-      expect(yieldDto.estimatedYieldHex).toBeNull();
+      expect(yieldDto.estimatedYieldHearts).toBeNull();
       expect(yieldDto.bpdYieldHex).toBeNull();
       if (status === "insufficient_observations") {
         expect(yieldDto.provenance).toBeNull();
@@ -748,14 +748,14 @@ describe("GET /api/hexmining/stakes route contract", () => {
     const body = JSON.parse(bodyText);
     expect(body.data.stakes[0].yield).toMatchObject({
       status: "unavailable",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       provenance: null,
       warnings: ["hexmining-yield-estimator-threw"],
     });
   });
 
-  it("preserves unsupported fallback and does not fabricate estimatedYieldHex", async () => {
+  it("preserves unsupported fallback and does not fabricate estimatedYieldHearts", async () => {
     createPublicClientForChain.mockReturnValue({});
     mockReaderInvokesRouteYieldDependency();
     estimateHexMiningYield.mockResolvedValue(makeEstimateResult("unsupported"));
@@ -771,7 +771,7 @@ describe("GET /api/hexmining/stakes route contract", () => {
     const body = await response.json();
     expect(body.data.stakes[0].yield).toMatchObject({
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,
@@ -779,7 +779,7 @@ describe("GET /api/hexmining/stakes route contract", () => {
     });
   });
 
-  it("only exposes non-null estimatedYieldHex when estimator returns a valid estimated result with provenance", async () => {
+  it("only exposes non-null estimatedYieldHearts when estimator returns a valid estimated result with provenance", async () => {
     createPublicClientForChain.mockReturnValue({});
     mockReaderInvokesRouteYieldDependency();
     estimateHexMiningYield.mockResolvedValue({
@@ -811,7 +811,7 @@ describe("GET /api/hexmining/stakes route contract", () => {
     expect(body.data.stakes).toHaveLength(1);
     expect(body.data.stakes[0].yield).toMatchObject({
       status: "estimated",
-      estimatedYieldHex: "12345",
+      estimatedYieldHearts: "12345",
       bpdYieldHex: null,
       bpdYieldStatus: "unknown",
       provenance: expect.objectContaining({ observationId: "obs-estimated" }),
@@ -851,7 +851,7 @@ describe("GET /api/hexmining/stakes route contract", () => {
     expect(body.data.stakes).toHaveLength(2);
     for (const stake of body.data.stakes) {
       expect(stake.yield.status).toBe("unsupported");
-      expect(stake.yield.estimatedYieldHex).toBeNull();
+      expect(stake.yield.estimatedYieldHearts).toBeNull();
       expect(stake.yield.bpdYieldHex).toBeNull();
       expect(stake.yield.bpdYieldStatus).toBeNull();
     }
@@ -888,13 +888,13 @@ describe("GET /api/hexmining/stakes route contract", () => {
     );
     // Yield stays gated: route must not compute yield because a BPD warning is present
     expect(stake.yield.status).toBe("unsupported");
-    expect(stake.yield.estimatedYieldHex).toBeNull();
+    expect(stake.yield.estimatedYieldHearts).toBeNull();
     expect(stake.yield.bpdYieldHex).toBeNull();
   });
 
   // Coverage item 6: regression — serialized yield block must never contain
-  // "estimated" status or non-null estimatedYieldHex anywhere in the response.
-  it("regression: serialized route response yield block does not expose estimated status or non-null estimatedYieldHex", async () => {
+  // "estimated" status or non-null estimatedYieldHearts anywhere in the response.
+  it("regression: serialized route response yield block does not expose estimated status or non-null estimatedYieldHearts", async () => {
     const fixture = makeSingleStakeDto();
     createPublicClientForChain.mockReturnValue({});
     readNativeHexStakes.mockResolvedValue(fixture);
@@ -913,14 +913,14 @@ describe("GET /api/hexmining/stakes route contract", () => {
     expect(yieldSerialized).not.toContain('"estimated"');
     expect(yieldSerialized).not.toContain('"evidence_available"');
     const parsed = JSON.parse(yieldSerialized) as {
-      estimatedYieldHex: unknown;
+      estimatedYieldHearts: unknown;
     };
-    expect(parsed.estimatedYieldHex).toBeNull();
+    expect(parsed.estimatedYieldHearts).toBeNull();
   });
 
   // Coverage item 5: when the reader throws (backend/evidence unavailable), the route
   // must return a sanitized error and must not invent or leak any yield fields.
-  it("error response body does not contain yield, estimatedYieldHex, or yieldHex fields", async () => {
+  it("error response body does not contain yield, estimatedYieldHearts, or yieldHex fields", async () => {
     createPublicClientForChain.mockReturnValue({});
     readNativeHexStakes.mockRejectedValue(new Error("backend unavailable"));
 
@@ -933,7 +933,7 @@ describe("GET /api/hexmining/stakes route contract", () => {
 
     expect(response.status).toBe(500);
     const bodyText = await response.text();
-    expect(bodyText).not.toContain("estimatedYieldHex");
+    expect(bodyText).not.toContain("estimatedYieldHearts");
     expect(bodyText).not.toContain('"yieldHex"');
     expect(bodyText).not.toContain('"estimated"');
   });

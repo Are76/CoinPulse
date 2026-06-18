@@ -258,9 +258,9 @@ function StakeTable({
 
 function StakeRow({ stake }: { stake: HexStakeDto }) {
   const statusTone = resolveStakeStatusTone(stake.stakeStatus);
-  const estimatedYieldHexDisplay =
+  const estimatedYieldHeartsDisplay =
     stake.yield.status === "estimated"
-      ? formatHeartsAsHexDisplay(stake.yield.estimatedYieldHex)
+      ? formatHeartsAsHexDisplay(stake.yield.estimatedYieldHearts)
       : null;
 
   return (
@@ -304,13 +304,13 @@ function StakeRow({ stake }: { stake: HexStakeDto }) {
           </div>
           {stake.yield.status === "estimated" ? (
             <div className="flex flex-col gap-0.5">
-              {estimatedYieldHexDisplay !== null ? (
+              {estimatedYieldHeartsDisplay !== null ? (
                 <>
                   <span className="cp-data text-xs">
-                    estimated yield: {estimatedYieldHexDisplay} HEX
+                    estimated yield: {estimatedYieldHeartsDisplay} HEX
                   </span>
                   <span className="text-xs text-[color:var(--color-text-muted)]">
-                    raw hearts: {stake.yield.estimatedYieldHex}
+                    raw hearts: {stake.yield.estimatedYieldHearts}
                   </span>
                 </>
               ) : null}

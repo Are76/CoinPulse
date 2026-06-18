@@ -47,7 +47,7 @@ function makeStake(overrides: Record<string, unknown> = {}) {
     },
     yield: {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,

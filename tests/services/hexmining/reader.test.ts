@@ -321,7 +321,7 @@ describe("readNativeHexStakes", () => {
     expect(stake.pnl.costBasisPolicy).toBeNull();
 
     expect(stake.yield.status).toBe("unsupported");
-    expect(stake.yield.estimatedYieldHex).toBeNull();
+    expect(stake.yield.estimatedYieldHearts).toBeNull();
     expect(stake.yield.bpdYieldHex).toBeNull();
     expect(stake.yield.bpdYieldStatus).toBeNull();
   });
@@ -422,7 +422,7 @@ describe("readNativeHexStakes", () => {
       });
       const stake = result.stakes[0];
       expect(stake.yield.status).toBe("unsupported");
-      expect(stake.yield.estimatedYieldHex).toBeNull();
+      expect(stake.yield.estimatedYieldHearts).toBeNull();
       expect(stake.yield.bpdYieldHex).toBeNull();
       expect(stake.yield.bpdYieldStatus).toBeNull();
     });
@@ -447,7 +447,7 @@ describe("readNativeHexStakes", () => {
       expect(result.stakes[0].stakeStatus).toBe("overdue");
       const stake = result.stakes[0];
       expect(stake.yield.status).toBe("unsupported");
-      expect(stake.yield.estimatedYieldHex).toBeNull();
+      expect(stake.yield.estimatedYieldHearts).toBeNull();
       expect(stake.yield.bpdYieldHex).toBeNull();
       expect(stake.yield.bpdYieldStatus).toBeNull();
     });
@@ -470,7 +470,7 @@ describe("readNativeHexStakes", () => {
       expect(result.stakes[0].stakeStatus).toBe("unknown");
       const stake = result.stakes[0];
       expect(stake.yield.status).toBe("unsupported");
-      expect(stake.yield.estimatedYieldHex).toBeNull();
+      expect(stake.yield.estimatedYieldHearts).toBeNull();
       expect(stake.yield.bpdYieldHex).toBeNull();
       expect(stake.yield.bpdYieldStatus).toBeNull();
     });
@@ -497,14 +497,14 @@ describe("readNativeHexStakes", () => {
       expect(result.stakes).toHaveLength(3);
       for (const stake of result.stakes) {
         expect(stake.yield.status).toBe("unsupported");
-        expect(stake.yield.estimatedYieldHex).toBeNull();
+        expect(stake.yield.estimatedYieldHearts).toBeNull();
         expect(stake.yield.bpdYieldHex).toBeNull();
         expect(stake.yield.bpdYieldStatus).toBeNull();
       }
     });
 
-    // 20. Regression: serialized yield block must not contain "estimated" or non-null estimatedYieldHex.
-    it("regression: serialized stake yield block contains no estimated status and no non-null estimatedYieldHex", async () => {
+    // 20. Regression: serialized yield block must not contain "estimated" or non-null estimatedYieldHearts.
+    it("regression: serialized stake yield block contains no estimated status and no non-null estimatedYieldHearts", async () => {
       const client = makeClient();
       const result = await readNativeHexStakes({
         publicClient: client,
@@ -515,8 +515,8 @@ describe("readNativeHexStakes", () => {
       const yieldSerialized = JSON.stringify(stake.yield);
       expect(yieldSerialized).not.toContain('"estimated"');
       expect(yieldSerialized).not.toContain('"evidence_available"');
-      const parsed = JSON.parse(yieldSerialized) as { estimatedYieldHex: unknown };
-      expect(parsed.estimatedYieldHex).toBeNull();
+      const parsed = JSON.parse(yieldSerialized) as { estimatedYieldHearts: unknown };
+      expect(parsed.estimatedYieldHearts).toBeNull();
     });
   });
 });
@@ -596,7 +596,7 @@ describe("yield estimator wiring", () => {
       estimateYield,
     });
     expect(result.stakes[0].yield.status).toBe("unavailable");
-    expect(result.stakes[0].yield.estimatedYieldHex).toBeNull();
+    expect(result.stakes[0].yield.estimatedYieldHearts).toBeNull();
     expect(result.stakes[0].yield.bpdYieldHex).toBeNull();
     const yieldJson = JSON.stringify(result.stakes[0].yield);
     expect(yieldJson).not.toContain('"evidence_available"');
@@ -626,7 +626,7 @@ describe("yield estimator wiring", () => {
     });
     const yieldDto = result.stakes[0].yield;
     expect(yieldDto.status).toBe("unavailable");
-    expect(yieldDto.estimatedYieldHex).toBeNull();
+    expect(yieldDto.estimatedYieldHearts).toBeNull();
     // provenance is available when observationId is non-null
     if (yieldDto.status === "unavailable") {
       expect(yieldDto.provenance?.observationId).toBe("obs-uuid-1");
@@ -755,7 +755,7 @@ describe("yield estimator wiring", () => {
     });
     const yieldDto = result.stakes[0].yield;
     expect(yieldDto.status).toBe("estimated");
-    expect(yieldDto.estimatedYieldHex).toBe("9000000000");
+    expect(yieldDto.estimatedYieldHearts).toBe("9000000000");
     expect(yieldDto.bpdYieldStatus).toBe("applicable");
     expect(yieldDto.bpdYieldHex).toBe("3000000000");
   });
@@ -794,7 +794,7 @@ describe("yield estimator wiring", () => {
     });
     const yieldDto = result.stakes[0].yield;
     expect(yieldDto.status).toBe("estimated");
-    expect(yieldDto.estimatedYieldHex).toBe("5000000000");
+    expect(yieldDto.estimatedYieldHearts).toBe("5000000000");
     expect(yieldDto.bpdYieldStatus).toBe("not_applicable");
     expect(yieldDto.bpdYieldHex).toBeNull();
   });
@@ -861,7 +861,7 @@ describe("yield estimator wiring", () => {
 
     const yieldDto = result.stakes[0].yield;
     expect(yieldDto.status).toBe("unavailable");
-    expect(yieldDto.estimatedYieldHex).toBeNull();
+    expect(yieldDto.estimatedYieldHearts).toBeNull();
     expect(yieldDto.provenance).toBeNull();
     expect(yieldDto.bpdYieldHex).toBeNull();
     expect(yieldDto.bpdYieldStatus).toBe("not_applicable");
@@ -944,7 +944,7 @@ describe("yield estimator wiring", () => {
       // no estimateYield
     });
     expect(result.stakes[0].yield.status).toBe("unsupported");
-    expect(result.stakes[0].yield.estimatedYieldHex).toBeNull();
+    expect(result.stakes[0].yield.estimatedYieldHearts).toBeNull();
   });
 
   // 33. Estimator wiring for multiple stakes — each stake gets its own call.

@@ -72,7 +72,7 @@ const MOCK_STAKE: HexStakeDto = {
     markPrice: null,
     costBasisPolicy: null,
   },
-  yield: { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] },
+  yield: { status: "unsupported", estimatedYieldHearts: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] },
   provenance: {
     chainId: 369,
     walletAddress: VALID_ADDRESS,
@@ -100,12 +100,12 @@ const BASE_LIST: HexStakeListDto = {
   warnings: [],
 };
 
-function makeEstimatedStake(estimatedYieldHex: string): HexStakeDto {
+function makeEstimatedStake(estimatedYieldHearts: string): HexStakeDto {
   return {
     ...MOCK_STAKE,
     yield: {
       status: "estimated",
-      estimatedYieldHex,
+      estimatedYieldHearts,
       bpdYieldStatus: "not_applicable",
       bpdYieldHex: null,
       provenance: {
@@ -380,7 +380,7 @@ describe("HexMiningScreen — stake table rendering", () => {
       ...MOCK_STAKE,
       yield: {
         status: "estimated",
-        estimatedYieldHex: "4212345600",
+        estimatedYieldHearts: "4212345600",
         bpdYieldStatus: "not_applicable",
         bpdYieldHex: null,
         provenance: {
@@ -402,7 +402,7 @@ describe("HexMiningScreen — stake table rendering", () => {
       ...MOCK_STAKE,
       yield: {
         status: "estimated",
-        estimatedYieldHex: "4212345600",
+        estimatedYieldHearts: "4212345600",
         bpdYieldStatus: "not_applicable",
         bpdYieldHex: null,
         provenance: {
@@ -427,7 +427,7 @@ describe("HexMiningScreen — stake table rendering", () => {
       ...MOCK_STAKE,
       yield: {
         status: "unavailable",
-        estimatedYieldHex: null,
+        estimatedYieldHearts: null,
         bpdYieldStatus: "unknown",
         bpdYieldHex: null,
         provenance: null,
@@ -450,7 +450,7 @@ describe("HexMiningScreen — stake table rendering", () => {
       ...MOCK_STAKE,
       yield: {
         status: "exact",
-        estimatedYieldHex: "99.000000",
+        estimatedYieldHearts: "99.000000",
         bpdYieldStatus: "not_applicable",
         bpdYieldHex: null,
         provenance: {

@@ -315,7 +315,7 @@ describe("useHexMiningStakesQuery", () => {
     expect(data).not.toHaveProperty("valuation");
     expect(data).not.toHaveProperty("pnl");
     expect(data).not.toHaveProperty("yield");
-    expect(data).not.toHaveProperty("estimatedYieldHex");
+    expect(data).not.toHaveProperty("estimatedYieldHearts");
   });
 
   // ── Cache behaviour ───────────────────────────────────────────────────────

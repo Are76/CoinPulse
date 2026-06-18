@@ -40,14 +40,14 @@ describe("named yield DTO member types are exported from types.ts", () => {
   it("UnsupportedYieldDto is importable and matches expected shape", () => {
     const dto: UnsupportedYieldDto = {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,
       warnings: [],
     };
     expect(dto.status).toBe("unsupported");
-    expect(dto.estimatedYieldHex).toBeNull();
+    expect(dto.estimatedYieldHearts).toBeNull();
     expect(dto.bpdYieldHex).toBeNull();
     expect(dto.bpdYieldStatus).toBeNull();
   });
@@ -55,14 +55,14 @@ describe("named yield DTO member types are exported from types.ts", () => {
   it("UnavailableYieldDto is importable and matches expected shape", () => {
     const dto: UnavailableYieldDto = {
       status: "unavailable",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: null,
       warnings: [],
     };
     expect(dto.status).toBe("unavailable");
-    expect(dto.estimatedYieldHex).toBeNull();
+    expect(dto.estimatedYieldHearts).toBeNull();
     expect(dto.bpdYieldHex).toBeNull();
     expect(dto.bpdYieldStatus).toBe("not_applicable");
   });
@@ -70,35 +70,35 @@ describe("named yield DTO member types are exported from types.ts", () => {
   it("EstimatedYieldDto is importable and matches expected shape", () => {
     const dto: EstimatedYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: TEST_PROVENANCE,
       warnings: [],
     };
     expect(dto.status).toBe("estimated");
-    expect(dto.estimatedYieldHex).toBe("1000000000");
+    expect(dto.estimatedYieldHearts).toBe("1000000000");
     expect(dto.bpdYieldStatus).toBe("not_applicable");
   });
 
   it("ExactYieldDto is importable and matches expected shape", () => {
     const dto: ExactYieldDto = {
       status: "exact",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: TEST_PROVENANCE,
       warnings: [],
     };
     expect(dto.status).toBe("exact");
-    expect(dto.estimatedYieldHex).toBe("1000000000");
+    expect(dto.estimatedYieldHearts).toBe("1000000000");
     expect(dto.bpdYieldStatus).toBe("not_applicable");
   });
 
   it("each named type is assignable to HexStakeYieldDto", () => {
     const unsupported: HexStakeYieldDto = {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,
@@ -106,7 +106,7 @@ describe("named yield DTO member types are exported from types.ts", () => {
     };
     const unavailable: HexStakeYieldDto = {
       status: "unavailable",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: null,
@@ -114,7 +114,7 @@ describe("named yield DTO member types are exported from types.ts", () => {
     };
     const estimated: HexStakeYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: TEST_PROVENANCE,
@@ -122,7 +122,7 @@ describe("named yield DTO member types are exported from types.ts", () => {
     };
     const exact: HexStakeYieldDto = {
       status: "exact",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: TEST_PROVENANCE,
@@ -141,51 +141,51 @@ describe("valid yield DTO combinations", () => {
   it("UnsupportedYieldDto: all fields null at runtime", () => {
     const dto: UnsupportedYieldDto = {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,
       warnings: [],
     };
     expect(dto.status).toBe("unsupported");
-    expect(dto.estimatedYieldHex).toBeNull();
+    expect(dto.estimatedYieldHearts).toBeNull();
     expect(dto.bpdYieldHex).toBeNull();
     expect(dto.bpdYieldStatus).toBeNull();
   });
 
-  it("UnavailableYieldDto: estimatedYieldHex and bpdYieldHex are null; bpdYieldStatus is HexBpdYieldStatus", () => {
+  it("UnavailableYieldDto: estimatedYieldHearts and bpdYieldHex are null; bpdYieldStatus is HexBpdYieldStatus", () => {
     const dto: UnavailableYieldDto = {
       status: "unavailable",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: null,
       warnings: [],
     };
     expect(dto.status).toBe("unavailable");
-    expect(dto.estimatedYieldHex).toBeNull();
+    expect(dto.estimatedYieldHearts).toBeNull();
     expect(dto.bpdYieldHex).toBeNull();
     expect(dto.bpdYieldStatus).toBe("not_applicable");
   });
 
-  it("EstimatedYieldDto: estimatedYieldHex and bpdYieldStatus are required strings", () => {
+  it("EstimatedYieldDto: estimatedYieldHearts and bpdYieldStatus are required strings", () => {
     const dto: EstimatedYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1234567890",
+      estimatedYieldHearts: "1234567890",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: TEST_PROVENANCE,
       warnings: [],
     };
-    expect(dto.estimatedYieldHex).toBe("1234567890");
-    expect(typeof dto.estimatedYieldHex).toBe("string");
+    expect(dto.estimatedYieldHearts).toBe("1234567890");
+    expect(typeof dto.estimatedYieldHearts).toBe("string");
     expect(dto.bpdYieldStatus).toBe("not_applicable");
   });
 
   it("EstimatedYieldDto: bpdYieldHex non-null when bpdYieldStatus is 'applicable'", () => {
     const dto: EstimatedYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: "5000000000",
       bpdYieldStatus: "applicable",
       provenance: TEST_PROVENANCE,
@@ -196,24 +196,24 @@ describe("valid yield DTO combinations", () => {
     expect(dto.bpdYieldHex).not.toBeNull();
   });
 
-  it("ExactYieldDto: estimatedYieldHex and bpdYieldStatus are required strings", () => {
+  it("ExactYieldDto: estimatedYieldHearts and bpdYieldStatus are required strings", () => {
     const dto: ExactYieldDto = {
       status: "exact",
-      estimatedYieldHex: "9876543210",
+      estimatedYieldHearts: "9876543210",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: TEST_PROVENANCE,
       warnings: [],
     };
-    expect(dto.estimatedYieldHex).toBe("9876543210");
-    expect(typeof dto.estimatedYieldHex).toBe("string");
+    expect(dto.estimatedYieldHearts).toBe("9876543210");
+    expect(typeof dto.estimatedYieldHearts).toBe("string");
     expect(dto.bpdYieldStatus).toBe("not_applicable");
   });
 
   it("ExactYieldDto: bpdYieldHex non-null when bpdYieldStatus is 'applicable'", () => {
     const dto: ExactYieldDto = {
       status: "exact",
-      estimatedYieldHex: "9876543210",
+      estimatedYieldHearts: "9876543210",
       bpdYieldHex: "5000000000",
       bpdYieldStatus: "applicable",
       provenance: TEST_PROVENANCE,
@@ -231,22 +231,22 @@ describe("valid yield DTO combinations", () => {
 // npm run typecheck will fail: "Unused '@ts-expect-error' directive".
 
 describe("type-level: invalid combinations cannot compile (enforced by typecheck)", () => {
-  it("'estimated' + null estimatedYieldHex is a type error — EstimatedYieldDto requires string", () => {
-    // @ts-expect-error — estimatedYieldHex must be string for "estimated"
+  it("'estimated' + null estimatedYieldHearts is a type error — EstimatedYieldDto requires string", () => {
+    // @ts-expect-error — estimatedYieldHearts must be string for "estimated"
     const _dto: HexStakeYieldDto = {
       status: "estimated",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
     };
     void _dto;
   });
 
-  it("'exact' + null estimatedYieldHex is a type error — ExactYieldDto requires string", () => {
-    // @ts-expect-error — estimatedYieldHex must be string for "exact"
+  it("'exact' + null estimatedYieldHearts is a type error — ExactYieldDto requires string", () => {
+    // @ts-expect-error — estimatedYieldHearts must be string for "exact"
     const _dto: HexStakeYieldDto = {
       status: "exact",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
     };
@@ -257,7 +257,7 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     // @ts-expect-error — bpdYieldStatus must be HexBpdYieldStatus for "estimated"
     const _dto: HexStakeYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: null,
     };
@@ -268,29 +268,29 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     // @ts-expect-error — bpdYieldStatus must be HexBpdYieldStatus for "exact"
     const _dto: HexStakeYieldDto = {
       status: "exact",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: null,
     };
     void _dto;
   });
 
-  it("'unsupported' + populated estimatedYieldHex is a type error — UnsupportedYieldDto requires null", () => {
-    // @ts-expect-error — estimatedYieldHex must be null for "unsupported"
+  it("'unsupported' + populated estimatedYieldHearts is a type error — UnsupportedYieldDto requires null", () => {
+    // @ts-expect-error — estimatedYieldHearts must be null for "unsupported"
     const _dto: HexStakeYieldDto = {
       status: "unsupported",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: null,
     };
     void _dto;
   });
 
-  it("'unavailable' + populated estimatedYieldHex is a type error — UnavailableYieldDto requires null", () => {
-    // @ts-expect-error — estimatedYieldHex must be null for "unavailable"
+  it("'unavailable' + populated estimatedYieldHearts is a type error — UnavailableYieldDto requires null", () => {
+    // @ts-expect-error — estimatedYieldHearts must be null for "unavailable"
     const _dto: HexStakeYieldDto = {
       status: "unavailable",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
     };
@@ -301,7 +301,7 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     // TypeScript reports this at the property line when only one field mismatches.
     const _dto: UnsupportedYieldDto = {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       provenance: null,
       warnings: [],
@@ -315,7 +315,7 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     // TypeScript reports this at the property line when only one field mismatches.
     const _dto: UnavailableYieldDto = {
       status: "unavailable",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       provenance: null,
       warnings: [],
@@ -329,7 +329,7 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     // @ts-expect-error — bpdYieldHex must be null for "unsupported"
     const _dto: HexStakeYieldDto = {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: "5000000000",
       bpdYieldStatus: null,
     };
@@ -340,7 +340,7 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     // @ts-expect-error — EstimatedYieldDto requires provenance.
     const _dto: EstimatedYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       warnings: [],
@@ -352,7 +352,7 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     // @ts-expect-error — EstimatedYieldDto requires warnings.
     const _dto: EstimatedYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: TEST_PROVENANCE,
@@ -360,8 +360,8 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     void _dto;
   });
 
-  it("'estimated' missing estimatedYieldHex is a type error", () => {
-    // @ts-expect-error — EstimatedYieldDto requires estimatedYieldHex field
+  it("'estimated' missing estimatedYieldHearts is a type error", () => {
+    // @ts-expect-error — EstimatedYieldDto requires estimatedYieldHearts field
     const _dto: EstimatedYieldDto = {
       status: "estimated",
       bpdYieldHex: null,
@@ -374,7 +374,7 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
     // @ts-expect-error — ExactYieldDto requires bpdYieldStatus field
     const _dto: ExactYieldDto = {
       status: "exact",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
     };
     void _dto;
@@ -384,68 +384,68 @@ describe("type-level: invalid combinations cannot compile (enforced by typecheck
 // ─── Discriminated union narrowing on status ──────────────────────────────────
 
 describe("discriminated union narrowing on status", () => {
-  it("narrowing to 'unsupported' reveals estimatedYieldHex: null", () => {
+  it("narrowing to 'unsupported' reveals estimatedYieldHearts: null", () => {
     const dto: HexStakeYieldDto = {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,
       warnings: [],
     };
     if (dto.status === "unsupported") {
-      // After narrowing, TypeScript knows estimatedYieldHex: null
-      expect(dto.estimatedYieldHex).toBeNull();
+      // After narrowing, TypeScript knows estimatedYieldHearts: null
+      expect(dto.estimatedYieldHearts).toBeNull();
       expect(dto.bpdYieldStatus).toBeNull();
     }
   });
 
-  it("narrowing to 'unavailable' reveals estimatedYieldHex/bpdYieldHex null, bpdYieldStatus is HexBpdYieldStatus", () => {
+  it("narrowing to 'unavailable' reveals estimatedYieldHearts/bpdYieldHex null, bpdYieldStatus is HexBpdYieldStatus", () => {
     const dto: HexStakeYieldDto = {
       status: "unavailable",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: null,
       warnings: [],
     };
     if (dto.status === "unavailable") {
-      expect(dto.estimatedYieldHex).toBeNull();
+      expect(dto.estimatedYieldHearts).toBeNull();
       expect(dto.bpdYieldHex).toBeNull();
       expect(dto.bpdYieldStatus).toBe("not_applicable");
     }
   });
 
-  it("narrowing to 'estimated' reveals estimatedYieldHex: string and bpdYieldStatus: HexBpdYieldStatus", () => {
+  it("narrowing to 'estimated' reveals estimatedYieldHearts: string and bpdYieldStatus: HexBpdYieldStatus", () => {
     const dto: HexStakeYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1234567890",
+      estimatedYieldHearts: "1234567890",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: TEST_PROVENANCE,
       warnings: [],
     };
     if (dto.status === "estimated") {
-      // After narrowing, TypeScript knows estimatedYieldHex: string (not null)
+      // After narrowing, TypeScript knows estimatedYieldHearts: string (not null)
       // and bpdYieldStatus: HexBpdYieldStatus (not null)
-      expect(typeof dto.estimatedYieldHex).toBe("string");
-      expect(dto.estimatedYieldHex.length).toBeGreaterThan(0);
+      expect(typeof dto.estimatedYieldHearts).toBe("string");
+      expect(dto.estimatedYieldHearts.length).toBeGreaterThan(0);
       expect(dto.bpdYieldStatus).toBe("not_applicable");
     }
   });
 
-  it("narrowing to 'exact' reveals estimatedYieldHex: string and bpdYieldStatus: HexBpdYieldStatus", () => {
+  it("narrowing to 'exact' reveals estimatedYieldHearts: string and bpdYieldStatus: HexBpdYieldStatus", () => {
     const dto: HexStakeYieldDto = {
       status: "exact",
-      estimatedYieldHex: "9876543210",
+      estimatedYieldHearts: "9876543210",
       bpdYieldHex: "5000000000",
       bpdYieldStatus: "applicable",
       provenance: TEST_PROVENANCE,
       warnings: [],
     };
     if (dto.status === "exact") {
-      expect(typeof dto.estimatedYieldHex).toBe("string");
-      expect(dto.estimatedYieldHex.length).toBeGreaterThan(0);
+      expect(typeof dto.estimatedYieldHearts).toBe("string");
+      expect(dto.estimatedYieldHearts.length).toBeGreaterThan(0);
       const bpdStatus: HexBpdYieldStatus = dto.bpdYieldStatus;
       expect(bpdStatus).toBe("applicable");
     }
@@ -453,10 +453,10 @@ describe("discriminated union narrowing on status", () => {
 
   it("switch on status narrows each branch correctly", () => {
     const dtos: HexStakeYieldDto[] = [
-      { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] },
-      { status: "unavailable", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: "not_applicable", provenance: null, warnings: [] },
-      { status: "estimated", estimatedYieldHex: "1000000000", bpdYieldHex: null, bpdYieldStatus: "not_applicable", provenance: TEST_PROVENANCE, warnings: [] },
-      { status: "exact", estimatedYieldHex: "2000000000", bpdYieldHex: null, bpdYieldStatus: "not_applicable", provenance: TEST_PROVENANCE, warnings: [] },
+      { status: "unsupported", estimatedYieldHearts: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] },
+      { status: "unavailable", estimatedYieldHearts: null, bpdYieldHex: null, bpdYieldStatus: "not_applicable", provenance: null, warnings: [] },
+      { status: "estimated", estimatedYieldHearts: "1000000000", bpdYieldHex: null, bpdYieldStatus: "not_applicable", provenance: TEST_PROVENANCE, warnings: [] },
+      { status: "exact", estimatedYieldHearts: "2000000000", bpdYieldHex: null, bpdYieldStatus: "not_applicable", provenance: TEST_PROVENANCE, warnings: [] },
     ];
     const statuses = dtos.map((dto) => dto.status);
     expect(statuses).toEqual(["unsupported", "unavailable", "estimated", "exact"]);
@@ -472,14 +472,14 @@ describe("Phase 1–3 unsupported state is unchanged by the union refactor", () 
     // hexmining-stakes-route-contract.test.ts.
     const existingFixture: HexStakeYieldDto = {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,
       warnings: [],
     };
     expect(existingFixture.status).toBe("unsupported");
-    expect(existingFixture.estimatedYieldHex).toBeNull();
+    expect(existingFixture.estimatedYieldHearts).toBeNull();
     expect(existingFixture.bpdYieldHex).toBeNull();
     expect(existingFixture.bpdYieldStatus).toBeNull();
   });
@@ -487,21 +487,21 @@ describe("Phase 1–3 unsupported state is unchanged by the union refactor", () 
   it("all four fields present in existing unsupported fixture", () => {
     const dto: HexStakeYieldDto = {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,
       warnings: [],
     };
     expect(Object.keys(dto)).toContain("status");
-    expect(Object.keys(dto)).toContain("estimatedYieldHex");
+    expect(Object.keys(dto)).toContain("estimatedYieldHearts");
     expect(Object.keys(dto)).toContain("bpdYieldHex");
     expect(Object.keys(dto)).toContain("bpdYieldStatus");
   });
 
   it("status 'unsupported' is distinct from all other states", () => {
-    const unsupported: HexStakeYieldDto = { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] };
-    const unavailable: HexStakeYieldDto = { status: "unavailable", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: "not_applicable", provenance: null, warnings: [] };
+    const unsupported: HexStakeYieldDto = { status: "unsupported", estimatedYieldHearts: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] };
+    const unavailable: HexStakeYieldDto = { status: "unavailable", estimatedYieldHearts: null, bpdYieldHex: null, bpdYieldStatus: "not_applicable", provenance: null, warnings: [] };
     expect(unsupported.status).not.toBe(unavailable.status);
     expect(unsupported.status).not.toBe("estimated");
     expect(unsupported.status).not.toBe("exact");
@@ -546,7 +546,7 @@ describe("HexStakeBpdYieldFields: valid combinations compile", () => {
   it("EstimatedYieldDto with applicable + string compiles", () => {
     const dto: EstimatedYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldStatus: "applicable",
       bpdYieldHex: "5000000000",
       provenance: TEST_PROVENANCE,
@@ -559,7 +559,7 @@ describe("HexStakeBpdYieldFields: valid combinations compile", () => {
   it("EstimatedYieldDto with not_applicable + null compiles", () => {
     const dto: EstimatedYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldStatus: "not_applicable",
       bpdYieldHex: null,
       provenance: TEST_PROVENANCE,
@@ -572,7 +572,7 @@ describe("HexStakeBpdYieldFields: valid combinations compile", () => {
   it("EstimatedYieldDto with unknown + null compiles", () => {
     const dto: EstimatedYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldStatus: "unknown",
       bpdYieldHex: null,
       provenance: TEST_PROVENANCE,
@@ -585,7 +585,7 @@ describe("HexStakeBpdYieldFields: valid combinations compile", () => {
   it("ExactYieldDto with applicable + string compiles", () => {
     const dto: ExactYieldDto = {
       status: "exact",
-      estimatedYieldHex: "9876543210",
+      estimatedYieldHearts: "9876543210",
       bpdYieldStatus: "applicable",
       bpdYieldHex: "5000000000",
       provenance: TEST_PROVENANCE,
@@ -598,7 +598,7 @@ describe("HexStakeBpdYieldFields: valid combinations compile", () => {
   it("ExactYieldDto with not_applicable + null compiles", () => {
     const dto: ExactYieldDto = {
       status: "exact",
-      estimatedYieldHex: "9876543210",
+      estimatedYieldHearts: "9876543210",
       bpdYieldStatus: "not_applicable",
       bpdYieldHex: null,
       provenance: TEST_PROVENANCE,
@@ -614,7 +614,7 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
     // @ts-expect-error — "applicable" requires bpdYieldHex: string, not null
     const _dto: EstimatedYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldStatus: "applicable",
       bpdYieldHex: null,
     };
@@ -625,7 +625,7 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
     // @ts-expect-error — "applicable" requires bpdYieldHex: string, not null
     const _dto: ExactYieldDto = {
       status: "exact",
-      estimatedYieldHex: "9876543210",
+      estimatedYieldHearts: "9876543210",
       bpdYieldStatus: "applicable",
       bpdYieldHex: null,
     };
@@ -636,7 +636,7 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
     // @ts-expect-error — "not_applicable" requires bpdYieldHex: null, not string
     const _dto: EstimatedYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldStatus: "not_applicable",
       bpdYieldHex: "5000000000",
     };
@@ -647,7 +647,7 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
     // @ts-expect-error — "not_applicable" requires bpdYieldHex: null, not string
     const _dto: ExactYieldDto = {
       status: "exact",
-      estimatedYieldHex: "9876543210",
+      estimatedYieldHearts: "9876543210",
       bpdYieldStatus: "not_applicable",
       bpdYieldHex: "5000000000",
     };
@@ -658,7 +658,7 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
     // @ts-expect-error — "unknown" requires bpdYieldHex: null, not string
     const _dto: EstimatedYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldStatus: "unknown",
       bpdYieldHex: "5000000000",
     };
@@ -669,7 +669,7 @@ describe("BPD field correlation: invalid combinations cannot compile (enforced b
     // @ts-expect-error — "unknown" requires bpdYieldHex: null, not string
     const _dto: ExactYieldDto = {
       status: "exact",
-      estimatedYieldHex: "9876543210",
+      estimatedYieldHearts: "9876543210",
       bpdYieldStatus: "unknown",
       bpdYieldHex: "5000000000",
     };
