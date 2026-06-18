@@ -151,12 +151,12 @@ export type HexStakeBpdYieldFields =
 // Each branch enforces field types at compile time:
 //   UnsupportedYieldDto  — no yield read path (Phases 1–3); all fields null
 //   UnavailableYieldDto  — read path exists but data cannot be produced; all fields null
-//   EstimatedYieldDto    — dailyDataRange estimate; estimatedYieldHex required; BPD correlated
-//   ExactYieldDto        — confirmed at endStake; estimatedYieldHex required; BPD correlated
+//   EstimatedYieldDto    — dailyDataRange estimate; estimatedYieldHearts required; BPD correlated
+//   ExactYieldDto        — confirmed at endStake; estimatedYieldHearts required; BPD correlated
 
 export type UnsupportedYieldDto = {
   status: "unsupported";
-  estimatedYieldHex: null;
+  estimatedYieldHearts: null;
   bpdYieldHex: null;
   bpdYieldStatus: null;
   provenance: null;
@@ -165,7 +165,7 @@ export type UnsupportedYieldDto = {
 
 export type UnavailableYieldDto = {
   status: "unavailable";
-  estimatedYieldHex: null;
+  estimatedYieldHearts: null;
   bpdYieldStatus: HexBpdYieldStatus;
   bpdYieldHex: null;
   provenance: HexStakeYieldProvenance | null;
@@ -174,14 +174,14 @@ export type UnavailableYieldDto = {
 
 export type EstimatedYieldDto = {
   status: "estimated";
-  estimatedYieldHex: string;
+  estimatedYieldHearts: string;
   provenance: HexStakeYieldProvenance;
   warnings: string[];
 } & HexStakeBpdYieldFields;
 
 export type ExactYieldDto = {
   status: "exact";
-  estimatedYieldHex: string;
+  estimatedYieldHearts: string;
   provenance: HexStakeYieldProvenance;
   warnings: string[];
 } & HexStakeBpdYieldFields;

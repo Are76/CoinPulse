@@ -32,7 +32,7 @@ function makeStake(overrides: Partial<HexStakeDto>): HexStakeDto {
     },
     yield: {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,

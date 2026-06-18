@@ -46,7 +46,7 @@ const TEST_YIELD_PROVENANCE: HexStakeYieldProvenance = {
 function buildUnsupportedYieldDto(): HexStakeYieldDto {
   return {
     status: "unsupported",
-    estimatedYieldHex: null,
+    estimatedYieldHearts: null,
     bpdYieldHex: null,
     bpdYieldStatus: null,
     provenance: null,
@@ -57,7 +57,7 @@ function buildUnsupportedYieldDto(): HexStakeYieldDto {
 function buildUnavailableYieldDto(): HexStakeYieldDto {
   return {
     status: "unavailable",
-    estimatedYieldHex: null,
+    estimatedYieldHearts: null,
     bpdYieldHex: null,
     bpdYieldStatus: "not_applicable",
     provenance: null,
@@ -66,7 +66,7 @@ function buildUnavailableYieldDto(): HexStakeYieldDto {
 }
 
 function buildEstimatedYieldDto(opts: {
-  estimatedYieldHex: string;
+  estimatedYieldHearts: string;
   bpdYieldHex?: string | null;
   bpdYieldStatus?: HexBpdYieldStatus;
 }): HexStakeYieldDto {
@@ -74,7 +74,7 @@ function buildEstimatedYieldDto(opts: {
   // tested with @ts-expect-error in yield-dto-invariants.test.ts.
   return {
     status: "estimated",
-    estimatedYieldHex: opts.estimatedYieldHex,
+    estimatedYieldHearts: opts.estimatedYieldHearts,
     bpdYieldHex: opts.bpdYieldHex ?? null,
     bpdYieldStatus: opts.bpdYieldStatus ?? "unknown",
     provenance: TEST_YIELD_PROVENANCE,
@@ -83,7 +83,7 @@ function buildEstimatedYieldDto(opts: {
 }
 
 function buildExactYieldDto(opts?: {
-  estimatedYieldHex?: string | null;
+  estimatedYieldHearts?: string | null;
   bpdYieldHex?: string | null;
   bpdYieldStatus?: HexBpdYieldStatus;
 }): HexStakeYieldDto {
@@ -91,7 +91,7 @@ function buildExactYieldDto(opts?: {
   // tested with @ts-expect-error in yield-dto-invariants.test.ts.
   return {
     status: "exact",
-    estimatedYieldHex: opts?.estimatedYieldHex ?? "1000000000",
+    estimatedYieldHearts: opts?.estimatedYieldHearts ?? "1000000000",
     bpdYieldHex: opts?.bpdYieldHex ?? null,
     bpdYieldStatus: opts?.bpdYieldStatus ?? "not_applicable",
     provenance: TEST_YIELD_PROVENANCE,
@@ -179,7 +179,7 @@ describe("HexStakeYieldDto type contract — accepts all four states", () => {
   it("accepts 'unsupported' shape with all null fields", () => {
     const dto: HexStakeYieldDto = {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,
@@ -191,7 +191,7 @@ describe("HexStakeYieldDto type contract — accepts all four states", () => {
   it("accepts 'unavailable' shape with HexBpdYieldStatus", () => {
     const dto: HexStakeYieldDto = {
       status: "unavailable",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: null,
@@ -200,10 +200,10 @@ describe("HexStakeYieldDto type contract — accepts all four states", () => {
     expect(dto.status).toBe("unavailable");
   });
 
-  it("accepts 'estimated' shape with non-null estimatedYieldHex", () => {
+  it("accepts 'estimated' shape with non-null estimatedYieldHearts", () => {
     const dto: HexStakeYieldDto = {
       status: "estimated",
-      estimatedYieldHex: "1234567890",
+      estimatedYieldHearts: "1234567890",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: TEST_YIELD_PROVENANCE,
@@ -212,10 +212,10 @@ describe("HexStakeYieldDto type contract — accepts all four states", () => {
     expect(dto.status).toBe("estimated");
   });
 
-  it("accepts 'exact' shape with non-null estimatedYieldHex", () => {
+  it("accepts 'exact' shape with non-null estimatedYieldHearts", () => {
     const dto: HexStakeYieldDto = {
       status: "exact",
-      estimatedYieldHex: "1234567890",
+      estimatedYieldHearts: "1234567890",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
       provenance: TEST_YIELD_PROVENANCE,
@@ -233,9 +233,9 @@ describe("'unsupported' state", () => {
     expect(dto.status).toBe("unsupported");
   });
 
-  it("estimatedYieldHex is null — no implied estimate exists", () => {
+  it("estimatedYieldHearts is null — no implied estimate exists", () => {
     const dto = buildUnsupportedYieldDto();
-    expect(dto.estimatedYieldHex).toBeNull();
+    expect(dto.estimatedYieldHearts).toBeNull();
   });
 
   it("bpdYieldHex is null", () => {
@@ -259,7 +259,7 @@ describe("'unsupported' state", () => {
   it("represents the current state for all Phase 1–3 stakes", () => {
     const dto = buildStakeDtoWithYield(buildUnsupportedYieldDto());
     expect(dto.yield.status).toBe("unsupported");
-    expect(dto.yield.estimatedYieldHex).toBeNull();
+    expect(dto.yield.estimatedYieldHearts).toBeNull();
   });
 });
 
@@ -280,9 +280,9 @@ describe("'unavailable' state", () => {
     expect(dto.status).not.toBe("unsupported");
   });
 
-  it("estimatedYieldHex is null — partial data must not produce a partial estimate", () => {
+  it("estimatedYieldHearts is null — partial data must not produce a partial estimate", () => {
     const dto = buildUnavailableYieldDto();
-    expect(dto.estimatedYieldHex).toBeNull();
+    expect(dto.estimatedYieldHearts).toBeNull();
   });
 
   it("bpdYieldHex is null", () => {
@@ -298,7 +298,7 @@ describe("'unavailable' state", () => {
 
   it("is distinct from 'estimated' — data cannot be produced at this time", () => {
     const unavailable = buildUnavailableYieldDto();
-    const estimated = buildEstimatedYieldDto({ estimatedYieldHex: "1000000000" });
+    const estimated = buildEstimatedYieldDto({ estimatedYieldHearts: "1000000000" });
     expect(unavailable.status).toBe("unavailable");
     expect(estimated.status).toBe("estimated");
     expect(unavailable.status).not.toBe(estimated.status);
@@ -322,24 +322,24 @@ describe("'unavailable' state", () => {
 
 describe("'estimated' state", () => {
   it("status is 'estimated'", () => {
-    const dto = buildEstimatedYieldDto({ estimatedYieldHex: "1000000000" });
+    const dto = buildEstimatedYieldDto({ estimatedYieldHearts: "1000000000" });
     expect(dto.status).toBe("estimated");
   });
 
-  it("estimatedYieldHex is non-null and a string", () => {
-    const dto = buildEstimatedYieldDto({ estimatedYieldHex: "1234567890" });
-    expect(dto.estimatedYieldHex).not.toBeNull();
-    expect(typeof dto.estimatedYieldHex).toBe("string");
+  it("estimatedYieldHearts is non-null and a string", () => {
+    const dto = buildEstimatedYieldDto({ estimatedYieldHearts: "1234567890" });
+    expect(dto.estimatedYieldHearts).not.toBeNull();
+    expect(typeof dto.estimatedYieldHearts).toBe("string");
   });
 
-  it("estimatedYieldHex is a non-empty string", () => {
-    const dto = buildEstimatedYieldDto({ estimatedYieldHex: "1234567890" });
-    expect(dto.estimatedYieldHex!.length).toBeGreaterThan(0);
+  it("estimatedYieldHearts is a non-empty string", () => {
+    const dto = buildEstimatedYieldDto({ estimatedYieldHearts: "1234567890" });
+    expect(dto.estimatedYieldHearts!.length).toBeGreaterThan(0);
   });
 
   it("bpdYieldStatus is non-null — must be resolved before status is 'estimated'", () => {
     const dto = buildEstimatedYieldDto({
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldStatus: "not_applicable",
     });
     expect(dto.bpdYieldStatus).not.toBeNull();
@@ -347,14 +347,14 @@ describe("'estimated' state", () => {
 
   it("provenance fields are required — stake DTO carries non-null observedAtBlock and observedAt", () => {
     // "estimated" requires a valid observedAtBlock and observedAt in provenance
-    const stake = buildStakeDtoWithYield(buildEstimatedYieldDto({ estimatedYieldHex: "1000000000" }));
+    const stake = buildStakeDtoWithYield(buildEstimatedYieldDto({ estimatedYieldHearts: "1000000000" }));
     expect(stake.provenance.observedAtBlock).not.toBeNull();
     expect(stake.provenance.observedAt).not.toBeNull();
     expect(stake.provenance.observedAtBlock).toBe(OBSERVED_AT_BLOCK);
   });
 
   it("provenance.observedAtBlock is a string (block number as string)", () => {
-    const stake = buildStakeDtoWithYield(buildEstimatedYieldDto({ estimatedYieldHex: "1000000000" }));
+    const stake = buildStakeDtoWithYield(buildEstimatedYieldDto({ estimatedYieldHearts: "1000000000" }));
     expect(typeof stake.provenance.observedAtBlock).toBe("string");
   });
 
@@ -387,7 +387,7 @@ describe("'estimated' state", () => {
 
   it("bpdYieldHex is null when bpdYieldStatus is 'not_applicable'", () => {
     const dto = buildEstimatedYieldDto({
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
     });
@@ -397,7 +397,7 @@ describe("'estimated' state", () => {
 
   it("bpdYieldHex is non-null when bpdYieldStatus is 'applicable'", () => {
     const dto = buildEstimatedYieldDto({
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: "5000000000",
       bpdYieldStatus: "applicable",
     });
@@ -418,15 +418,15 @@ describe("'exact' state", () => {
     // "exact" is only set when an endStake event has been ingested and the
     // STAKE_YIELD_RECEIVED ledger entry is present. An "estimated" DTO can never
     // promote itself to "exact" automatically — promotion requires external evidence.
-    const estimated = buildEstimatedYieldDto({ estimatedYieldHex: "1000000000" });
+    const estimated = buildEstimatedYieldDto({ estimatedYieldHearts: "1000000000" });
     expect(estimated.status).toBe("estimated");
     // The backend must never flip status from "estimated" to "exact" without an indexed endStake.
     expect(estimated.status).not.toBe("exact");
   });
 
-  it("estimatedYieldHex is non-null — carries the confirmed exact yield value", () => {
-    const dto = buildExactYieldDto({ estimatedYieldHex: "1234567890" });
-    expect(dto.estimatedYieldHex).not.toBeNull();
+  it("estimatedYieldHearts is non-null — carries the confirmed exact yield value", () => {
+    const dto = buildExactYieldDto({ estimatedYieldHearts: "1234567890" });
+    expect(dto.estimatedYieldHearts).not.toBeNull();
   });
 
   it("bpdYieldStatus is non-null — BPD applicability is resolved at endStake", () => {
@@ -436,7 +436,7 @@ describe("'exact' state", () => {
 
   it("is Phase 5+ scope — distinct from 'estimated' (Phase 4+) status", () => {
     const exact = buildExactYieldDto();
-    const estimated = buildEstimatedYieldDto({ estimatedYieldHex: "1000000000" });
+    const estimated = buildEstimatedYieldDto({ estimatedYieldHearts: "1000000000" });
     expect(exact.status).not.toBe(estimated.status);
     expect(exact.status).toBe("exact");
   });
@@ -446,15 +446,15 @@ describe("'exact' state", () => {
 
 describe("promotion guards", () => {
   it("'unsupported' → 'estimated': only when complete elapsed-day coverage is available", () => {
-    // A stake correctly promoted to "estimated" carries a non-null estimatedYieldHex.
+    // A stake correctly promoted to "estimated" carries a non-null estimatedYieldHearts.
     // A stake that cannot be promoted remains "unsupported".
-    const promoted = buildEstimatedYieldDto({ estimatedYieldHex: "1000000000" });
+    const promoted = buildEstimatedYieldDto({ estimatedYieldHearts: "1000000000" });
     const notPromoted = buildUnsupportedYieldDto();
 
     expect(promoted.status).toBe("estimated");
-    expect(promoted.estimatedYieldHex).not.toBeNull();
+    expect(promoted.estimatedYieldHearts).not.toBeNull();
     expect(notPromoted.status).toBe("unsupported");
-    expect(notPromoted.estimatedYieldHex).toBeNull();
+    expect(notPromoted.estimatedYieldHearts).toBeNull();
   });
 
   it("'unavailable' must not silently become 'estimated' with partial data", () => {
@@ -462,14 +462,14 @@ describe("promotion guards", () => {
     // Partial data passed off as a complete estimate violates the contract.
     const withGap = buildUnavailableYieldDto();
     expect(withGap.status).toBe("unavailable");
-    expect(withGap.estimatedYieldHex).toBeNull(); // no estimate produced from partial data
+    expect(withGap.estimatedYieldHearts).toBeNull(); // no estimate produced from partial data
   });
 
   it("'estimated' → 'exact' never occurs automatically", () => {
     // Promotion to "exact" requires an indexed endStake event with a confirmed
     // STAKE_YIELD_RECEIVED ledger entry. No automatic time-based or field-based
     // promotion is valid.
-    const estimated = buildEstimatedYieldDto({ estimatedYieldHex: "1000000000" });
+    const estimated = buildEstimatedYieldDto({ estimatedYieldHearts: "1000000000" });
     // Simulating the backend NOT auto-promoting based on the estimate alone:
     expect(estimated.status).toBe("estimated");
     expect(estimated.status).not.toBe("exact");
@@ -477,23 +477,23 @@ describe("promotion guards", () => {
 
   it("'unavailable' with warning is structurally distinct from 'estimated'", () => {
     const unavailable = buildUnavailableYieldDto();
-    const estimated = buildEstimatedYieldDto({ estimatedYieldHex: "1000000000" });
+    const estimated = buildEstimatedYieldDto({ estimatedYieldHearts: "1000000000" });
 
     expect(unavailable.status).toBe("unavailable");
-    expect(unavailable.estimatedYieldHex).toBeNull();
+    expect(unavailable.estimatedYieldHearts).toBeNull();
 
     expect(estimated.status).toBe("estimated");
-    expect(estimated.estimatedYieldHex).not.toBeNull();
+    expect(estimated.estimatedYieldHearts).not.toBeNull();
   });
 
   it("rate-limit failure must produce 'unavailable', not 'estimated' with zeroed fields", () => {
     // Contract: a rate-limited read must never coerce its result to "estimated"
-    // by returning a zero or placeholder estimatedYieldHex.
+    // by returning a zero or placeholder estimatedYieldHearts.
     const rateLimitResult = buildUnavailableYieldDto();
     expect(rateLimitResult.status).toBe("unavailable");
-    expect(rateLimitResult.estimatedYieldHex).toBeNull();
+    expect(rateLimitResult.estimatedYieldHearts).toBeNull();
     // Zero is not a valid sentinel — missing data must be null, not "0"
-    expect(rateLimitResult.estimatedYieldHex).not.toBe("0");
+    expect(rateLimitResult.estimatedYieldHearts).not.toBe("0");
   });
 
   it("day-range gap must produce 'unavailable', not a partial 'estimated'", () => {
@@ -507,37 +507,37 @@ describe("promotion guards", () => {
     };
     expect(stakeWithWarning.yield.status).toBe("unavailable");
     expect(stakeWithWarning.warnings).toContain("hexmining-yield-data-gap-day-1234");
-    expect(stakeWithWarning.yield.estimatedYieldHex).toBeNull();
+    expect(stakeWithWarning.yield.estimatedYieldHearts).toBeNull();
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("Big Pay Day invariants", () => {
-  it("BPD yield attribution is separate from general yield in estimatedYieldHex", () => {
+  it("BPD yield attribution is separate from general yield in estimatedYieldHearts", () => {
     const dto = buildEstimatedYieldDto({
-      estimatedYieldHex: "1000000000", // general yield only — BPD excluded
+      estimatedYieldHearts: "1000000000", // general yield only — BPD excluded
       bpdYieldHex: "5000000000",        // BPD yield tracked separately
       bpdYieldStatus: "applicable",
     });
-    // estimatedYieldHex and bpdYieldHex are separate fields — never summed silently
-    expect(dto.estimatedYieldHex).toBe("1000000000");
+    // estimatedYieldHearts and bpdYieldHex are separate fields — never summed silently
+    expect(dto.estimatedYieldHearts).toBe("1000000000");
     expect(dto.bpdYieldHex).toBe("5000000000");
-    expect(dto.estimatedYieldHex).not.toBe(dto.bpdYieldHex);
+    expect(dto.estimatedYieldHearts).not.toBe(dto.bpdYieldHex);
   });
 
-  it("estimatedYieldHex must not silently include BPD yield", () => {
-    // The backend must never add bpdYieldHex into estimatedYieldHex.
+  it("estimatedYieldHearts must not silently include BPD yield", () => {
+    // The backend must never add bpdYieldHex into estimatedYieldHearts.
     // Both fields are separate and independently auditable.
     const dto = buildEstimatedYieldDto({
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: "5000000000",
       bpdYieldStatus: "applicable",
     });
-    // If they were summed, estimatedYieldHex would equal "6000000000" — not the case
-    expect(dto.estimatedYieldHex).toBe("1000000000");
-    expect(Number(dto.estimatedYieldHex)).not.toBe(
-      Number(dto.estimatedYieldHex) + Number(dto.bpdYieldHex),
+    // If they were summed, estimatedYieldHearts would equal "6000000000" — not the case
+    expect(dto.estimatedYieldHearts).toBe("1000000000");
+    expect(Number(dto.estimatedYieldHearts)).not.toBe(
+      Number(dto.estimatedYieldHearts) + Number(dto.bpdYieldHex),
     );
   });
 
@@ -551,7 +551,7 @@ describe("Big Pay Day invariants", () => {
 
   it("bpdYieldStatus 'applicable' requires non-null bpdYieldHex", () => {
     const dto = buildEstimatedYieldDto({
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: "5000000000",
       bpdYieldStatus: "applicable",
     });
@@ -561,7 +561,7 @@ describe("Big Pay Day invariants", () => {
 
   it("bpdYieldStatus 'not_applicable' has null bpdYieldHex", () => {
     const dto = buildEstimatedYieldDto({
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
     });
@@ -573,7 +573,7 @@ describe("Big Pay Day invariants", () => {
     // A stake that began after day 353 or ended before day 353 is "not_applicable".
     // This is a design constraint documented in the contract test.
     const noOverlap = buildEstimatedYieldDto({
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: null,
       bpdYieldStatus: "not_applicable",
     });
@@ -581,7 +581,7 @@ describe("Big Pay Day invariants", () => {
     expect(noOverlap.bpdYieldHex).toBeNull();
 
     const withOverlap = buildEstimatedYieldDto({
-      estimatedYieldHex: "1000000000",
+      estimatedYieldHearts: "1000000000",
       bpdYieldHex: "5000000000",
       bpdYieldStatus: "applicable",
     });

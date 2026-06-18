@@ -73,7 +73,7 @@ function buildMinimalHexStakeDto(overrides: Partial<HexStakeDto> = {}): HexStake
     },
     yield: {
       status: "unsupported",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldHex: null,
       bpdYieldStatus: null,
       provenance: null,
@@ -287,9 +287,9 @@ describe("HexMining DTO contract skeleton", () => {
         expect(dto.yield.status).toBe("unsupported");
       });
 
-      it("yield.estimatedYieldHex is null (dailyDataRange deferred to Phase 4)", () => {
+      it("yield.estimatedYieldHearts is null (dailyDataRange deferred to Phase 4)", () => {
         const dto = buildMinimalHexStakeDto();
-        expect(dto.yield.estimatedYieldHex).toBeNull();
+        expect(dto.yield.estimatedYieldHearts).toBeNull();
       });
 
       it("yield.bpdYieldHex is null (Big Pay Day modeling deferred to Phase 4)", () => {

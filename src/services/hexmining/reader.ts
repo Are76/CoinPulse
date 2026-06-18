@@ -236,14 +236,14 @@ type AssembleYieldArgs = {
 
 async function assembleYield(args: AssembleYieldArgs): Promise<HexStakeYieldDto> {
   if (!args.estimateYield) {
-    return { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] };
+    return { status: "unsupported", estimatedYieldHearts: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] };
   }
 
   if (args.currentDay === null) {
     const bpdStatus = deriveBpdYieldStatus(args.lockedDay, args.stakedDays, []);
     return {
       status: "unavailable",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
       bpdYieldHex: null,
       provenance: null,
@@ -258,7 +258,7 @@ async function assembleYield(args: AssembleYieldArgs): Promise<HexStakeYieldDto>
     const bpdStatus = deriveBpdYieldStatus(args.lockedDay, args.stakedDays, []);
     return {
       status: "unavailable",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
       bpdYieldHex: null,
       provenance: null,
@@ -284,7 +284,7 @@ async function assembleYield(args: AssembleYieldArgs): Promise<HexStakeYieldDto>
     const bpdStatus = deriveBpdYieldStatus(args.lockedDay, args.stakedDays, []);
     return {
       status: "unavailable",
-      estimatedYieldHex: null,
+      estimatedYieldHearts: null,
       bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
       bpdYieldHex: null,
       provenance: null,
@@ -301,7 +301,7 @@ function mapEstimateToYieldDto(
   stakedDays: number,
 ): HexStakeYieldDto {
   if (result.status === "unsupported") {
-    return { status: "unsupported", estimatedYieldHex: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] };
+    return { status: "unsupported", estimatedYieldHearts: null, bpdYieldHex: null, bpdYieldStatus: null, provenance: null, warnings: [] };
   }
 
   if (result.status === "estimated") {
@@ -310,7 +310,7 @@ function mapEstimateToYieldDto(
     if (provenance === null) {
       return {
         status: "unavailable",
-        estimatedYieldHex: null,
+        estimatedYieldHearts: null,
         bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
         bpdYieldHex: null,
         provenance: null,
@@ -320,7 +320,7 @@ function mapEstimateToYieldDto(
     if (bpdStatus === "applicable" && result.bpdYieldHex !== null) {
       return {
         status: "estimated",
-        estimatedYieldHex: result.yieldHex,
+        estimatedYieldHearts: result.yieldHex,
         bpdYieldStatus: "applicable",
         bpdYieldHex: result.bpdYieldHex,
         provenance,
@@ -329,7 +329,7 @@ function mapEstimateToYieldDto(
     }
     return {
       status: "estimated",
-      estimatedYieldHex: result.yieldHex,
+      estimatedYieldHearts: result.yieldHex,
       bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
       bpdYieldHex: null,
       provenance,
@@ -343,7 +343,7 @@ function mapEstimateToYieldDto(
   const bpdStatus = deriveBpdYieldStatus(lockedDay, stakedDays, result.warnings);
   return {
     status: "unavailable",
-    estimatedYieldHex: null,
+    estimatedYieldHearts: null,
     bpdYieldStatus: bpdStatus === "applicable" ? "unknown" : bpdStatus,
     bpdYieldHex: null,
     provenance: assembleYieldProvenance(result.provenance),
