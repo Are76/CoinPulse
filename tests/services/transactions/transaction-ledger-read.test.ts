@@ -238,7 +238,7 @@ describe("listCanonicalTransactions — wallet with transactions", () => {
     expect(e.pricingStatus).toBe("priced");
     expect(e.valuationStatus).toBe("valued");
     expect(e.valueQuote).toBe("12.50");
-    expect(e.quoteAsset).toBe("USD");
+    expect(e.quoteAsset).toBe("fiat:usd");
   });
 
   it("pricingStatus and valuationStatus are unavailable when valueUsd is null", async () => {

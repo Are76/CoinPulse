@@ -134,7 +134,7 @@ function mapEntry(entry: {
     pricingProvenance: null,
     valuationStatus: valued ? "valued" : "unavailable",
     valueQuote: entry.valueUsd?.toString() ?? null,
-    quoteAsset: valued ? "USD" : null,
+    quoteAsset: valued ? "fiat:usd" : null,
     pnlImpact: null,
     warnings: [],
     rejectedReason: null,
