@@ -1,3 +1,5 @@
-// Registers /debug/sync in the active root app/ tree.
-// Re-exports the canonical page from src/app/ to keep a single source of truth.
-export { default } from "@/app/debug/sync/page";
+import { DebugSyncScreen } from "@/components/debug/debug-sync-screen";
+
+export default function DebugSyncPage() {
+  return <DebugSyncScreen />;
+}

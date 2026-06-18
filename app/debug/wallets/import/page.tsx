@@ -1,3 +1,5 @@
-// Registers /debug/wallets/import in the active root app/ tree.
-// Re-exports the canonical page from src/app/ to keep a single source of truth.
-export { default } from "@/app/debug/wallets/import/page";
+import { WalletImportScreen } from "@/components/wallets/wallet-import-screen";
+
+export default function WalletImportPage() {
+  return <WalletImportScreen />;
+}

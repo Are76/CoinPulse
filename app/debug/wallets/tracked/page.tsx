@@ -1,3 +1,5 @@
-// Registers /debug/wallets/tracked in the active root app/ tree.
-// Re-exports the canonical page from src/app/ to keep a single source of truth.
-export { default } from "@/app/debug/wallets/tracked/page";
+import { TrackedWalletsScreen } from "@/components/wallets/tracked-wallets-screen";
+
+export default function TrackedWalletsPage() {
+  return <TrackedWalletsScreen />;
+}
