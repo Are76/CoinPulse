@@ -140,6 +140,7 @@ export async function runRebuildOperation(args: {
       runId: run.id,
       status: "FAILED",
       stage: currentStage,
+      startBlock: args.fromBlock,
       latestSafeBlock,
       warningCount,
       warningDetails: [...warningDetails],

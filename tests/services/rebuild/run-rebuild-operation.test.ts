@@ -154,6 +154,7 @@ describe("runRebuildOperation", () => {
       runId: "rebuild-run-2",
       status: "FAILED",
       stage: "REBUILDING_LEDGER",
+      startBlock: 500n,
       latestSafeBlock: undefined,
       warningCount: 0,
       warningDetails: [],
