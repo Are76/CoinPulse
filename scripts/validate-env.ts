@@ -1,8 +1,10 @@
 type RequiredVariableName = "DATABASE_URL" | "REDIS_URL" | "PULSECHAIN_RPC_URL";
+type OptionalVariableName = "PULSECHAIN_RPC_URL_2" | "PULSECHAIN_RPC_URL_3";
 
 type ValidationRule = {
-  name: RequiredVariableName;
+  name: RequiredVariableName | OptionalVariableName;
   validate: (value: string) => string | null;
+  optional?: boolean;
 };
 
 const validateUrl = (value: string, allowedProtocols: readonly string[]) => {
@@ -34,13 +36,23 @@ const validationRules: readonly ValidationRule[] = [
     name: "PULSECHAIN_RPC_URL",
     validate: (value) => validateUrl(value, ["http:", "https:"] as const),
   },
+  {
+    name: "PULSECHAIN_RPC_URL_2",
+    validate: (value) => validateUrl(value, ["http:", "https:"] as const),
+    optional: true,
+  },
+  {
+    name: "PULSECHAIN_RPC_URL_3",
+    validate: (value) => validateUrl(value, ["http:", "https:"] as const),
+    optional: true,
+  },
 ];
 
-const validationErrors = validationRules.flatMap(({ name, validate }) => {
+const validationErrors = validationRules.flatMap(({ name, validate, optional }) => {
   const value = process.env[name];
 
   if (!value) {
-    return [`${name} is missing`];
+    return optional ? [] : [`${name} is missing`];
   }
 
   const validationError = validate(value);

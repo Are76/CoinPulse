@@ -72,6 +72,30 @@ describe("foundation config", () => {
     await expect(import("@/lib/rpc-env")).rejects.toThrowError(/PULSECHAIN_RPC_URL/);
   });
 
+  it("PULSECHAIN_RPC_URL_2 and _3 are optional — absent means undefined in rpcEnv", async () => {
+    delete process.env.PULSECHAIN_RPC_URL_2;
+    delete process.env.PULSECHAIN_RPC_URL_3;
+
+    const { rpcEnv: loadedRpcEnv } = await import("@/lib/rpc-env");
+    expect(loadedRpcEnv.PULSECHAIN_RPC_URL_2).toBeUndefined();
+    expect(loadedRpcEnv.PULSECHAIN_RPC_URL_3).toBeUndefined();
+  });
+
+  it("PULSECHAIN_RPC_URL_2 is parsed when set", async () => {
+    const fallbackUrl = "https://fallback-rpc.example.invalid";
+    process.env.PULSECHAIN_RPC_URL_2 = fallbackUrl;
+
+    const { rpcEnv: loadedRpcEnv } = await import("@/lib/rpc-env");
+    expect(loadedRpcEnv.PULSECHAIN_RPC_URL_2).toBe(fallbackUrl);
+  });
+
+  it("empty string PULSECHAIN_RPC_URL_2 is treated as absent", async () => {
+    process.env.PULSECHAIN_RPC_URL_2 = "";
+
+    const { rpcEnv: loadedRpcEnv } = await import("@/lib/rpc-env");
+    expect(loadedRpcEnv.PULSECHAIN_RPC_URL_2).toBeUndefined();
+  });
+
   it("tracks only the core protocol constants for the bounded foundation slice", () => {
     expect(CORE_PROTOCOLS).toEqual(
       expect.objectContaining({
