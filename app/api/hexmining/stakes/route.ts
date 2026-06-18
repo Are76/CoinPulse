@@ -59,7 +59,7 @@ export async function GET(request: Request) {
         }),
     });
 
-    if (stakes.isComplete) {
+    if (stakes.isComplete && stakes.warnings.length === 0) {
       try {
         await writeHexStakeSnapshot({
           walletAddress: input.walletAddress,
