@@ -4,7 +4,7 @@ export const PULSECHAIN_REFERENCE = {
   id: 369,
   slug: "pulsechain",
   name: "PulseChain",
-  nativeAssetId: "chain:369:native:PLS",
+  nativeAssetId: "chain:369:native:0x0000000000000000000000000000000000000000",
 } as const;
 
 export const PULSECHAIN_CHAIN = defineChain({

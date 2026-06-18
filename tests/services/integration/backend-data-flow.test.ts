@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+﻿import { describe, expect, it, vi } from "vitest";
 
 import { assemblePortfolioDashboard } from "@/services/dashboard/portfolio-dashboard";
 import { getOperationStateReport } from "@/services/debug/operation-state";
@@ -15,7 +15,7 @@ const WALLET_TOPIC =
   "0x0000000000000000000000001111111111111111111111111111111111111111";
 const TOKEN_ADDRESS = "0x2222222222222222222222222222222222222222";
 const TOKEN_ASSET_ID = `chain:${CHAIN_ID}:erc20:${TOKEN_ADDRESS}`;
-const NATIVE_ASSET_ID = `chain:${CHAIN_ID}:native:PLS`;
+const NATIVE_ASSET_ID = `chain:${CHAIN_ID}:native:0x0000000000000000000000000000000000000000`;
 
 type RawLogRecord = {
   chainId: number;

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+﻿import { describe, expect, it, vi } from "vitest";
 
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 import { materializeCurrentPortfolioPositions } from "@/services/portfolio/materialize-positions";
@@ -7,7 +7,7 @@ import { persistNormalizedLedger } from "@/services/sync/ledger-store";
 const WALLET_ID = "wallet_1";
 const WALLET_ADDRESS = "0x1111111111111111111111111111111111111111";
 const CHAIN_ID = 369;
-const NATIVE_ASSET_ID = "chain:369:native:PLS";
+const NATIVE_ASSET_ID = "chain:369:native:0x0000000000000000000000000000000000000000";
 const PHEX_ASSET_ID =
   "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39";
 

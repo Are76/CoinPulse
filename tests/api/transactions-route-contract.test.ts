@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+﻿import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { TransactionsPageDto } from "@/services/transactions/types";
 import {
@@ -385,7 +385,7 @@ describe("GET /api/transactions route contract", () => {
           entries: [
             {
               entryId: "e-1",
-              assetId: "chain:369:native:PLS",
+              assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
               assetAddress: null,
               entryType: "TRANSFER_OUT",
               direction: "OUT",

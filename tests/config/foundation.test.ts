@@ -18,7 +18,7 @@ afterEach(() => {
 
 describe("foundation config", () => {
   it("defines PulseChain asset identity invariants", () => {
-    expect(PULSECHAIN_NATIVE_ASSET_ID).toBe("chain:369:native:PLS");
+    expect(PULSECHAIN_NATIVE_ASSET_ID).toBe("chain:369:native:0x0000000000000000000000000000000000000000");
     expect(PHEX_ADDRESS).toBe("0x2b591e99afe9f32eaa6214f7b7629768c40eeb39");
     expect(PHEX_DECIMALS).toBe(8);
   });

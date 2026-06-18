@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 
 import { getMaterializationDiagnosticsReport } from "@/services/portfolio/materialization-diagnostics";
 
@@ -215,7 +215,7 @@ describe("getMaterializationDiagnosticsReport", () => {
             walletId: "wallet-1",
             walletAddress: "0x1111111111111111111111111111111111111111",
             chainId: 369,
-            assetId: "chain:369:native:PLS",
+            assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
             assetAddress: null,
             balanceQuantity: "-0.25",
             decimals: 18,
@@ -239,7 +239,7 @@ describe("getMaterializationDiagnosticsReport", () => {
             updatedFromBlock: 200n,
             updatedToBlock: 220n,
             warningCount: 1,
-            warningDetails: ["negative-token-balance:chain:369:native:PLS:-0.25"],
+            warningDetails: ["negative-token-balance:chain:369:native:0x0000000000000000000000000000000000000000:-0.25"],
             errorMessage: null,
             createdAt: new Date("2026-05-10T09:05:30.000Z"),
             updatedAt: new Date("2026-05-10T09:05:30.000Z"),
@@ -270,14 +270,14 @@ describe("getMaterializationDiagnosticsReport", () => {
       warnings: [
         {
           code: "negative_token_balance",
-          message: "Negative materialized token balance for chain:369:native:PLS: -0.25",
+          message: "Negative materialized token balance for chain:369:native:0x0000000000000000000000000000000000000000: -0.25",
         },
       ],
       errorMessage: null,
       hasNegativeBalances: true,
       negativeBalances: [
         {
-          assetId: "chain:369:native:PLS",
+          assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
           assetAddress: null,
           balanceQuantity: "-0.25",
           decimals: 18,
@@ -429,7 +429,7 @@ describe("getMaterializationDiagnosticsReport", () => {
             updatedToBlock: 90n,
             warningCount: 2,
             warningDetails: [
-              "negative-token-balance:chain:369:native:PLS:-0.25",
+              "negative-token-balance:chain:369:native:0x0000000000000000000000000000000000000000:-0.25",
               "stake-key-missing:null",
             ],
             errorMessage: "materialization exploded",
@@ -462,7 +462,7 @@ describe("getMaterializationDiagnosticsReport", () => {
       warnings: [
         {
           code: "negative_token_balance",
-          message: "Negative materialized token balance for chain:369:native:PLS: -0.25",
+          message: "Negative materialized token balance for chain:369:native:0x0000000000000000000000000000000000000000: -0.25",
         },
         {
           code: "generic_persisted_warning",

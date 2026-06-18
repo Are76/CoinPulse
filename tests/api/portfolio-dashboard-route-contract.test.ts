@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+﻿import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PersistedPriceObservation } from "@/services/pricing/types";
 
@@ -8,7 +8,7 @@ const CHAIN_ID = 369;
 const QUOTE_ASSET = "fiat:usd";
 const TOKEN_ASSET = "chain:369:erc20:0xtoken";
 const TOKEN_ADDRESS = "0xtoken";
-const NATIVE_ASSET = "chain:369:native:PLS";
+const NATIVE_ASSET = "chain:369:native:0x0000000000000000000000000000000000000000";
 
 type WalletRecord = {
   id: string;
@@ -862,7 +862,7 @@ describe("GET /api/portfolio/dashboard route contract", () => {
             updatedToBlock: 120n,
             warningCount: 2,
             warningDetails: [
-              "negative-token-balance:chain:369:native:PLS:-0.25",
+              "negative-token-balance:chain:369:native:0x0000000000000000000000000000000000000000:-0.25",
               "stake-key-missing:null",
             ],
             errorMessage: "materialization exploded",
@@ -904,7 +904,7 @@ describe("GET /api/portfolio/dashboard route contract", () => {
           warnings: [
             {
               code: "negative_token_balance",
-              message: "Negative materialized token balance for chain:369:native:PLS: -0.25",
+              message: "Negative materialized token balance for chain:369:native:0x0000000000000000000000000000000000000000: -0.25",
             },
             {
               code: "generic_persisted_warning",

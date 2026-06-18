@@ -1,4 +1,4 @@
-import { cleanup, render, screen, fireEvent } from "@testing-library/react";
+﻿import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
@@ -86,7 +86,7 @@ const MOCK_TX: TransactionDto = {
   entries: [
     {
       entryId: "e-001",
-      assetId: "chain:369:native:PLS",
+      assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
       assetAddress: null,
       entryType: "RECEIVE",
       direction: "IN",
@@ -335,7 +335,7 @@ describe("TransactionHistoryScreen — transaction rendering", () => {
 
   it("renders entry assetId from the backend DTO", () => {
     renderWithTx(MOCK_TX);
-    expect(screen.getByText("chain:369:native:PLS")).toBeInTheDocument();
+    expect(screen.getByText("chain:369:native:0x0000000000000000000000000000000000000000")).toBeInTheDocument();
   });
 
   it("renders entry direction from the backend DTO", () => {

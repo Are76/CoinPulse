@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+﻿import { describe, expect, it, vi } from "vitest";
 import { encodeFunctionData, parseAbi } from "viem";
 
 import { PHEX_ADDRESS } from "@/config/assets";
@@ -588,7 +588,7 @@ describe("stake sync flow", () => {
       principalReturnedRaw: null,
       yieldRaw: null,
       penaltyRaw: null,
-      feeAssetIdSnapshot: "chain:369:native:PLS",
+      feeAssetIdSnapshot: "chain:369:native:0x0000000000000000000000000000000000000000",
       feeDecimalsSnapshot: 18,
       feeAmountRaw: "300000000000000",
       status: "ACTIVE",

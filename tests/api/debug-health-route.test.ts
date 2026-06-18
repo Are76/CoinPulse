@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+﻿import { afterEach, describe, expect, it, vi } from "vitest";
 
 const getHealthReport = vi.fn();
 const getDebugStatusReport = vi.fn();
@@ -94,7 +94,7 @@ describe("GET /api/debug/status", () => {
         {
           chainId: 369,
           name: "PulseChain",
-          nativeAssetId: "chain:369:native:PLS",
+          nativeAssetId: "chain:369:native:0x0000000000000000000000000000000000000000",
         },
       ],
       sourceFamilies: ["TRANSFERS", "DEX", "LP", "STAKING", "NATIVE"],
@@ -139,7 +139,7 @@ describe("GET /api/debug/status", () => {
           {
             chainId: 369,
             name: "PulseChain",
-            nativeAssetId: "chain:369:native:PLS",
+            nativeAssetId: "chain:369:native:0x0000000000000000000000000000000000000000",
           },
         ],
         sourceFamilies: ["TRANSFERS", "DEX", "LP", "STAKING", "NATIVE"],

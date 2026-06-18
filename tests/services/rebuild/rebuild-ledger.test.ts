@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 import { persistNormalizedLedger } from "@/services/sync/ledger-store";
 import { rebuildCanonicalLedger } from "@/services/rebuild/rebuild-ledger";
@@ -566,19 +566,19 @@ describe("rebuildCanonicalLedger", () => {
         expect.objectContaining({
           txHash: "0xnative-send",
           entryType: "SEND",
-          assetId: "chain:369:native:PLS",
+          assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
           quantity: "1",
         }),
         expect.objectContaining({
           txHash: "0xnative-send",
           entryType: "FEE",
-          assetId: "chain:369:native:PLS",
+          assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
           quantity: "0.000042",
         }),
         expect.objectContaining({
           txHash: "0xnative-receive",
           entryType: "RECEIVE",
-          assetId: "chain:369:native:PLS",
+          assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
           quantity: "0.25",
         }),
       ]),
@@ -611,7 +611,7 @@ describe("rebuildCanonicalLedger", () => {
       boughtAssetIdSnapshot: "chain:369:erc20:0xbought",
       boughtDecimalsSnapshot: 18,
       boughtAmountRaw: "3000000000000000000",
-      feeAssetIdSnapshot: "chain:369:native:PLS",
+      feeAssetIdSnapshot: "chain:369:native:0x0000000000000000000000000000000000000000",
       feeDecimalsSnapshot: 18,
       feeAmountRaw: "200000000000000",
       status: "ACTIVE",
@@ -667,7 +667,7 @@ describe("rebuildCanonicalLedger", () => {
       lpAssetIdSnapshot: "chain:369:erc20:0xlp",
       lpDecimalsSnapshot: 18,
       lpAmountRaw: "100000000000000000",
-      feeAssetIdSnapshot: "chain:369:native:PLS",
+      feeAssetIdSnapshot: "chain:369:native:0x0000000000000000000000000000000000000000",
       feeDecimalsSnapshot: 18,
       feeAmountRaw: "200000000000000",
       status: "ACTIVE",
@@ -722,7 +722,7 @@ describe("rebuildCanonicalLedger", () => {
       principalReturnedRaw: "100000000",
       yieldRaw: "5000000",
       penaltyRaw: null,
-      feeAssetIdSnapshot: "chain:369:native:PLS",
+      feeAssetIdSnapshot: "chain:369:native:0x0000000000000000000000000000000000000000",
       feeDecimalsSnapshot: 18,
       feeAmountRaw: "300000000000000",
       status: "ACTIVE",
@@ -796,7 +796,7 @@ describe("rebuildCanonicalLedger", () => {
       boughtAssetIdSnapshot: "chain:369:erc20:0xbought",
       boughtDecimalsSnapshot: 18,
       boughtAmountRaw: "1000000000000000000",
-      feeAssetIdSnapshot: "chain:369:native:PLS",
+      feeAssetIdSnapshot: "chain:369:native:0x0000000000000000000000000000000000000000",
       feeDecimalsSnapshot: 18,
       feeAmountRaw: "100000000000000",
       status: "ACTIVE",

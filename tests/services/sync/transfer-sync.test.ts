@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+﻿import { describe, expect, it, vi } from "vitest";
 
 import { readWalletTransferRawTokenTransfers } from "@/services/ingestion/raw-store";
 import { runWalletSync } from "@/services/sync/sync-orchestrator";
@@ -1059,19 +1059,19 @@ describe("transfer sync flow", () => {
         expect.objectContaining({
           txHash: "0xnative-send",
           entryType: "SEND",
-          assetId: "chain:369:native:PLS",
+          assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
           quantity: "1",
         }),
         expect.objectContaining({
           txHash: "0xnative-send",
           entryType: "FEE",
-          assetId: "chain:369:native:PLS",
+          assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
           quantity: "0.000042",
         }),
         expect.objectContaining({
           txHash: "0xnative-receive",
           entryType: "RECEIVE",
-          assetId: "chain:369:native:PLS",
+          assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
           quantity: "0.25",
         }),
       ]),

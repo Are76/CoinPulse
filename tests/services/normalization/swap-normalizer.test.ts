@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 
 import { normalizeSwap } from "@/services/normalization/swap-normalizer";
 
@@ -19,7 +19,7 @@ describe("normalizeSwap", () => {
       boughtAssetId: "chain:369:erc20:0xbought",
       boughtAmountRaw: "3000000",
       boughtDecimals: 6,
-      feeAssetId: "chain:369:native:PLS",
+      feeAssetId: "chain:369:native:0x0000000000000000000000000000000000000000",
       feeAmountRaw: "10000000000000000",
       feeDecimals: 18,
     });

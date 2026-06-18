@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 
 import { persistPriceObservations } from "@/services/pricing/price-store";
 import type { PersistedPriceObservation, PriceObservationDraft } from "@/services/pricing/types";
@@ -18,7 +18,7 @@ function createDraft(
     sourceType: "ONCHAIN_POOL",
     sourceId: "pulsex:pair:0xpair",
     routeMetadata: {
-      hops: ["chain:369:erc20:0xtokena", "chain:369:native:PLS", QUOTE_ASSET],
+      hops: ["chain:369:erc20:0xtokena", "chain:369:native:0x0000000000000000000000000000000000000000", QUOTE_ASSET],
     },
     liquidityUsd: "150000",
     confidence: "0.92",
@@ -96,7 +96,7 @@ describe("persistPriceObservations", () => {
           sourceType: "ONCHAIN_POOL",
           sourceId: "pulsex:pair:0xpair",
           routeMetadata: {
-            hops: ["chain:369:erc20:0xtokena", "chain:369:native:PLS", QUOTE_ASSET],
+            hops: ["chain:369:erc20:0xtokena", "chain:369:native:0x0000000000000000000000000000000000000000", QUOTE_ASSET],
           },
           liquidityUsd: "150000",
           confidence: "0.92",

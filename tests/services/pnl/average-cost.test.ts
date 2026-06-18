@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 
 import { resolveBestPriceObservation } from "@/services/pricing/price-resolver";
 import type { PersistedPriceObservation } from "@/services/pricing/types";
@@ -10,7 +10,7 @@ const WALLET_ID = "wallet-1";
 const QUOTE_ASSET = "fiat:usd";
 const TARGET_ASSET = "chain:369:erc20:0xtoken";
 const TARGET_ADDRESS = "0xtoken";
-const PLS_ASSET = "chain:369:native:pls";
+const PLS_ASSET = "chain:369:native:0x0000000000000000000000000000000000000000";
 const PLS_ADDRESS = null;
 const LP_ASSET = "chain:369:erc20:0xlp";
 
