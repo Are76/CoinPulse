@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { EmptyState } from "@/components/ui/data-state/empty-state";
 import { ErrorState } from "@/components/ui/data-state/error-state";
 import { LoadingState } from "@/components/ui/data-state/loading-state";
@@ -16,18 +18,22 @@ const DEFAULT_CHAIN_ID = 369;
 const DEFAULT_QUOTE_ASSET = "fiat:usd";
 
 export function AssetHoldingsScreen() {
+  const [selectedWalletId, setSelectedWalletId] = useState<string | null>(null);
   const trackedWalletsQuery = useTrackedWalletsQuery();
 
-  const firstWallet =
-    trackedWalletsQuery.isSuccess && trackedWalletsQuery.data.wallets.length > 0
-      ? trackedWalletsQuery.data.wallets[0]
+  const wallets =
+    trackedWalletsQuery.isSuccess ? trackedWalletsQuery.data.wallets : [];
+
+  const selectedWallet =
+    wallets.length > 0
+      ? (wallets.find((w) => w.id === selectedWalletId) ?? wallets[0])
       : null;
 
   const dashboardQuery = useDashboardQuery({
-    walletAddress: firstWallet?.address ?? "",
-    chainId: firstWallet?.chainId ?? DEFAULT_CHAIN_ID,
+    walletAddress: selectedWallet?.address ?? "",
+    chainId: selectedWallet?.chainId ?? DEFAULT_CHAIN_ID,
     quoteAsset: DEFAULT_QUOTE_ASSET,
-    enabled: firstWallet !== null,
+    enabled: selectedWallet !== null,
   });
 
   if (trackedWalletsQuery.isPending) {
@@ -49,7 +55,7 @@ export function AssetHoldingsScreen() {
     );
   }
 
-  if (firstWallet === null) {
+  if (selectedWallet === null) {
     return (
       <PageContainer>
         <EmptyState
@@ -67,12 +73,34 @@ export function AssetHoldingsScreen() {
       <SurfaceCard className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold tracking-tight">Asset holdings</h1>
         <p className="text-sm text-[color:var(--color-text-muted)]">
-          Backend-resolved token balances for the first tracked wallet. Valuation and pricing status
-          are displayed verbatim from the backend DTO — no frontend calculation.
+          Backend-resolved token balances for the selected tracked wallet. Valuation and pricing
+          status are displayed verbatim from the backend DTO — no frontend calculation.
         </p>
+        {wallets.length > 1 ? (
+          <div className="mt-2">
+            <label
+              htmlFor="wallet-select"
+              className="mb-1 block text-xs text-[color:var(--color-text-muted)]"
+            >
+              Wallet
+            </label>
+            <select
+              id="wallet-select"
+              className="rounded border border-[color:var(--color-border)] bg-[color:var(--color-surface)] px-2 py-1 font-mono text-xs"
+              value={selectedWallet.id}
+              onChange={(e) => setSelectedWalletId(e.target.value)}
+            >
+              {wallets.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.label ?? w.address} (chain {w.chainId})
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
         <div className="mt-2 flex flex-wrap gap-4 font-mono text-xs text-[color:var(--color-text-muted)]">
-          <span>wallet: {firstWallet.address}</span>
-          <span>chainId: {firstWallet.chainId}</span>
+          <span>wallet: {selectedWallet.address}</span>
+          <span>chainId: {selectedWallet.chainId}</span>
         </div>
       </SurfaceCard>
 
