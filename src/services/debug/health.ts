@@ -5,6 +5,7 @@ import { getRedis } from "@/lib/redis";
 import { env } from "@/lib/env";
 import { serverEnv } from "@/lib/server-env";
 import { SUPPORTED_CHAINS } from "@/config/chains";
+import { SUPPORTED_SYNC_SOURCE_FAMILIES } from "@/services/sync/source-families";
 import { getOperationStateReport, type OperationStateReport } from "@/services/debug/operation-state";
 import {
   getMaterializationDiagnosticsReport,
@@ -110,7 +111,7 @@ export async function getDebugStatusReport(): Promise<DebugStatusReport> {
       name: chain.name,
       nativeAssetId: chain.id === 369 ? "chain:369:native:PLS" : `chain:${chain.id}:native`,
     })),
-    sourceFamilies: ["TRANSFERS", "DEX", "LP", "STAKING", "NATIVE"],
+    sourceFamilies: [...SUPPORTED_SYNC_SOURCE_FAMILIES],
     pricing: {
       persistedObservationsOnly: true,
       liveAdaptersEnabled: false,

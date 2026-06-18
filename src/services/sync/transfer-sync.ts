@@ -3,6 +3,7 @@ import "server-only";
 import type { SourceFamily } from "@prisma/client";
 
 import { PHEX_ADDRESS } from "@/config/assets";
+import { SUPPORTED_SYNC_SOURCE_FAMILIES } from "@/services/sync/source-families";
 import { getDb } from "@/lib/db";
 import { createPublicClientForChain } from "@/services/chains/public-client";
 import {
@@ -53,12 +54,7 @@ export {
   TRANSFER_EVENT_TOPIC0,
 };
 
-export const SUPPORTED_CONCRETE_SOURCE_FAMILIES = [
-  "TRANSFERS",
-  "DEX",
-  "LP",
-  "STAKING",
-] as const;
+export const SUPPORTED_CONCRETE_SOURCE_FAMILIES = SUPPORTED_SYNC_SOURCE_FAMILIES;
 
 export type PersistedTransferRawTransaction = Awaited<
   ReturnType<typeof readWalletRawTransactions>

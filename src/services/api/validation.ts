@@ -2,7 +2,7 @@ import "server-only";
 
 import { z, ZodError } from "zod";
 
-const SOURCE_FAMILY_VALUES = ["TRANSFERS", "DEX", "LP", "STAKING", "NATIVE"] as const;
+import { SUPPORTED_SYNC_SOURCE_FAMILIES } from "@/services/sync/source-families";
 
 /**
  * Conservative block-span limit for operator manual sync/rebuild.
@@ -32,7 +32,7 @@ const blockNumberSchema = z
 
 const quoteAssetSchema = z.string().trim().min(1).max(128).default("fiat:usd");
 
-const sourceFamilySchema = z.enum(SOURCE_FAMILY_VALUES);
+const sourceFamilySchema = z.enum(SUPPORTED_SYNC_SOURCE_FAMILIES);
 
 const optionalAsOfSchema = z
   .string()
