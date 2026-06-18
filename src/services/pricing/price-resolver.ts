@@ -1,5 +1,6 @@
 import "server-only";
 
+import { Decimal } from "@/lib/decimal";
 import { listPriceObservations } from "@/services/pricing/price-store";
 import type {
   PersistedPriceObservation,
@@ -34,7 +35,7 @@ export function resolveBestPriceObservation(args: {
   observedAt: Date;
   minimumConfidence?: string;
 }): ResolveBestPriceResult {
-  const minimumConfidence = Number(args.minimumConfidence ?? DEFAULT_MINIMUM_CONFIDENCE);
+  const minimumConfidence = new Decimal(args.minimumConfidence ?? DEFAULT_MINIMUM_CONFIDENCE);
   const rejected: ResolveBestPriceResult["rejected"] = [];
   const accepted: PersistedPriceObservation[] = [];
 
@@ -59,7 +60,7 @@ export function resolveBestPriceObservation(args: {
       continue;
     }
 
-    if (Number(observation.confidence) < minimumConfidence) {
+    if (new Decimal(observation.confidence).lessThan(minimumConfidence)) {
       rejected.push({ id: observation.id, reason: "LOW_CONFIDENCE" });
       continue;
     }
@@ -74,7 +75,7 @@ export function resolveBestPriceObservation(args: {
       return sourcePriorityDelta;
     }
 
-    const confidenceDelta = Number(right.confidence) - Number(left.confidence);
+    const confidenceDelta = new Decimal(right.confidence).comparedTo(left.confidence);
     if (confidenceDelta !== 0) {
       return confidenceDelta;
     }
@@ -84,7 +85,7 @@ export function resolveBestPriceObservation(args: {
       return observedAtDelta;
     }
 
-    return Number(right.liquidityUsd ?? "0") - Number(left.liquidityUsd ?? "0");
+    return new Decimal(right.liquidityUsd ?? "0").comparedTo(left.liquidityUsd ?? "0");
   });
 
   return {

@@ -230,4 +230,23 @@ describe("resolveBestPriceObservation", () => {
       }),
     ]);
   });
+
+  it("uses Decimal comparison for liquidityUsd tiebreaker — preserves precision beyond float53 range", () => {
+    // These two values differ only in their last digit but both exceed Number.MAX_SAFE_INTEGER,
+    // so Number() coercion would make them indistinguishable and produce a non-deterministic sort.
+    const higherLiquidity = "100000000000000001"; // 10^17 + 1
+    const lowerLiquidity  = "100000000000000000"; // 10^17
+    const result = resolveBestPriceObservation({
+      chainId: CHAIN_ID,
+      assetId: PHEX_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      observedAt: new Date("2026-05-08T12:01:00.000Z"),
+      observations: [
+        createObservation({ id: "low-liq",  liquidityUsd: lowerLiquidity,  confidence: "0.9" }),
+        createObservation({ id: "high-liq", liquidityUsd: higherLiquidity, confidence: "0.9" }),
+      ],
+    });
+
+    expect(result.selected?.id).toBe("high-liq");
+  });
 });
