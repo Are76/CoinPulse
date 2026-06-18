@@ -274,9 +274,12 @@ export function PortfolioSummarySection({
         <MetricCard label="Wallet" value={truncateAddress(dashboard.wallet.address)} />
         <MetricCard label="Chain" value={String(dashboard.wallet.chainId)} />
         <MetricCard
-          label="Summary valuation"
+          label={dashboard.summary.valuationStatus === "partial" ? "Partial valuation" : "Summary valuation"}
           value={formatNullable(dashboard.summary.totalValueQuote)}
           status={dashboard.summary.valuationStatus}
+          hint={dashboard.summary.valuationStatus === "partial"
+            ? `excludes ${dashboard.summary.valuationCoverage.unvaluedPositions} unpriced`
+            : undefined}
         />
         <MetricCard
           label="Coverage"
@@ -807,6 +810,7 @@ function MetricCard(args: {
   label: string;
   value: string;
   status?: DashboardStatus;
+  hint?: string;
 }) {
   return (
     <div className="rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] p-4">
@@ -817,6 +821,9 @@ function MetricCard(args: {
         {args.status ? <StatusBadge status={args.status} /> : null}
       </div>
       <p className="mt-4 cp-data text-lg">{args.value}</p>
+      {args.hint ? (
+        <p className="mt-1 text-xs text-[color:var(--color-text-muted)]">{args.hint}</p>
+      ) : null}
     </div>
   );
 }
