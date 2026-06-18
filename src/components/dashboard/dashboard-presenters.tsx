@@ -274,10 +274,10 @@ export function PortfolioSummarySection({
         <MetricCard label="Wallet" value={truncateAddress(dashboard.wallet.address)} />
         <MetricCard label="Chain" value={String(dashboard.wallet.chainId)} />
         <MetricCard
-          label={dashboard.summary.valuationCoverage.unvaluedPositions > 0 ? "Partial valuation" : "Summary valuation"}
+          label={dashboard.summary.valuationStatus === "partial" ? "Partial valuation" : "Summary valuation"}
           value={formatNullable(dashboard.summary.totalValueQuote)}
           status={dashboard.summary.valuationStatus}
-          hint={dashboard.summary.valuationCoverage.unvaluedPositions > 0
+          hint={dashboard.summary.valuationStatus === "partial"
             ? `excludes ${dashboard.summary.valuationCoverage.unvaluedPositions} unpriced`
             : undefined}
         />
