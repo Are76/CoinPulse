@@ -450,7 +450,7 @@ describe("HexMiningScreen — stake table rendering", () => {
       ...MOCK_STAKE,
       yield: {
         status: "exact",
-        estimatedYieldHearts: "99.000000",
+        estimatedYieldHearts: "9900000000",
         bpdYieldStatus: "not_applicable",
         bpdYieldHex: null,
         provenance: {

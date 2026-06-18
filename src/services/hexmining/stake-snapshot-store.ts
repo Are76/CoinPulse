@@ -3,15 +3,17 @@ import "server-only";
 import { getDb } from "@/lib/db";
 import type { HexStakeListDto } from "@/services/hexmining/types";
 
-const SNAPSHOT_TTL_SECONDS = 300; // 5 minutes
+const SNAPSHOT_TTL_SECONDS = 300;
+
+const CURRENT_PAYLOAD_VERSION = "v1";
 
 // Narrow typed client — subset of PrismaClient needed by this module.
 type StakeSnapshotStoreClient = {
   hexStakeListSnapshot: {
     findUnique(args: {
       where: { walletAddress_chainId: { walletAddress: string; chainId: number } };
-      select: { canonicalPayload: true; observedAt: true; staleAfterSeconds: true };
-    }): Promise<{ canonicalPayload: string; observedAt: Date; staleAfterSeconds: number } | null>;
+      select: { canonicalPayload: true; observedAt: true; staleAfterSeconds: true; payloadVersion: true };
+    }): Promise<{ canonicalPayload: string; observedAt: Date; staleAfterSeconds: number; payloadVersion: string } | null>;
     upsert(args: {
       where: { walletAddress_chainId: { walletAddress: string; chainId: number } };
       create: {
@@ -50,9 +52,10 @@ export async function readFreshHexStakeSnapshot(
 ): Promise<HexStakeListDto | null> {
   const row = await client.hexStakeListSnapshot.findUnique({
     where: { walletAddress_chainId: { walletAddress: input.walletAddress, chainId: input.chainId } },
-    select: { canonicalPayload: true, observedAt: true, staleAfterSeconds: true },
+    select: { canonicalPayload: true, observedAt: true, staleAfterSeconds: true, payloadVersion: true },
   });
   if (!row) return null;
+  if (row.payloadVersion !== CURRENT_PAYLOAD_VERSION) return null;
   const ageSeconds = (Date.now() - row.observedAt.getTime()) / 1000;
   if (ageSeconds > row.staleAfterSeconds) return null;
   return JSON.parse(row.canonicalPayload) as HexStakeListDto;
