@@ -73,7 +73,7 @@ export async function writeHexStakeSnapshot(
     create: {
       walletAddress: input.walletAddress,
       chainId: input.chainId,
-      payloadVersion: "v1",
+      payloadVersion: CURRENT_PAYLOAD_VERSION,
       canonicalPayload,
       observedAt,
       staleAfterSeconds: SNAPSHOT_TTL_SECONDS,
