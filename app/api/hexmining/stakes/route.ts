@@ -34,10 +34,15 @@ export async function GET(request: Request) {
   try {
     const input = parseSearchParams(hexminingStakesRequestSchema, request);
 
-    const cached = await readFreshHexStakeSnapshot({
-      walletAddress: input.walletAddress,
-      chainId: input.chainId,
-    });
+    let cached = null;
+    try {
+      cached = await readFreshHexStakeSnapshot({
+        walletAddress: input.walletAddress,
+        chainId: input.chainId,
+      });
+    } catch {
+      // Snapshot read failure is non-fatal — fall through to live RPC.
+    }
     if (cached) {
       return Response.json({ data: cached });
     }
@@ -55,11 +60,15 @@ export async function GET(request: Request) {
     });
 
     if (stakes.isComplete) {
-      await writeHexStakeSnapshot({
-        walletAddress: input.walletAddress,
-        chainId: input.chainId,
-        dto: stakes,
-      });
+      try {
+        await writeHexStakeSnapshot({
+          walletAddress: input.walletAddress,
+          chainId: input.chainId,
+          dto: stakes,
+        });
+      } catch {
+        // Snapshot write failure is non-fatal — live data is still returned.
+      }
     }
 
     return Response.json({ data: stakes });
