@@ -526,8 +526,8 @@ function OperationStatePanel({ state }: { state: OperationState }) {
   if (state.kind === "loading") {
     return (
       <SectionCard
-        title={`Running ${state.operation}`}
-        subtitle="The frontend is waiting for the backend operation to finish."
+        title={`Submitting ${state.operation}`}
+        subtitle="The frontend is waiting for the backend to accept the operation."
       >
         <LoadingState blocks={2} className="grid gap-4 md:grid-cols-2" />
       </SectionCard>
@@ -552,11 +552,14 @@ function OperationStatePanel({ state }: { state: OperationState }) {
 
   return (
     <SectionCard
-      title={`${toTitle(state.operation)} result`}
-      subtitle="Raw backend response is preserved below so operator-facing details stay explicit."
+      title={`${toTitle(state.operation)} accepted`}
+      subtitle="The backend accepted the operation. Debug status polling remains the source of truth for running, completed, or failed state."
     >
       <div className="flex flex-wrap gap-2">
-        <LabelBadge label={`${state.operation} completed`} tone="fresh" />
+        <LabelBadge label={`${state.operation} accepted`} tone="warn" />
+        {getRunId(state.payload) ? (
+          <LabelBadge label={`run ${getRunId(state.payload)}`} tone="neutral" />
+        ) : null}
       </div>
       <details className="mt-4 rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)]">
         <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
@@ -653,6 +656,15 @@ function getErrorDetails(error: unknown) {
   }
 
   return [];
+}
+
+function getRunId(payload: unknown) {
+  return typeof payload === "object" &&
+    payload !== null &&
+    "runId" in payload &&
+    typeof payload.runId === "string"
+    ? payload.runId
+    : null;
 }
 
 function toTitle(value: string) {

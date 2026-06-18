@@ -41,6 +41,7 @@ export type SyncRunStore = {
     runId: string;
     status?: SyncRunStatus;
     stage?: string;
+    startBlock?: bigint;
     latestSafeBlock?: bigint;
     warningCount?: number;
     warningDetails?: readonly string[];
@@ -107,6 +108,7 @@ export function createPrismaSyncRunStore(
         data: {
           status: input.status,
           stage: input.stage,
+          startBlock: input.startBlock,
           latestSafeBlock: input.latestSafeBlock,
           warningCount: input.warningCount,
           warningDetails: input.warningDetails,
