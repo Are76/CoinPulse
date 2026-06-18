@@ -106,6 +106,7 @@ model Chain {
   rpcRequestLogs                  RpcRequestLog[]
   reorgEvents                     ReorgEvent[]
   rawHexDailyDataObservations     RawHexDailyDataObservation[]
+  hexStakeListSnapshots           HexStakeListSnapshot[]
 }
 
 model Wallet {
@@ -668,4 +669,30 @@ model RawHexDailyDataObservationInvalidation {
 
   @@index([observationId])
   @@index([supersededByObservationId])
+}
+
+// ─── HexMining stake list snapshot ────────────────────────────────────────────
+//
+// One row per (walletAddress, chainId). Upserted on each successful RPC read.
+// The route checks freshness before hitting the RPC: if ageSeconds ≤
+// staleAfterSeconds, the cached DTO is returned directly.
+//
+// canonicalPayload stores the serialized HexStakeListDto JSON.
+// staleAfterSeconds is recorded alongside the payload so the TTL can be
+// tightened or relaxed per-row without a schema migration.
+
+model HexStakeListSnapshot {
+  id                String   @id @default(cuid())
+  walletAddress     String
+  chainId           Int
+  payloadVersion    String   @default("v1")
+  canonicalPayload  String
+  observedAt        DateTime
+  staleAfterSeconds Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  chain             Chain    @relation(fields: [chainId], references: [id], onDelete: Restrict)
+
+  @@unique([walletAddress, chainId])
+  @@index([chainId, walletAddress])
 }
