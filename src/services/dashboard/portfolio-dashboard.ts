@@ -357,15 +357,15 @@ const UNKNOWN_METADATA_PROVENANCE: DashboardTokenMetadataProvenanceDto = {
 };
 
 function mapTokenMetadataSource(sourceEvidence: string): DashboardMetadataProvenanceSource {
-  const normalized = sourceEvidence.toLowerCase();
+  const upper = sourceEvidence.toUpperCase();
 
-  if (normalized === "rpc") {
+  if (upper === "RPC") {
     return "chain";
   }
-  if (normalized === "manual" || normalized.startsWith("manual")) {
+  if (upper === "MANUAL" || upper.startsWith("MANUAL")) {
     return "manual";
   }
-  if (normalized === "seed" || normalized.startsWith("seed:")) {
+  if (upper === "SEED" || upper.startsWith("SEED:")) {
     return "derived";
   }
 
@@ -373,15 +373,15 @@ function mapTokenMetadataSource(sourceEvidence: string): DashboardMetadataProven
 }
 
 function mapTokenMetadataConfidence(sourceEvidence: string): DashboardMetadataProvenanceConfidence {
-  const normalized = sourceEvidence.toLowerCase();
+  const upper = sourceEvidence.toUpperCase();
 
-  if (normalized === "rpc") {
+  if (upper === "RPC") {
     return "medium";
   }
-  if (normalized === "manual" || normalized.startsWith("manual")) {
+  if (upper === "MANUAL" || upper.startsWith("MANUAL")) {
     return "medium";
   }
-  if (normalized === "seed" || normalized.startsWith("seed:")) {
+  if (upper === "SEED" || upper.startsWith("SEED:")) {
     return "low";
   }
 
