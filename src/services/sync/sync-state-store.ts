@@ -5,6 +5,19 @@ import type { PrismaClient, SourceFamily, SyncRunStatus, SyncTrigger } from "@pr
 
 import { getDb } from "@/lib/db";
 
+export const WARNING_DETAIL_LIMIT = 200;
+
+export function capWarningDetails(warnings: readonly string[]): string[] {
+  if (warnings.length <= WARNING_DETAIL_LIMIT) {
+    return [...warnings];
+  }
+  const omitted = warnings.length - WARNING_DETAIL_LIMIT;
+  return [
+    ...warnings.slice(0, WARNING_DETAIL_LIMIT),
+    `[truncated: ${omitted} additional warning${omitted === 1 ? "" : "s"} not stored]`,
+  ];
+}
+
 type SyncStateClient = PrismaClient | Prisma.TransactionClient;
 type CursorStoreClient = PrismaClient;
 
@@ -87,7 +100,7 @@ export function createPrismaSyncRunStore(
           latestSafeBlock: input.latestSafeBlock,
           policyLabel: input.policyLabel,
           warningCount: input.warningCount ?? 0,
-          warningDetails: input.warningDetails ?? [],
+          warningDetails: capWarningDetails(input.warningDetails ?? []),
           errorMessage: input.errorMessage ?? null,
           failedSourceFamily: input.failedSourceFamily ?? null,
           failedFromBlock: input.failedFromBlock ?? null,
@@ -111,7 +124,9 @@ export function createPrismaSyncRunStore(
           startBlock: input.startBlock,
           latestSafeBlock: input.latestSafeBlock,
           warningCount: input.warningCount,
-          warningDetails: input.warningDetails,
+          warningDetails: input.warningDetails !== undefined
+            ? capWarningDetails(input.warningDetails)
+            : undefined,
           errorMessage: input.errorMessage,
           endBlock: input.endBlock,
           failedSourceFamily: input.failedSourceFamily,
