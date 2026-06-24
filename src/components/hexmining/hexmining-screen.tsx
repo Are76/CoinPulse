@@ -12,11 +12,11 @@ import { ProvenanceChip } from "@/components/ui/provenance-chip";
 import { SectionCard } from "@/components/ui/section-card";
 import { SurfaceCard } from "@/components/ui/surface-card";
 import { ApiClientError } from "@/lib/api/hexmining-client";
+import { formatHeartsAsHexDisplay } from "@/lib/hex-format";
 import { useHexMiningStakesQuery } from "@/lib/query/use-hexmining-stakes-query";
 import type { HexStakeDto, HexStakeListDto, HexStakeStatus } from "@/services/hexmining/types";
 
 const PULSECHAIN_CHAIN_ID = 369;
-const HEARTS_PER_HEX = 100_000_000n;
 
 type SubmittedParams = {
   walletAddress: string;
@@ -42,18 +42,6 @@ function resolveStakeStatusTone(
   return "neutral";
 }
 
-function formatHeartsAsHexDisplay(hearts: string): string | null {
-  if (!/^\d+$/.test(hearts)) return null;
-
-  const rawHearts = BigInt(hearts);
-  const wholeHex = rawHearts / HEARTS_PER_HEX;
-  const fractionalHearts = rawHearts % HEARTS_PER_HEX;
-
-  if (fractionalHearts === 0n) return wholeHex.toString();
-
-  const fraction = fractionalHearts.toString().padStart(8, "0").replace(/0+$/, "");
-  return `${wholeHex.toString()}.${fraction}`;
-}
 
 export function HexMiningScreen() {
   const [walletAddress, setWalletAddress] = useState("");
