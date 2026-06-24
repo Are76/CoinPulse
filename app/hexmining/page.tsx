@@ -1,3 +1,5 @@
-// Registers /hexmining in the active root app/ tree.
-// Re-exports the canonical page from src/app/ to keep a single source of truth.
-export { default } from "@/app/hexmining/page";
+import { HexMiningScreen } from "@/components/hexmining/hexmining-screen";
+
+export default function HexMiningPage() {
+  return <HexMiningScreen />;
+}

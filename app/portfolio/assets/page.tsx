@@ -1,3 +1,5 @@
-// Registers /portfolio/assets in the active root app/ tree.
-// Re-exports the canonical page from src/app/ to keep a single source of truth.
-export { default } from "@/app/portfolio/assets/page";
+import { AssetHoldingsScreen } from "@/components/portfolio/asset-holdings-screen";
+
+export default function AssetHoldingsPage() {
+  return <AssetHoldingsScreen />;
+}

@@ -1,3 +1,5 @@
-// Registers /debug/prices/status in the active root app/ tree.
-// Re-exports the canonical page from src/app/ to keep a single source of truth.
-export { default } from "@/app/debug/prices/status/page";
+import { PricingStatusScreen } from "@/components/prices/pricing-status-screen";
+
+export default function PricingStatusPage() {
+  return <PricingStatusScreen />;
+}
