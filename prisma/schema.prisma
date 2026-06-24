@@ -457,6 +457,7 @@ model LedgerActionGroup {
   txHash            String
   actionGroupKey    String
   actionType        String
+  blockNumber       BigInt?
   occurredAt        DateTime
   createdAt         DateTime @default(now())
   chain             Chain    @relation(fields: [chainId], references: [id], onDelete: Restrict)

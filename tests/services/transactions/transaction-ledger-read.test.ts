@@ -176,7 +176,7 @@ describe("listCanonicalTransactions — wallet with transactions", () => {
     expect(tx.blockNumber).toBeNull();
     expect(tx.actionGroupId).toBe("ag-001");
     expect(tx.actionType).toBe("TRANSFER");
-    expect(tx.sourceFamily).toBeNull();
+    expect(tx.sourceFamily).toBe("TRANSFERS");
     expect(tx.protocol).toBeNull();
     expect(tx.status).toBe("complete");
     expect(tx.warnings).toEqual([]);
