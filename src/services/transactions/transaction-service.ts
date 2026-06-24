@@ -119,6 +119,7 @@ function mapEntry(entry: {
   direction: string;
   quantity: { toString(): string };
   valueUsd: { toString(): string } | null;
+  normalizerVersion: string;
   token: { address: string; decimals: number } | null;
 }): TransactionEntryDto {
   const valued = entry.valueUsd != null;
@@ -131,7 +132,7 @@ function mapEntry(entry: {
     quantity: entry.quantity.toString(),
     decimals: entry.token?.decimals ?? null,
     pricingStatus: valued ? "priced" : "unavailable",
-    pricingProvenance: null,
+    pricingProvenance: valued ? entry.normalizerVersion : null,
     valuationStatus: valued ? "valued" : "unavailable",
     valueQuote: entry.valueUsd?.toString() ?? null,
     quoteAsset: valued ? "fiat:usd" : null,
