@@ -83,6 +83,13 @@ type RawLogRecord = {
   topic2: string | null;
 };
 
+type RpcRequestLogRecord = {
+  id: string;
+  requestedAt: Date;
+  statusCode: number | null;
+  errorMessage: string | null;
+};
+
 type HexObsRow = {
   id: string;
   rangeStartDay: number;
@@ -117,6 +124,7 @@ function createMemoryDb(overrides?: {
   rawTransactions?: RawTransactionRecord[];
   rawLogs?: RawLogRecord[];
   hexObs?: HexObsRow | null | "throw";
+  rpcRequestLogs?: RpcRequestLogRecord[];
 }) {
   const syncRuns = overrides?.syncRuns ?? [];
   const tokenBalances = overrides?.tokenBalances ?? [];
@@ -125,6 +133,7 @@ function createMemoryDb(overrides?: {
   const rawTransactions = overrides?.rawTransactions ?? [];
   const rawLogs = overrides?.rawLogs ?? [];
   const hexObs = overrides?.hexObs ?? null;
+  const rpcRequestLogs = overrides?.rpcRequestLogs ?? [];
 
   return new Proxy(
     {
@@ -255,6 +264,29 @@ function createMemoryDb(overrides?: {
         async findFirst() {
           if (hexObs === "throw") throw new Error("db-hex-obs-error");
           return hexObs;
+        },
+      },
+      rpcRequestLog: {
+        async count(args?: { where?: { requestedAt?: { gte: Date }; OR?: Array<{ statusCode?: { gte: number }; errorMessage?: { not: null } }> } }) {
+          if (!args?.where) return rpcRequestLogs.length;
+          const since = args.where.requestedAt?.gte;
+          const orFilters = args.where.OR;
+          return rpcRequestLogs.filter((row) => {
+            if (since && row.requestedAt < since) return false;
+            if (orFilters) {
+              return orFilters.some((clause) => {
+                if (clause.statusCode?.gte !== undefined && row.statusCode !== null && row.statusCode >= clause.statusCode.gte) return true;
+                if (clause.errorMessage?.not === null && row.errorMessage !== null) return true;
+                return false;
+              });
+            }
+            return true;
+          }).length;
+        },
+        async findFirst() {
+          if (rpcRequestLogs.length === 0) return null;
+          const sorted = [...rpcRequestLogs].sort((a, b) => b.requestedAt.getTime() - a.requestedAt.getTime());
+          return sorted[0] ?? null;
         },
       },
     },
@@ -596,6 +628,10 @@ describe("GET /api/debug/status route contract", () => {
           return null;
         },
       },
+      rpcRequestLog: {
+        async count() { return 0; },
+        async findFirst() { return null; },
+      },
     });
     const { GET } = await import("../../app/api/debug/status/route");
     await GET();
@@ -604,5 +640,34 @@ describe("GET /api/debug/status route contract", () => {
     expect(findFirstCalls[0]!.where.chainId).toBe(369);
     expect(findFirstCalls[0]!.where.sourceFamily).toBe("HEXMINING");
     expect(findFirstCalls[0]!.where.invalidations).toEqual({ none: {} });
+  });
+
+  it("rpcObservability appears in debug/status with correct counts", async () => {
+    const now = new Date();
+    const recentDate = new Date(now.getTime() - 60 * 60 * 1000); // 1 hour ago
+    const oldDate = new Date(now.getTime() - 48 * 60 * 60 * 1000); // 48 hours ago
+
+    getDb.mockReturnValue(
+      createMemoryDb({
+        hexObs: null,
+        rpcRequestLogs: [
+          { id: "r1", requestedAt: recentDate, statusCode: 200, errorMessage: null },
+          { id: "r2", requestedAt: recentDate, statusCode: 429, errorMessage: null },
+          { id: "r3", requestedAt: recentDate, statusCode: null, errorMessage: "timeout" },
+          { id: "r4", requestedAt: oldDate, statusCode: 500, errorMessage: null },
+          { id: "r5", requestedAt: now, statusCode: 200, errorMessage: null },
+        ],
+      }),
+    );
+
+    const { GET } = await import("../../app/api/debug/status/route");
+    const response = await GET();
+    const body = await response.json();
+
+    expect(body.data.rpcObservability).toMatchObject({
+      totalRequestCount: 5,
+      recentErrorCount: 2,
+      latestRequestAt: now.toISOString(),
+    });
   });
 });

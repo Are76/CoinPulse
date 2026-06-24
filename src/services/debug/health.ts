@@ -34,6 +34,12 @@ export type HealthReport = {
   };
 };
 
+export type RpcObservabilityReport = {
+  totalRequestCount: number;
+  recentErrorCount: number;
+  latestRequestAt: string | null;
+};
+
 export type DebugStatusReport = {
   status: "ok";
   timestamp: string;
@@ -55,6 +61,7 @@ export type DebugStatusReport = {
   hexMining: {
     observationStatus: HexMiningObservationStatusDto | { status: "unavailable" };
   };
+  rpcObservability: RpcObservabilityReport;
 };
 
 type HealthDependencies = {
@@ -95,6 +102,31 @@ export async function getHealthReport(dependencies: HealthDependencies = {}): Pr
   };
 }
 
+async function getRpcObservabilityReport(db = getDb()): Promise<RpcObservabilityReport> {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const [totalRequestCount, recentErrorCount, latest] = await Promise.all([
+    db.rpcRequestLog.count(),
+    db.rpcRequestLog.count({
+      where: {
+        requestedAt: { gte: since },
+        OR: [
+          { statusCode: { gte: 400 } },
+          { errorMessage: { not: null } },
+        ],
+      },
+    }),
+    db.rpcRequestLog.findFirst({
+      orderBy: { requestedAt: "desc" },
+      select: { requestedAt: true },
+    }),
+  ]);
+  return {
+    totalRequestCount,
+    recentErrorCount,
+    latestRequestAt: latest?.requestedAt.toISOString() ?? null,
+  };
+}
+
 export async function getDebugStatusReport(): Promise<DebugStatusReport> {
   const hexMiningObsStatus = await getHexMiningObservationStatus().catch(() => ({
     status: "unavailable" as const,
@@ -121,6 +153,7 @@ export async function getDebugStatusReport(): Promise<DebugStatusReport> {
     hexMining: {
       observationStatus: hexMiningObsStatus,
     },
+    rpcObservability: await getRpcObservabilityReport(),
   };
 }
 
