@@ -15,6 +15,7 @@ type LedgerStoreClient = {
         txHash: string;
         actionGroupKey: string;
         actionType: string;
+        blockNumber: bigint | null;
         occurredAt: Date;
       }>;
       skipDuplicates: boolean;
@@ -144,6 +145,7 @@ export async function persistNormalizedLedger(
       txHash: string;
       actionGroupKey: string;
       actionType: string;
+      blockNumber: bigint | null;
       occurredAt: Date;
     }
   >();
@@ -171,6 +173,7 @@ export async function persistNormalizedLedger(
         txHash: draft.txHash.toLowerCase(),
         actionGroupKey: draft.actionGroupKey,
         actionType: draft.actionType,
+        blockNumber: draft.blockNumber,
         occurredAt: draft.occurredAt,
       });
     }

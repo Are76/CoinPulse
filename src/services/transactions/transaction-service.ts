@@ -141,6 +141,19 @@ function mapEntry(entry: {
   };
 }
 
+function sourceFamilyFromActionType(actionType: string): string | null {
+  switch (actionType) {
+    case "TRANSFER": return "TRANSFERS";
+    case "SWAP": return "DEX";
+    case "LP_ADD":
+    case "LP_REMOVE": return "LP";
+    case "HEX_STAKE_START":
+    case "HEX_STAKE_END":
+    case "HEX_STAKE_LOCK": return "STAKING";
+    default: return null;
+  }
+}
+
 /**
  * List canonical transactions for a wallet/chain from persisted ledger truth.
  *
@@ -207,10 +220,10 @@ export async function listCanonicalTransactions(
     walletId: ag.walletId,
     walletAddress,
     occurredAt: ag.occurredAt.toISOString(),
-    blockNumber: null,
+    blockNumber: ag.blockNumber != null ? ag.blockNumber.toString() : null,
     actionGroupId: ag.id,
     actionType: ag.actionType,
-    sourceFamily: null,
+    sourceFamily: sourceFamilyFromActionType(ag.actionType),
     protocol: null,
     status: "complete" as const,
     warnings: [],
