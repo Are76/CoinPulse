@@ -18,6 +18,7 @@ import {
   type SyncPublicClient,
   ingestWalletTransferArtifacts,
   type WalletTransferSnapshot,
+  canonicalizeSnapshotAssetId,
 } from "@/services/sync/sync-common";
 
 export const SWAP_EVENT_TOPIC0 =
@@ -255,7 +256,7 @@ export function normalizeDexSwaps(args: {
         boughtAssetId: rawLog.boughtAssetIdSnapshot,
         boughtAmountRaw: rawLog.boughtAmountRaw,
         boughtDecimals: rawLog.boughtDecimalsSnapshot,
-        feeAssetId: rawLog.feeAssetIdSnapshot,
+        feeAssetId: canonicalizeSnapshotAssetId(rawLog.feeAssetIdSnapshot),
         feeAmountRaw: rawLog.feeAmountRaw,
         feeDecimals: rawLog.feeDecimalsSnapshot,
       }),
