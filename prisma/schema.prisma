@@ -137,8 +137,8 @@ model Token {
   address          String
   addressLower     String
   assetId          String                 @unique
-  symbol           String
-  name             String
+  symbol           String?
+  name             String?
   decimals         Int
   decimalsSource   String
   isNative         Boolean                @default(false)
