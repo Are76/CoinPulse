@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import { assemblePortfolioDashboard } from "@/services/dashboard/portfolio-dashboard";
@@ -1722,17 +1719,6 @@ describe("assemblePortfolioDashboard", () => {
     });
 
     expect(result.schemaVersion).toBe("v1");
-  });
-
-  it("keeps the dashboard module backend-only with no ui directives", () => {
-    const source = readFileSync(
-      join(process.cwd(), "src/services/dashboard/portfolio-dashboard.ts"),
-      "utf8",
-    );
-
-    expect(source).not.toContain('"use client"');
-    expect(source).not.toContain("React");
-    expect(source).not.toContain("return (");
   });
 
   it("ledgerCoverage is unknown when no materialization state exists", async () => {

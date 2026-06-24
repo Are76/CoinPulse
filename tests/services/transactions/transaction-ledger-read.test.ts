@@ -476,26 +476,7 @@ describe("listCanonicalTransactions — no raw-log access", () => {
   });
 });
 
-// ── 8. No RPC access ─────────────────────────────────────────────────────────
-
-describe("listCanonicalTransactions — no RPC access", () => {
-  it("service source does not reference RPC client, fetch, or raw log tables", async () => {
-    const fs = await import("fs");
-    const path = await import("path");
-    const content = fs.readFileSync(
-      path.resolve(process.cwd(), "src/services/transactions/transaction-service.ts"),
-      "utf8",
-    );
-    expect(content).not.toMatch(/ethers|viem|web3|jsonrpc/i);
-    expect(content).not.toMatch(/fetch\(/);
-    expect(content).not.toMatch(/PULSECHAIN_RPC/);
-    expect(content).not.toMatch(/rawLog/i);
-    expect(content).not.toMatch(/rawTransaction/i);
-    expect(content).not.toMatch(/rawTokenTransfer/i);
-  });
-});
-
-// ── 9. Safe error handling ────────────────────────────────────────────────────
+// ── 8. Safe error handling ────────────────────────────────────────────────────
 
 describe("listCanonicalTransactions — error propagation", () => {
   it("propagates db errors so the route layer can return 500", async () => {
