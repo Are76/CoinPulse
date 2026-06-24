@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+﻿import { describe, expect, it, vi } from "vitest";
 import type { PublicClient, Address } from "viem";
 
 import {
@@ -23,7 +23,7 @@ const PHEX_DECIMALS = 8;
 const PHEX_ASSET_ID = `chain:369:erc20:${PHEX_ADDRESS}`;
 
 const PLS_ZERO_ADDRESS: Address = "0x0000000000000000000000000000000000000000";
-const PLS_ASSET_ID = "chain:369:native:PLS";
+const PLS_ASSET_ID = "chain:369:native:0x0000000000000000000000000000000000000000";
 const PLS_DECIMALS = 18;
 
 // These should not be the real factory addresses — using distinct mock values

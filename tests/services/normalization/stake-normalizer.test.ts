@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 
 import {
   normalizeStakeEnd,
@@ -18,7 +18,7 @@ describe("stake normalizers", () => {
       assetId: "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
       decimals: 8,
       principalLockedRaw: "100000000",
-      feeAssetId: "chain:369:native:PLS",
+      feeAssetId: "chain:369:native:0x0000000000000000000000000000000000000000",
       feeAmountRaw: "200000000000000",
       feeDecimals: 18,
       sourceRef: "stake:start:42",
@@ -47,7 +47,7 @@ describe("stake normalizers", () => {
       principalReturnedRaw: "100000000",
       yieldRaw: "5000000",
       penaltyRaw: "1000000",
-      feeAssetId: "chain:369:native:PLS",
+      feeAssetId: "chain:369:native:0x0000000000000000000000000000000000000000",
       feeAmountRaw: "200000000000000",
       feeDecimals: 18,
       sourceRef: "stake:end:42",

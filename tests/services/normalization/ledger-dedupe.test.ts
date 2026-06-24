@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 
 import { buildLedgerEntryDedupeKey } from "@/services/normalization/ledger-dedupe";
 
@@ -9,7 +9,7 @@ describe("buildLedgerEntryDedupeKey", () => {
       walletId: "wallet_1",
       txHash: "0xtx",
       entryType: "FEE",
-      assetId: "chain:369:native:PLS",
+      assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
       direction: "OUT",
       normalizerVersion: "v1",
       sourceRef: "derived:fee:tx",
@@ -23,7 +23,7 @@ describe("buildLedgerEntryDedupeKey", () => {
       chainId: 369,
       walletId: "wallet_1",
       txHash: "0xtx",
-      assetId: "chain:369:native:PLS",
+      assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
       direction: "OUT",
       normalizerVersion: "v1",
     } as const;
@@ -48,7 +48,7 @@ describe("buildLedgerEntryDedupeKey", () => {
       walletId: "wallet:1",
       txHash: "0xTX",
       entryType: "FEE",
-      assetId: "chain:369:native:PLS",
+      assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
       direction: "OUT",
       normalizerVersion: "v1:2",
       sourceRef: "derived:fee:tx:1",

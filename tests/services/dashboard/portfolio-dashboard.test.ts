@@ -14,7 +14,7 @@ const LP_ASSET = "chain:369:erc20:0xlp";
 const LP_ADDRESS = "0xlp";
 const STAKE_ASSET = "chain:369:erc20:0xphex";
 const STAKE_ADDRESS = "0xphex";
-const NATIVE_ASSET = "chain:369:native:PLS";
+const NATIVE_ASSET = "chain:369:native:0x0000000000000000000000000000000000000000";
 
 type TokenBalanceRecord = {
   walletId: string;
@@ -588,7 +588,7 @@ describe("assemblePortfolioDashboard", () => {
             walletId: WALLET_ID,
             walletAddress: WALLET_ADDRESS,
             chainId: CHAIN_ID,
-            assetId: "chain:369:native:PLS",
+            assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
             assetAddress: null,
             balanceQuantity: "-0.25",
             decimals: 18,
@@ -610,7 +610,7 @@ describe("assemblePortfolioDashboard", () => {
             updatedToBlock: 120n,
             warningCount: 2,
             warningDetails: [
-              "negative-token-balance:chain:369:native:PLS:-0.25",
+              "negative-token-balance:chain:369:native:0x0000000000000000000000000000000000000000:-0.25",
               "stake-key-missing:null",
             ],
             errorMessage: "materialization exploded",
@@ -622,7 +622,7 @@ describe("assemblePortfolioDashboard", () => {
           ? createResolvedPrice()
           : createResolvedPrice({
               selected: createPriceObservation({
-                assetId: "chain:369:native:PLS",
+                assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
                 assetAddress: null,
                 price: "1",
               }),
@@ -650,7 +650,7 @@ describe("assemblePortfolioDashboard", () => {
       warnings: [
         {
           code: "negative_token_balance",
-          message: "Negative materialized token balance for chain:369:native:PLS: -0.25",
+          message: "Negative materialized token balance for chain:369:native:0x0000000000000000000000000000000000000000: -0.25",
         },
         {
           code: "generic_persisted_warning",
@@ -661,7 +661,7 @@ describe("assemblePortfolioDashboard", () => {
       hasNegativeBalances: true,
       negativeBalances: [
         {
-          assetId: "chain:369:native:PLS",
+          assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
           assetAddress: null,
           balanceQuantity: "-0.25",
           decimals: 18,
@@ -1989,7 +1989,7 @@ describe("assemblePortfolioDashboard", () => {
   });
 
   it("does not produce missing_native_price_history for a native-asset token balance", async () => {
-    // Native-asset balance (chain:369:native:PLS) is the scenario most adjacent to
+    // Native-asset balance (chain:369:native:0x0000000000000000000000000000000000000000) is the scenario most adjacent to
     // missing_native_price_history. The current contract does not emit that reason
     // regardless of position type or pricing state.
     const result = await assemblePortfolioDashboard({

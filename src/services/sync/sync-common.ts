@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { parseAbi } from "viem";
 
+import { PULSECHAIN_NATIVE_ASSET_ID } from "@/config/assets";
 import { getDb } from "@/lib/db";
 import { createPublicClientForChain } from "@/services/chains/public-client";
 import { buildAdaptiveWindows } from "@/services/ingestion/block-window";
@@ -651,4 +652,10 @@ export function getOccurredAtForStakeAction(
   timestampByBlockKey: Map<string, Date>,
 ) {
   return getOccurredAtForBlockHash(log, timestampByBlockKey);
+}
+
+// Raw snapshot fields (feeAssetIdSnapshot etc.) recorded before H8 may contain
+// the old symbol-based native asset ID. Translate at read time so rebuild is idempotent.
+export function canonicalizeSnapshotAssetId(assetId: string): string {
+  return assetId === "chain:369:native:PLS" ? PULSECHAIN_NATIVE_ASSET_ID : assetId;
 }

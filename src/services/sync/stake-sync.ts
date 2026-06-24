@@ -22,6 +22,7 @@ import {
   type SyncPublicClient,
   ingestWalletTransferArtifacts,
   type WalletTransferSnapshot,
+  canonicalizeSnapshotAssetId,
 } from "@/services/sync/sync-common";
 
 const PHEX_ADDRESS_LOWER = PHEX_ADDRESS.toLowerCase();
@@ -329,7 +330,7 @@ export function normalizeStakeActions(args: {
           assetId: rawLog.assetIdSnapshot,
           decimals: rawLog.decimalsSnapshot,
           principalLockedRaw: rawLog.principalLockedRaw,
-          feeAssetId: rawLog.feeAssetIdSnapshot,
+          feeAssetId: canonicalizeSnapshotAssetId(rawLog.feeAssetIdSnapshot),
           feeAmountRaw: rawLog.feeAmountRaw,
           feeDecimals: rawLog.feeDecimalsSnapshot,
           sourceRef: `stake:start:${rawLog.stakeId ?? rawLog.actionIndex}`,

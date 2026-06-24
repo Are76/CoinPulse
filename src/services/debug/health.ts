@@ -4,7 +4,7 @@ import { getDb } from "@/lib/db";
 import { getRedis } from "@/lib/redis";
 import { env } from "@/lib/env";
 import { serverEnv } from "@/lib/server-env";
-import { SUPPORTED_CHAINS } from "@/config/chains";
+import { SUPPORTED_CHAINS, PULSECHAIN_REFERENCE } from "@/config/chains";
 import { SUPPORTED_SYNC_SOURCE_FAMILIES } from "@/services/sync/source-families";
 import { getOperationStateReport, type OperationStateReport } from "@/services/debug/operation-state";
 import {
@@ -109,7 +109,7 @@ export async function getDebugStatusReport(): Promise<DebugStatusReport> {
     supportedChains: Object.values(SUPPORTED_CHAINS).map((chain) => ({
       chainId: chain.id,
       name: chain.name,
-      nativeAssetId: chain.id === 369 ? "chain:369:native:PLS" : `chain:${chain.id}:native`,
+      nativeAssetId: chain.id === 369 ? PULSECHAIN_REFERENCE.nativeAssetId : `chain:${chain.id}:native`,
     })),
     sourceFamilies: [...SUPPORTED_SYNC_SOURCE_FAMILIES],
     pricing: {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 
 import {
   normalizeNativeTransaction,
@@ -104,7 +104,7 @@ describe("normalizeTransfer", () => {
       valueRaw: "1000000000000000000",
       gasPriceRaw: "2000000000",
       gasUsedRaw: "21000",
-      nativeAssetId: "chain:369:native:PLS",
+      nativeAssetId: "chain:369:native:0x0000000000000000000000000000000000000000",
       nativeDecimals: 18,
       occurredAt: new Date("2026-05-09T10:00:00.000Z"),
       normalizerVersion: "v1",
@@ -139,7 +139,7 @@ describe("normalizeTransfer", () => {
       valueRaw: "250000000000000000",
       gasPriceRaw: "2000000000",
       gasUsedRaw: "21000",
-      nativeAssetId: "chain:369:native:PLS",
+      nativeAssetId: "chain:369:native:0x0000000000000000000000000000000000000000",
       nativeDecimals: 18,
       occurredAt: new Date("2026-05-09T10:01:00.000Z"),
       normalizerVersion: "v1",
@@ -165,7 +165,7 @@ describe("normalizeTransfer", () => {
       valueRaw: "0",
       gasPriceRaw: "3000000000",
       gasUsedRaw: "50000",
-      nativeAssetId: "chain:369:native:PLS",
+      nativeAssetId: "chain:369:native:0x0000000000000000000000000000000000000000",
       nativeDecimals: 18,
       occurredAt: new Date("2026-05-09T10:02:00.000Z"),
       normalizerVersion: "v1",
@@ -192,7 +192,7 @@ describe("normalizeTransfer", () => {
       valueRaw: "500000000000000000",
       gasPriceRaw: "1000000000",
       gasUsedRaw: "21000",
-      nativeAssetId: "chain:369:native:PLS",
+      nativeAssetId: "chain:369:native:0x0000000000000000000000000000000000000000",
       nativeDecimals: 18,
       occurredAt: new Date("2026-05-09T10:03:00.000Z"),
       normalizerVersion: "v1",

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+﻿import { afterEach, describe, expect, it, vi } from "vitest";
 
 const CHAIN_ID = 369;
 const WALLET_ID = "wallet-1";
@@ -350,7 +350,7 @@ describe("GET /api/debug/status route contract", () => {
             walletId: WALLET_ID,
             walletAddress: WALLET_ADDRESS,
             chainId: CHAIN_ID,
-            assetId: "chain:369:native:PLS",
+            assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
             assetAddress: null,
             balanceQuantity: "-0.25",
             decimals: 18,
@@ -374,7 +374,7 @@ describe("GET /api/debug/status route contract", () => {
             updatedToBlock: 4100n,
             warningCount: 2,
             warningDetails: [
-              "negative-token-balance:chain:369:native:PLS:-0.25",
+              "negative-token-balance:chain:369:native:0x0000000000000000000000000000000000000000:-0.25",
               "stake-key-missing:null",
             ],
             errorMessage: "materialization exploded",
@@ -435,7 +435,7 @@ describe("GET /api/debug/status route contract", () => {
                 {
                   code: "negative_token_balance",
                   message:
-                    "Negative materialized token balance for chain:369:native:PLS: -0.25",
+                    "Negative materialized token balance for chain:369:native:0x0000000000000000000000000000000000000000: -0.25",
                 },
                 {
                   code: "generic_persisted_warning",
@@ -446,7 +446,7 @@ describe("GET /api/debug/status route contract", () => {
               hasNegativeBalances: true,
               negativeBalances: [
                 {
-                  assetId: "chain:369:native:PLS",
+                  assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
                   assetAddress: null,
                   balanceQuantity: "-0.25",
                   decimals: 18,

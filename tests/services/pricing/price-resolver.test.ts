@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 
 import { resolveBestPriceObservation } from "@/services/pricing/price-resolver";
 import type { PersistedPriceObservation } from "@/services/pricing/types";
@@ -21,7 +21,7 @@ function createObservation(
     sourceType: "ONCHAIN_POOL",
     sourceId: "pulsex:pair:0xpair",
     routeMetadata: {
-      hops: [PHEX_ASSET, "chain:369:native:PLS", QUOTE_ASSET],
+      hops: [PHEX_ASSET, "chain:369:native:0x0000000000000000000000000000000000000000", QUOTE_ASSET],
     },
     liquidityUsd: "225000",
     confidence: "0.91",

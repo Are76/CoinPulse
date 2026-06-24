@@ -1,4 +1,4 @@
-// Dev price seed script — focused unit tests.
+﻿// Dev price seed script — focused unit tests.
 //
 // All RPC and DB dependencies are mocked. No live calls.
 //
@@ -62,7 +62,7 @@ import type { PriceIngestAsset, PriceIngestionResult } from "@/services/pricing/
 
 const PULSECHAIN_CHAIN_ID = 369;
 const QUOTE_ASSET = "fiat:usd";
-const CANONICAL_ID_RE = /^chain:369:(erc20:0x[a-f0-9]{40}|native:PLS)$/;
+const CANONICAL_ID_RE = /^chain:369:(erc20:0x[a-f0-9]{40}|native:0x0000000000000000000000000000000000000000)$/;
 
 /** A URL that embeds credentials and an API key query param. */
 const SECRET_RPC_URL = "https://user:pass@example.com/rpc?apikey=SECRET";
@@ -144,7 +144,7 @@ describe("buildSeedAssets", () => {
   });
 
   it("includes PLS native asset with zero address and 18 decimals", () => {
-    const pls = assets.find((a) => a.assetId === "chain:369:native:PLS");
+    const pls = assets.find((a) => a.assetId === "chain:369:native:0x0000000000000000000000000000000000000000");
     expect(pls).toBeDefined();
     expect(pls?.tokenAddress).toBe("0x0000000000000000000000000000000000000000");
     expect(pls?.tokenDecimals).toBe(18);
@@ -445,7 +445,7 @@ describe("runDevPriceSeed", () => {
           fetchedCount: 2,
           persistedCount: 2,
           failedCount: 1,
-          failedAssets: ["chain:369:native:PLS"],
+          failedAssets: ["chain:369:native:0x0000000000000000000000000000000000000000"],
         }),
     };
 
@@ -453,7 +453,7 @@ describe("runDevPriceSeed", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.result.failedCount).toBe(1);
-      expect(result.result.failedAssets).toContain("chain:369:native:PLS");
+      expect(result.result.failedAssets).toContain("chain:369:native:0x0000000000000000000000000000000000000000");
     }
   });
 

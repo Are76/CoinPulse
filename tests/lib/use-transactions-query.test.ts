@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+﻿import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import React, { type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -222,7 +222,7 @@ describe("useTransactionsQuery", () => {
           entries: [
             {
               entryId: "e-001",
-              assetId: "chain:369:native:PLS",
+              assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
               assetAddress: null,
               entryType: "RECEIVE",
               direction: "IN",
@@ -251,7 +251,7 @@ describe("useTransactionsQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toBe(pageWithTx);
-    expect(result.current.data?.transactions[0].entries[0].assetId).toBe("chain:369:native:PLS");
+    expect(result.current.data?.transactions[0].entries[0].assetId).toBe("chain:369:native:0x0000000000000000000000000000000000000000");
     expect(result.current.data?.ledgerCoverage.status).toBe("unknown");
   });
 

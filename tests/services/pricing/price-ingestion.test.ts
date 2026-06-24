@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 
 import { runPriceIngestion } from "@/services/pricing/price-ingestion";
 import type { PriceObservationDraft } from "@/services/pricing/types";
@@ -19,7 +19,7 @@ const PHEX_ASSET: { assetId: string; tokenAddress: `0x${string}`; tokenDecimals:
 };
 
 const PLS_ASSET: { assetId: string; tokenAddress: `0x${string}`; tokenDecimals: number; quoteAsset: string } = {
-  assetId: "chain:369:native:PLS",
+  assetId: "chain:369:native:0x0000000000000000000000000000000000000000",
   tokenAddress: "0x0000000000000000000000000000000000000000",
   tokenDecimals: 18,
   quoteAsset: QUOTE_ASSET,
