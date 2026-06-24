@@ -154,7 +154,9 @@ export function WalletImportScreen() {
         </form>
       </SectionCard>
 
-      <ImportStatePanel state={importState} />
+      <div aria-live="polite" aria-atomic="true">
+        <ImportStatePanel state={importState} />
+      </div>
     </PageContainer>
   );
 }

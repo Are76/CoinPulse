@@ -484,7 +484,9 @@ export function DebugSyncScreen() {
         </SectionCard>
       </div>
 
-      <OperationStatePanel state={operationState} />
+      <div aria-live="polite" aria-atomic="true">
+        <OperationStatePanel state={operationState} />
+      </div>
     </PageContainer>
   );
 }
