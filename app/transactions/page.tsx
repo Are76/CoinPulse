@@ -1,3 +1,5 @@
-// Registers /transactions in the active root app/ tree.
-// Re-exports the canonical page from src/app/ to keep a single source of truth.
-export { default } from "@/app/transactions/page";
+import { TransactionHistoryScreen } from "@/components/transactions/transaction-history-screen";
+
+export default function TransactionsPage() {
+  return <TransactionHistoryScreen />;
+}

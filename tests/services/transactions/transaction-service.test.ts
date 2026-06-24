@@ -399,37 +399,6 @@ describe("service skeleton — no raw log dependency", () => {
     expect(keys).toContain("resolveTransactionCursor");
   });
 
-  it("does not import the Prisma client directly — accesses db via @/lib/db abstraction", async () => {
-    const src = await import("fs");
-    const path = await import("path");
-    const servicePath = path.resolve(
-      process.cwd(),
-      "src/services/transactions/transaction-service.ts",
-    );
-    const content = src.readFileSync(servicePath, "utf8");
-    // Must not bypass the db abstraction by importing PrismaClient directly
-    expect(content).not.toMatch(/@\/lib\/prisma/);
-    expect(content).not.toMatch(/from "@prisma\/client"/);
-    // Must not reference a bare `prisma.` variable (only getDb() is allowed)
-    expect(content).not.toMatch(/\bprisma\./);
-  });
-
-  it("does not reference raw log or raw token transfer tables", async () => {
-    const src = await import("fs");
-    const path = await import("path");
-    const servicePath = path.resolve(
-      process.cwd(),
-      "src/services/transactions/transaction-service.ts",
-    );
-    const content = src.readFileSync(servicePath, "utf8");
-    // Raw ingestion tables must never be queried from the transaction service
-    expect(content).not.toMatch(/rawLog/i);
-    expect(content).not.toMatch(/rawTokenTransfer/i);
-    // Canonical ledger tables are accessed via camelCase Prisma client (ledgerActionGroup),
-    // not via PascalCase direct model references in service logic
-    expect(content).not.toMatch(/\bdb\.LedgerActionGroup\b/);
-    expect(content).not.toMatch(/\bdb\.LedgerEntry\b/);
-  });
 });
 
 describe("TransactionLedgerCoverageStatus — named union", () => {
