@@ -90,6 +90,11 @@ const debugStatusReportSchema = z.object({
   hexMining: z.object({
     observationStatus: hexMiningObservationSurfaceSchema,
   }),
+  rpcObservability: z.object({
+    totalRequestCount: z.number(),
+    recentErrorCount: z.number(),
+    latestRequestAt: z.string().nullable(),
+  }).optional(),
 });
 
 const trackedWalletSchema = z.object({
