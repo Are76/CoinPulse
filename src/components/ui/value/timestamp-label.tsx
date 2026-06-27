@@ -1,13 +1,13 @@
 export function TimestampLabel({
   label,
   value,
-  fallback = "Not provided",
+  fallback = "—",
 }: {
   label?: string;
   value: string | null | undefined;
   fallback?: string;
 }) {
-  const renderedValue = value
+  const formatted = value
     ? new Date(value).toLocaleString("en-GB", {
         year: "numeric",
         month: "short",
@@ -18,8 +18,12 @@ export function TimestampLabel({
     : fallback;
 
   return (
-    <span className="text-xs text-[color:var(--color-text-muted)]">
-      {label ? `${label} ${renderedValue}` : renderedValue}
+    <span
+      className="text-xs whitespace-nowrap"
+      style={{ color: "#586070", fontFamily: value ? "var(--font-mono-data), monospace" : "inherit" }}
+    >
+      {label ? `${label} ` : ""}
+      {formatted}
     </span>
   );
 }

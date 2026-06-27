@@ -1,72 +1,127 @@
 @import "tailwindcss";
 
+/* ── Atlas Design System — dark-mode token layer ─────────────────────────── */
+
 :root {
   color-scheme: dark;
+
+  /* Core surfaces */
+  --background:    #0b0d14;
+  --foreground:    #e4e6f0;
+  --surface-1:     #111520;
+  --surface-2:     #181d2c;
+  --surface-3:     #1e2438;
+
+  /* Borders */
+  --border-soft:   rgba(255, 255, 255, 0.065);
+  --border-strong: rgba(255, 255, 255, 0.14);
+
+  /* Text */
+  --text-muted:    #586070;
+  --text-secondary: #a0a8c0;
+
+  /* Accents */
+  --accent-1:      #818cf8;
+  --accent-2:      #c4b5fd;
+
+  /* Status */
+  --status-fresh:   #4ade80;
+  --status-warning: #f59e0b;
+  --status-danger:  #f87171;
+  --status-info:    #60a5fa;
+  --status-stale:   #94a3b8;
+  --status-muted:   #64748b;
+
+  /* shadcn/ui token aliases (used by Atlas components) */
+  --card:                  var(--surface-1);
+  --card-foreground:       var(--foreground);
+  --primary:               var(--accent-1);
+  --primary-foreground:    #ffffff;
+  --secondary:             var(--surface-2);
+  --secondary-foreground:  var(--text-secondary);
+  --muted:                 var(--surface-2);
+  --muted-foreground:      var(--text-muted);
+  --accent:                var(--surface-3);
+  --accent-foreground:     var(--foreground);
+  --destructive:           var(--status-danger);
+  --destructive-foreground: #ffffff;
+  --border:                var(--border-soft);
+  --input:                 transparent;
+  --input-background:      var(--surface-2);
+  --ring:                  var(--accent-1);
+  --popover:               var(--surface-1);
+  --popover-foreground:    var(--foreground);
+
+  /* Typography */
   --font-sans-sharp: var(--font-geist-sans);
-  --font-mono-data: var(--font-geist-mono);
-  --background: oklch(0.18 0.01 240);
-  --foreground: oklch(0.96 0.01 240);
-  --surface-1: oklch(0.22 0.01 240);
-  --surface-2: oklch(0.26 0.01 240);
-  --surface-3: oklch(0.31 0.015 240);
-  --border-soft: oklch(0.34 0.01 240);
-  --border-strong: oklch(0.45 0.015 240);
-  --text-muted: oklch(0.72 0.015 240);
-  --accent-1: oklch(0.78 0.11 185);
-  --accent-2: oklch(0.66 0.09 170);
-  --status-fresh: oklch(0.79 0.13 162);
-  --status-warning: oklch(0.79 0.15 92);
-  --status-danger: oklch(0.69 0.17 25);
-  --status-info: oklch(0.79 0.11 210);
-  --shadow-elevated: 0 24px 64px rgba(0, 0, 0, 0.28);
-  --radius-lg: 1rem;
-  --radius-md: 0.75rem;
+  --font-mono-data:  var(--font-jetbrains-mono);
+
+  /* Elevation */
+  --shadow-elevated: 0 2px 12px rgba(0, 0, 0, 0.25);
+  --shadow-card:     0 4px 20px rgba(0, 0, 0, 0.35);
+
+  /* Radius */
+  --radius:    0.625rem;
+  --radius-lg: calc(var(--radius) + 4px);
+  --radius-md: var(--radius);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  /* Layout */
   --space-content-max: 80rem;
-  --space-page-x: clamp(1rem, 2.5vw, 2rem);
-  --space-page-y: clamp(1.5rem, 3vw, 3rem);
-  --space-stack-sm: 0.75rem;
-  --space-stack-md: 1.25rem;
-  --space-stack-lg: 2rem;
-  --text-body: 0.95rem;
+  --space-page-x:      clamp(1rem, 2.5vw, 2rem);
+  --space-page-y:      clamp(1.5rem, 3vw, 3rem);
+  --space-stack-sm:    0.75rem;
+  --space-stack-md:    1.25rem;
+  --space-stack-lg:    2rem;
+
+  /* Type scale */
+  --text-body:   0.95rem;
   --text-metric: 0.9rem;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-surface-1: var(--surface-1);
-  --color-surface-2: var(--surface-2);
-  --color-surface-3: var(--surface-3);
-  --color-border-soft: var(--border-soft);
-  --color-border-strong: var(--border-strong);
-  --color-text-muted: var(--text-muted);
-  --color-accent-1: var(--accent-1);
-  --color-accent-2: var(--accent-2);
-  --color-status-fresh: var(--status-fresh);
+  /* Legacy token aliases — components continue to work unchanged */
+  --color-background:     var(--background);
+  --color-foreground:     var(--foreground);
+  --color-surface-1:      var(--surface-1);
+  --color-surface-2:      var(--surface-2);
+  --color-surface-3:      var(--surface-3);
+  --color-border-soft:    var(--border-soft);
+  --color-border-strong:  var(--border-strong);
+  --color-text-muted:     var(--text-muted);
+  --color-accent-1:       var(--accent-1);
+  --color-accent-2:       var(--accent-2);
+  --color-status-fresh:   var(--status-fresh);
   --color-status-warning: var(--status-warning);
-  --color-status-danger: var(--status-danger);
-  --color-status-info: var(--status-info);
+  --color-status-danger:  var(--status-danger);
+  --color-status-info:    var(--status-info);
+
+  /* shadcn/ui aliases */
+  --color-card:                var(--card);
+  --color-card-foreground:     var(--card-foreground);
+  --color-primary:             var(--primary);
+  --color-primary-foreground:  var(--primary-foreground);
+  --color-secondary:           var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted:               var(--muted);
+  --color-muted-foreground:    var(--muted-foreground);
+  --color-accent:              var(--accent);
+  --color-accent-foreground:   var(--accent-foreground);
+  --color-destructive:         var(--destructive);
+  --color-border:              var(--border);
+  --color-ring:                var(--ring);
+  --color-popover:             var(--popover);
+  --color-popover-foreground:  var(--popover-foreground);
+
+  /* Fonts */
   --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --font-mono: var(--font-jetbrains-mono);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-  }
-}
-
-[data-theme="light"] {
-  color-scheme: light;
-  --background: oklch(0.98 0.004 240);
-  --foreground: oklch(0.2 0.01 240);
-  --surface-1: oklch(1 0 0);
-  --surface-2: oklch(0.97 0.004 240);
-  --surface-3: oklch(0.93 0.01 240);
-  --border-soft: oklch(0.86 0.01 240);
-  --border-strong: oklch(0.74 0.015 240);
-  --text-muted: oklch(0.47 0.015 240);
-  --shadow-elevated: 0 24px 64px rgba(15, 23, 42, 0.12);
+  /* Radius */
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: calc(var(--radius) + 8px);
 }
 
 * {
@@ -81,7 +136,7 @@ body {
 }
 
 body::selection {
-  background: color-mix(in srgb, var(--accent-1) 30%, transparent);
+  background: rgba(129, 140, 248, 0.25);
 }
 
 a {
@@ -96,16 +151,27 @@ textarea {
   font: inherit;
 }
 
+/* ── Atlas utility classes ────────────────────────────────────────────────── */
+
 .cp-container {
   width: min(100% - (var(--space-page-x) * 2), var(--space-content-max));
   margin-inline: auto;
 }
 
+/* Base card — Atlas surface #111520 */
 .cp-card {
+  background: var(--surface-1);
   border: 1px solid var(--border-soft);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 94%, transparent), var(--surface-1));
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-elevated);
+}
+
+/* Highlighted card — Atlas gradient with indigo accent border */
+.cp-card--highlight {
+  background: linear-gradient(135deg, #111520 0%, #141828 100%);
+  border: 1px solid rgba(129, 140, 248, 0.2);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.05), var(--shadow-card);
 }
 
 .cp-table th,
@@ -118,7 +184,7 @@ textarea {
   color: var(--text-muted);
   font-size: 0.78rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -192,7 +258,12 @@ textarea {
 }
 
 .coin-sidebar__link:hover {
-  background: var(--surface-2);
+  background: var(--surface-3);
+}
+
+.coin-sidebar__link--active {
+  background: rgba(129, 140, 248, 0.1);
+  color: var(--accent-1);
 }
 
 .coin-sidebar__link--muted {
@@ -291,7 +362,12 @@ textarea {
   }
 
   .coin-mobile-nav__link:hover {
-    background: var(--surface-2);
+    background: var(--surface-3);
+  }
+
+  .coin-mobile-nav__link--active {
+    background: rgba(129, 140, 248, 0.1);
+    color: var(--accent-1);
   }
 
   .coin-mobile-nav__link--muted {

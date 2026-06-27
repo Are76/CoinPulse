@@ -4,11 +4,16 @@ import { cn } from "@/lib/utils";
 
 export function SurfaceCard({
   className,
+  highlight,
   ...props
-}: HTMLAttributes<HTMLDivElement>) {
+}: HTMLAttributes<HTMLDivElement> & { highlight?: boolean }) {
   return (
     <section
-      className={cn("cp-card rounded-[var(--radius-lg)] p-6", className)}
+      className={cn(
+        highlight ? "cp-card--highlight" : "cp-card",
+        "rounded-[var(--radius-lg)] p-5",
+        className,
+      )}
       {...props}
     />
   );
