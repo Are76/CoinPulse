@@ -667,7 +667,8 @@ function PnlDetails({ pnl }: { pnl: DashboardPnlDto }) {
   return (
     <div className="flex flex-col gap-1">
       <StatusBadge status={pnl.status} />
-      <ValueDisplay value={pnl.unrealizedPnl} />
+      <ValueDisplay value={pnl.realizedPnl} prefix="realized" />
+      <ValueDisplay value={pnl.unrealizedPnl} prefix="unrealized" />
       <ValueDisplay value={pnl.averageCost} prefix="avg cost" />
     </div>
   );
