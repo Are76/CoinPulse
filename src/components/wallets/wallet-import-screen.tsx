@@ -26,7 +26,9 @@ type ImportState =
   | { kind: "error"; message: string; details: string[] };
 
 const fieldClassName =
-  "w-full rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] px-3 py-2 text-sm outline-none focus:border-[color:var(--color-accent-2)] disabled:cursor-not-allowed disabled:opacity-60";
+  "w-full rounded-[var(--radius-md)] border px-3 py-2 text-sm outline-none transition disabled:cursor-not-allowed disabled:opacity-60"
+  + " bg-[#181d2c] text-[#e4e6f0] placeholder:text-[#586070]"
+  + " border-[rgba(255,255,255,0.065)] focus:border-[#818cf8]";
 
 export function WalletImportScreen() {
   const [walletAddress, setWalletAddress] = useState("");
@@ -84,13 +86,16 @@ export function WalletImportScreen() {
       <SurfaceCard className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--color-text-muted)]">
+            <p
+              className="text-xs font-semibold uppercase tracking-widest"
+              style={{ color: "#586070", letterSpacing: "0.08em" }}
+            >
               CoinPulse
             </p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight" style={{ color: "#e4e6f0" }}>
               Wallet import
             </h1>
-            <p className="mt-3 max-w-3xl leading-7 text-[color:var(--color-text-muted)]">
+            <p className="mt-3 max-w-3xl leading-7 text-sm" style={{ color: "#a0a8c0" }}>
               Operator-facing page for registering a wallet address into backend
               tracking. Submits to POST /api/wallets/import and renders the
               backend response verbatim. The page does not compute balances,
@@ -145,7 +150,8 @@ export function WalletImportScreen() {
           <div>
             <button
               type="submit"
-              className="inline-flex h-11 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--color-accent-2)] bg-[color:var(--color-accent-2)] px-4 font-medium text-slate-950 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-11 items-center justify-center rounded-[var(--radius-md)] px-4 font-semibold text-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              style={{ background: "#818cf8", color: "#0b0d14" }}
               disabled={isBusy}
             >
               {isBusy ? "Importing..." : "Import wallet"}
@@ -203,11 +209,17 @@ function ImportStatePanel({ state }: { state: ImportState }) {
       <div className="flex flex-wrap gap-2">
         <LabelBadge label="import completed" tone="fresh" />
       </div>
-      <details className="mt-4 rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)]">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+      <details
+        className="mt-4 rounded-[var(--radius-md)] border"
+        style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)" }}
+      >
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium" style={{ color: "#a0a8c0" }}>
           Show raw response
         </summary>
-        <pre className="overflow-x-auto border-t border-[color:var(--color-border-soft)] px-4 py-4 text-xs leading-6 text-[color:var(--color-text-muted)]">
+        <pre
+          className="overflow-x-auto px-4 py-4 text-xs leading-6"
+          style={{ borderTop: "1px solid rgba(255,255,255,0.065)", color: "#586070" }}
+        >
           {JSON.stringify(state.payload, null, 2)}
         </pre>
       </details>
@@ -224,7 +236,10 @@ function LabeledField({
 }) {
   return (
     <label className="flex flex-col gap-2">
-      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
+      <span
+        className="text-xs font-semibold uppercase tracking-widest"
+        style={{ color: "#586070", letterSpacing: "0.08em" }}
+      >
         {label}
       </span>
       {children}

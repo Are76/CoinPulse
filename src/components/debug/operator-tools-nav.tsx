@@ -12,7 +12,10 @@ const OPERATOR_TOOL_LINKS = [
 export function OperatorToolsNav() {
   return (
     <SurfaceCard className="flex flex-wrap items-center gap-x-6 gap-y-2">
-      <span className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--color-text-muted)]">
+      <span
+        className="text-xs font-semibold uppercase tracking-widest"
+        style={{ color: "#586070", letterSpacing: "0.08em" }}
+      >
         Operator tools
       </span>
       <div className="flex flex-wrap gap-4">
@@ -20,7 +23,8 @@ export function OperatorToolsNav() {
           <Link
             key={link.href}
             href={link.href}
-            className="text-sm font-medium text-[color:var(--color-accent-2)] hover:underline"
+            className="text-sm font-medium hover:underline"
+            style={{ color: "#818cf8" }}
           >
             {link.label}
           </Link>
