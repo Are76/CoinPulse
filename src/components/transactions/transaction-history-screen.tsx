@@ -187,6 +187,11 @@ function LedgerCoveragePanel({ coverage }: { coverage: TransactionLedgerCoverage
         </span>
         <ProvenanceChip tone={tone} size="sm">{label}</ProvenanceChip>
       </div>
+      {coverage.status === "covered" ? (
+        <p className="text-xs" style={{ color: "#a0a8c0" }}>
+          Full ledger coverage — all transactions are accounted for.
+        </p>
+      ) : null}
       {coverage.status !== "covered" && coverage.reason ? (
         <p className="text-xs" style={{ color: "#a0a8c0" }}>
           {coverage.reason === "wallet-not-tracked"
@@ -320,7 +325,7 @@ function EntryRow({ entry }: { entry: TransactionEntryDto }) {
       )}
       <div className="flex flex-wrap gap-1">
         <ProvenanceChip tone="neutral" size="sm">pricing: {entry.pricingStatus}</ProvenanceChip>
-        <ProvenanceChip tone="neutral" size="sm">val: {entry.valuationStatus}</ProvenanceChip>
+        <ProvenanceChip tone="neutral" size="sm">valuation: {entry.valuationStatus}</ProvenanceChip>
       </div>
       {entry.rejectedReason && (
         <span role="alert" style={{ color: "#f87171" }}>Rejected: {entry.rejectedReason}</span>

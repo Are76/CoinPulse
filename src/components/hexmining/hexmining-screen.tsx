@@ -75,7 +75,7 @@ export function HexMiningScreen() {
         </h1>
         <p className="text-sm leading-relaxed max-w-2xl" style={{ color: "#a0a8c0" }}>
           Native PulseChain pHEX stake monitoring. Phase 2 scope: chainId 369 pHEX stakes only.
-          Backend-estimated yield shown when evidence is available. Pricing, valuation, and PnL remain unsupported.
+          Backend-estimated yield is shown when backend evidence is available. Pricing, valuation, and PnL remain unsupported.
           eHEX (Ethereum) and HSI/HTT stakes are deferred to later phases.
         </p>
         <div className="flex flex-wrap gap-2 mt-1">
@@ -166,7 +166,7 @@ function StakeResultView({ list }: { list: HexStakeListDto }) {
         />
       ) : list.stakes.length === 0 ? (
         <EmptyState
-          title="No active native pHEX stakes"
+          title="No active native pHEX stakes found"
           message="This wallet has no native pHEX stakes on PulseChain. Stakes closed via endStake are not tracked in Phase 2."
         />
       ) : (
@@ -183,10 +183,7 @@ function StakeList({ stakes, observedAt }: { stakes: HexStakeDto[]; observedAt: 
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
         <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: "#586070", letterSpacing: "0.08em" }}>
-          Native pHEX stakes
-        </span>
-        <span className="cp-data text-xs font-bold" style={{ color: "#818cf8" }}>
-          {stakes.length}
+          Native pHEX stakes ({stakes.length})
         </span>
         {observedAt && (
           <span className="text-xs ml-auto" style={{ color: "#586070" }}>
@@ -279,22 +276,26 @@ function StakeCard({ stake }: { stake: HexStakeDto }) {
             <ProvenanceChip tone="fresh" size="sm">estimated</ProvenanceChip>
           </div>
           <span className="cp-data text-xl font-bold" style={{ color: "#4ade80" }}>
-            {estimatedYieldDisplay} HEX
+            estimated yield: {estimatedYieldDisplay} HEX
           </span>
           <span className="cp-data text-xs" style={{ color: "#586070" }}>
-            {stake.yield.estimatedYieldHearts} hearts raw
+            raw hearts: {stake.yield.estimatedYieldHearts}
           </span>
           {stake.yield.status === "estimated" && (
-            <span className="text-xs" style={{ color: "#586070" }}>
-              Days {stake.yield.provenance.rangeStartDay}–{stake.yield.provenance.rangeEndDay}
-              {" · "}{stake.yield.provenance.observationId}
-            </span>
+            <>
+              <span className="text-xs" style={{ color: "#586070" }}>
+                yield observation: {stake.yield.provenance.observationId}
+              </span>
+              <span className="text-xs" style={{ color: "#586070" }}>
+                yield days: {stake.yield.provenance.rangeStartDay}-{stake.yield.provenance.rangeEndDay}
+              </span>
+            </>
           )}
           {stake.yield.status === "estimated" && stake.yield.warnings.length > 0 && (
             <ul className="flex flex-col gap-0.5 mt-1">
               {stake.yield.warnings.map((w, i) => (
                 <li key={`yw-${stake.stakeId}-${i}`} className="text-xs" style={{ color: "#f59e0b" }}>
-                  {w}
+                  yield warning: {w}
                 </li>
               ))}
             </ul>
@@ -309,6 +310,7 @@ function StakeCard({ stake }: { stake: HexStakeDto }) {
       >
         <ProvenanceChip tone="neutral" size="sm">yield: {stake.yield.status}</ProvenanceChip>
         <ProvenanceChip tone="stale" size="sm">pricing: {stake.pricing.status}</ProvenanceChip>
+        <ProvenanceChip tone="stale" size="sm">valuation: {stake.valuation.status}</ProvenanceChip>
         <ProvenanceChip tone="stale" size="sm">pnl: {stake.pnl.status}</ProvenanceChip>
       </div>
 
@@ -319,8 +321,8 @@ function StakeCard({ stake }: { stake: HexStakeDto }) {
           style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
         >
           {stake.provenance.observedAtBlock !== null && (
-            <span className="text-xs" style={{ color: "#586070" }}>
-              Block: <span className="cp-data">{stake.provenance.observedAtBlock}</span>
+            <span className="cp-data text-xs" style={{ color: "#586070" }}>
+              block: {stake.provenance.observedAtBlock}
             </span>
           )}
           {stake.warnings.map((w, i) => (

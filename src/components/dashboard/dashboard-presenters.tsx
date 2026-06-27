@@ -141,7 +141,7 @@ export function WalletQueryForm(args: {
       </form>
       {args.selectedTrackedWalletLabel != null ? (
         <p className="mt-3 text-xs" style={{ color: "#a0a8c0" }}>
-          Selected: {args.selectedTrackedWalletLabel}
+          Selected tracked wallet: {args.selectedTrackedWalletLabel} — click Load dashboard to submit.
         </p>
       ) : null}
     </SectionCard>
@@ -196,13 +196,16 @@ export function TrackedWalletSelector(args: {
                 onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
                 onClick={() => args.onSelectWallet(wallet.address, String(wallet.chainId))}
               >
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 flex flex-col gap-0.5">
                   <p className="truncate text-sm" style={{ color: "#e4e6f0", fontFamily: "var(--font-mono-data), monospace" }}>
                     {wallet.address}
                   </p>
-                  <p className="mt-0.5 text-xs" style={{ color: "#586070" }}>
-                    Chain {wallet.chainId}{wallet.label ? ` · ${wallet.label}` : ""}
+                  <p className="text-xs" style={{ color: "#586070" }}>
+                    Chain ID: {wallet.chainId}
                   </p>
+                  {wallet.label ? (
+                    <p className="text-xs" style={{ color: "#a0a8c0" }}>{wallet.label}</p>
+                  ) : null}
                 </div>
                 {isSelected ? <LabelBadge label="Selected" tone="fresh" size="sm" /> : null}
               </button>
@@ -373,7 +376,7 @@ export function PnlCoverageSection({ pnlCoverage }: { pnlCoverage: DashboardPnlC
 
       {pnlCoverage.affectedSections.length > 0 ? (
         <p className="text-xs" style={{ color: "#a0a8c0" }}>
-          Affected: {pnlCoverage.affectedSections.map(formatPnlCoverageSection).join(", ")}
+          Affected sections: {pnlCoverage.affectedSections.map(formatPnlCoverageSection).join(", ")}
         </p>
       ) : null}
 
@@ -617,19 +620,30 @@ function CoverageCount({ label, value }: { label: string; value: number }) {
 }
 
 function MetadataProvenanceDetails({ provenance }: { provenance: DashboardTokenMetadataProvenanceDto }) {
-  const statusLabel = formatMetadataProvenanceStatus(provenance.status);
-  const sourceLabel = formatMetadataProvenanceSource(provenance.source);
-
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap gap-1.5">
-        <LabelBadge label={statusLabel} tone="neutral" size="sm" />
-        <LabelBadge label={sourceLabel} tone="neutral" size="sm" />
-      </div>
-      <span className="text-xs" style={{ color: "#586070" }}>Confidence: {provenance.confidence}</span>
-      <TimestampLabel label="observed" value={provenance.observedAt} fallback="Unavailable" />
+    <div className="flex flex-col gap-1 text-xs">
+      {provenance.status === "observed" ? (
+        <span style={{ color: "#4ade80" }}>Observed metadata</span>
+      ) : provenance.status === "unknown" ? (
+        <span style={{ color: "#586070" }}>Metadata status unknown</span>
+      ) : (
+        <span style={{ color: "#a0a8c0" }}>Metadata status: {provenance.status}</span>
+      )}
+
+      {provenance.source === "chain" ? (
+        <span style={{ color: "#a0a8c0" }}>Metadata observed from RPC</span>
+      ) : provenance.source === "unknown" ? (
+        <span style={{ color: "#586070" }}>Metadata source unknown</span>
+      ) : (
+        <span style={{ color: "#a0a8c0" }}>Metadata source: {provenance.source}</span>
+      )}
+
+      <span style={{ color: "#586070" }}>Metadata confidence: {provenance.confidence}</span>
+
+      <TimestampLabel label="metadata observed" value={provenance.observedAt} fallback="Metadata observation unavailable" />
+
       {provenance.conflictReason != null ? (
-        <span className="text-xs" style={{ color: "#f59e0b" }}>Conflict: {provenance.conflictReason}</span>
+        <span style={{ color: "#f59e0b" }}>Metadata conflict: {provenance.conflictReason}</span>
       ) : null}
     </div>
   );
