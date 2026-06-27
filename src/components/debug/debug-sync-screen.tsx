@@ -224,13 +224,16 @@ export function DebugSyncScreen() {
       <SurfaceCard className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--color-text-muted)]">
+            <p
+              className="text-xs font-semibold uppercase tracking-widest"
+              style={{ color: "#586070", letterSpacing: "0.08em" }}
+            >
               CoinPulse
             </p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight" style={{ color: "#e4e6f0" }}>
               Debug and sync
             </h1>
-            <p className="mt-3 max-w-3xl leading-7 text-[color:var(--color-text-muted)]">
+            <p className="mt-3 max-w-3xl leading-7 text-sm" style={{ color: "#a0a8c0" }}>
               Operator-facing frontend for backend health, sync, and rebuild
               visibility. The page only renders backend responses and never
               computes balances, pricing, valuation, or PnL in the browser.
@@ -353,7 +356,10 @@ export function DebugSyncScreen() {
           </LabeledField>
         </div>
         <div className="mt-4 flex flex-col gap-2">
-          <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
+          <span
+            className="text-xs font-semibold uppercase tracking-widest"
+            style={{ color: "#586070", letterSpacing: "0.08em" }}
+          >
             Source families
           </span>
           <div className="flex flex-wrap gap-2">
@@ -364,11 +370,18 @@ export function DebugSyncScreen() {
                 <button
                   key={family}
                   type="button"
-                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold tracking-[0.08em] transition ${
-                    selected
-                      ? "border-[color:var(--color-accent-2)] bg-[color:var(--color-accent-2)] text-slate-950"
-                      : "border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] text-[color:var(--color-text-muted)]"
-                  }`}
+                  className="rounded-full border px-3 py-1.5 text-xs font-semibold transition"
+                  style={selected ? {
+                    background: "#818cf8",
+                    borderColor: "#818cf8",
+                    color: "#0b0d14",
+                    letterSpacing: "0.08em",
+                  } : {
+                    background: "#181d2c",
+                    borderColor: "rgba(255,255,255,0.065)",
+                    color: "#586070",
+                    letterSpacing: "0.08em",
+                  }}
                   onClick={() => toggleSourceFamily(family)}
                 >
                   {family}
@@ -426,7 +439,8 @@ export function DebugSyncScreen() {
             <div>
               <button
                 type="submit"
-                className="inline-flex h-11 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--color-accent-2)] bg-[color:var(--color-accent-2)] px-4 font-medium text-slate-950 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-11 items-center justify-center rounded-[var(--radius-md)] px-4 font-semibold text-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                style={{ background: "#818cf8", color: "#0b0d14" }}
                 disabled={isBusy || sourceFamilies.length === 0}
               >
                 {operationState.kind === "loading" &&
@@ -471,7 +485,8 @@ export function DebugSyncScreen() {
             <div>
               <button
                 type="submit"
-                className="inline-flex h-11 items-center justify-center rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] px-4 font-medium transition hover:border-[color:var(--color-accent-1)] disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-11 items-center justify-center rounded-[var(--radius-md)] border px-4 font-semibold text-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)", color: "#a0a8c0" }}
                 disabled={isBusy || sourceFamilies.length === 0}
               >
                 {operationState.kind === "loading" &&
@@ -563,11 +578,17 @@ function OperationStatePanel({ state }: { state: OperationState }) {
           <LabelBadge label={`run ${getRunId(state.payload)}`} tone="neutral" />
         ) : null}
       </div>
-      <details className="mt-4 rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)]">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+      <details
+        className="mt-4 rounded-[var(--radius-md)] border"
+        style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)" }}
+      >
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium" style={{ color: "#a0a8c0" }}>
           Show raw response
         </summary>
-        <pre className="overflow-x-auto border-t border-[color:var(--color-border-soft)] px-4 py-4 text-xs leading-6 text-[color:var(--color-text-muted)]">
+        <pre
+          className="overflow-x-auto px-4 py-4 text-xs leading-6"
+          style={{ borderTop: "1px solid rgba(255,255,255,0.065)", color: "#586070" }}
+        >
           {JSON.stringify(state.payload, null, 2)}
         </pre>
       </details>
@@ -587,15 +608,21 @@ function MetaCard({
   isTimestamp?: boolean;
 }) {
   return (
-    <div className="rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] p-4">
-      <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
+    <div
+      className="rounded-[var(--radius-md)] border p-4"
+      style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)" }}
+    >
+      <div
+        className="text-xs font-semibold uppercase tracking-widest"
+        style={{ color: "#586070", letterSpacing: "0.08em" }}
+      >
         {label}
       </div>
-      <div className="mt-3 cp-data text-sm">
+      <div className="mt-3 cp-data text-sm" style={{ color: "#e4e6f0" }}>
         {isTimestamp ? <TimestampLabel value={value} /> : value}
       </div>
       {hint ? (
-        <div className="mt-2 text-xs text-[color:var(--color-text-muted)]">
+        <div className="mt-2 text-xs" style={{ color: "#586070" }}>
           {hint}
         </div>
       ) : null}
@@ -612,7 +639,10 @@ function LabeledField({
 }) {
   return (
     <label className="flex flex-col gap-2">
-      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
+      <span
+        className="text-xs font-semibold uppercase tracking-widest"
+        style={{ color: "#586070", letterSpacing: "0.08em" }}
+      >
         {label}
       </span>
       {children}
@@ -674,4 +704,6 @@ function toTitle(value: string) {
 }
 
 const fieldClassName =
-  "h-11 w-full rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] px-3 text-sm outline-none transition focus:border-[color:var(--color-accent-1)]";
+  "h-11 w-full rounded-[var(--radius-md)] border px-3 text-sm outline-none transition"
+  + " bg-[#181d2c] text-[#e4e6f0] placeholder:text-[#586070]"
+  + " border-[rgba(255,255,255,0.065)] focus:border-[#818cf8]";

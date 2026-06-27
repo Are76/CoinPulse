@@ -28,13 +28,16 @@ export function PricingStatusScreen() {
       <SurfaceCard className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--color-text-muted)]">
+            <p
+              className="text-xs font-semibold uppercase tracking-widest"
+              style={{ color: "#586070", letterSpacing: "0.08em" }}
+            >
               CoinPulse
             </p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight" style={{ color: "#e4e6f0" }}>
               Pricing status
             </h1>
-            <p className="mt-3 max-w-3xl leading-7 text-[color:var(--color-text-muted)]">
+            <p className="mt-3 max-w-3xl leading-7 text-sm" style={{ color: "#a0a8c0" }}>
               Operator-facing view of backend pricing source health.
             </p>
           </div>
@@ -190,11 +193,17 @@ function SummaryValue({
   children?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-1 rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] px-4 py-3">
-      <span className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
+    <div
+      className="flex flex-col gap-1 rounded-[var(--radius-md)] border px-4 py-3"
+      style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)" }}
+    >
+      <span
+        className="text-xs font-semibold uppercase tracking-widest"
+        style={{ color: "#586070", letterSpacing: "0.08em" }}
+      >
         {label}
       </span>
-      {value ? <span className="text-sm font-medium">{value}</span> : children}
+      {value ? <span className="text-sm font-medium" style={{ color: "#e4e6f0" }}>{value}</span> : children}
     </div>
   );
 }
@@ -207,11 +216,17 @@ function MetricValue({
   label: string;
 } & ({ value: string; children?: never } | { value?: never; children: ReactNode })) {
   return (
-    <div className="flex flex-col gap-1 rounded-[var(--radius-md)] border border-[color:var(--color-border-soft)] bg-[color:var(--color-surface-2)] px-3 py-2">
-      <dt className="text-xs font-semibold uppercase tracking-[0.12em] text-[color:var(--color-text-muted)]">
+    <div
+      className="flex flex-col gap-1 rounded-[var(--radius-md)] border px-3 py-2"
+      style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)" }}
+    >
+      <dt
+        className="text-xs font-semibold uppercase tracking-widest"
+        style={{ color: "#586070", letterSpacing: "0.08em" }}
+      >
         {label}
       </dt>
-      <dd className="text-sm font-medium">{children ?? value}</dd>
+      <dd className="text-sm font-medium" style={{ color: "#e4e6f0" }}>{children ?? value}</dd>
     </div>
   );
 }

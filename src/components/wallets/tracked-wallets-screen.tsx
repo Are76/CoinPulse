@@ -20,13 +20,16 @@ export function TrackedWalletsScreen() {
       <SurfaceCard className="flex flex-col gap-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--color-text-muted)]">
+            <p
+              className="text-xs font-semibold uppercase tracking-widest"
+              style={{ color: "#586070", letterSpacing: "0.08em" }}
+            >
               CoinPulse
             </p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight" style={{ color: "#e4e6f0" }}>
               Tracked wallets
             </h1>
-            <p className="mt-3 max-w-3xl leading-7 text-[color:var(--color-text-muted)]">
+            <p className="mt-3 max-w-3xl leading-7 text-sm" style={{ color: "#a0a8c0" }}>
               Operator-facing view of wallets registered in backend tracking.
             </p>
           </div>
@@ -71,7 +74,7 @@ export function TrackedWalletsScreen() {
           title="Registered wallets"
           subtitle={`Schema version: ${data.schemaVersion} · ${data.wallets.length} wallet${data.wallets.length === 1 ? "" : "s"} tracked.`}
         >
-          <div className="flex flex-col divide-y divide-[color:var(--color-border-soft)]">
+          <div className="flex flex-col divide-y divide-[rgba(255,255,255,0.04)]">
             {data.wallets.map((wallet) => (
               <WalletRow key={wallet.id} wallet={wallet} />
             ))}
@@ -86,11 +89,11 @@ function WalletRow({ wallet }: { wallet: TrackedWalletDto }) {
   return (
     <div className="flex flex-col gap-1 py-4 md:flex-row md:items-start md:gap-6">
       <div className="min-w-0 flex-1">
-        <p className="truncate font-mono text-sm">{wallet.address}</p>
-        <p className="mt-1 text-xs text-[color:var(--color-text-muted)]">
+        <p className="truncate font-mono text-sm" style={{ color: "#e4e6f0" }}>{wallet.address}</p>
+        <p className="mt-1 text-xs" style={{ color: "#586070" }}>
           Chain ID: {wallet.chainId}
         </p>
-        <p className="mt-0.5 text-xs text-[color:var(--color-text-muted)]">
+        <p className="mt-0.5 text-xs" style={{ color: "#586070" }}>
           {wallet.label ?? "No label"}
         </p>
       </div>
