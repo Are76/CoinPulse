@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { PageContainer } from "@/components/ui/page-container";
 import {
@@ -69,6 +69,22 @@ export function DashboardScreen() {
         chainId,
       )
     : null;
+
+  // Auto-load first tracked wallet on initial page view
+  const autoLoadedRef = useRef(false);
+  useEffect(() => {
+    if (autoLoadedRef.current || submittedParams !== null) return;
+    if (!trackedWalletsQuery.isSuccess) return;
+    const wallets = trackedWalletsQuery.data?.wallets ?? [];
+    if (wallets.length === 0) return;
+    autoLoadedRef.current = true;
+    const first = wallets[0];
+    const params: SubmittedParams = { walletAddress: first.address.toLowerCase(), chainId: first.chainId };
+    setWalletAddress(first.address);
+    setChainId(String(first.chainId));
+    setSubmittedParams(params);
+    setSubmittedWalletSource(resolveSubmittedWalletSource(params, wallets));
+  }, [trackedWalletsQuery.isSuccess, trackedWalletsQuery.data, submittedParams]);
 
   function handleSelectTrackedWallet(address: string, selectedChainId: string) {
     setWalletAddress(address);

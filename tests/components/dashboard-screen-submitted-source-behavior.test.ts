@@ -156,9 +156,7 @@ describe("DashboardScreen submitted wallet source behavior", () => {
   it("disables dashboard metadata polling through shared debug query hooks", () => {
     renderDashboard();
 
-    expect(mockUseDebugHealthQuery).toHaveBeenCalledTimes(1);
     expect(mockUseDebugHealthQuery).toHaveBeenCalledWith({ refetchInterval: false });
-    expect(mockUseDebugStatusQuery).toHaveBeenCalledTimes(1);
     expect(mockUseDebugStatusQuery).toHaveBeenCalledWith({ refetchInterval: false });
   });
 
@@ -258,28 +256,8 @@ describe("DashboardScreen submitted wallet source behavior", () => {
     expect(screen.getByText("Submitted from tracked wallet: Primary")).toBeInTheDocument();
   });
 
-  it("dashboard fetch remains gated to explicit submit", () => {
+  it("auto-loads first tracked wallet on initial render without requiring explicit submit", () => {
     renderDashboard();
-
-    expect(mockUseDashboardQuery).toHaveBeenLastCalledWith({
-      walletAddress: "",
-      chainId: 0,
-      quoteAsset: "fiat:usd",
-      enabled: false,
-    });
-
-    fireEvent.click(
-      screen.getByRole("button", { name: `Select wallet ${PRIMARY_WALLET.address}` }),
-    );
-
-    expect(mockUseDashboardQuery).toHaveBeenLastCalledWith({
-      walletAddress: "",
-      chainId: 0,
-      quoteAsset: "fiat:usd",
-      enabled: false,
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /Load dashboard/i }));
 
     expect(mockUseDashboardQuery).toHaveBeenLastCalledWith({
       walletAddress: PRIMARY_WALLET.address,
