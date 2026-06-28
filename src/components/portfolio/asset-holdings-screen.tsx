@@ -23,13 +23,6 @@ function truncateAddress(addr: string): string {
   return `${addr.slice(0, 8)}…${addr.slice(-6)}`;
 }
 
-function formatUsd(value: string | null): string | null {
-  if (!value) return null;
-  const n = parseFloat(value);
-  if (isNaN(n)) return value;
-  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
 export function AssetHoldingsScreen() {
   const [selectedWalletId, setSelectedWalletId] = useState<string | null>(null);
   const trackedWalletsQuery = useTrackedWalletsQuery();
@@ -166,7 +159,7 @@ export function AssetHoldingsScreen() {
 }
 
 function SummaryStats({ summary }: { summary: PortfolioSummaryDto }) {
-  const formattedValue = formatUsd(summary.totalValueQuote);
+  const formattedValue = summary.totalValueQuote ?? null;
   const { valuedPositions, totalPositions } = summary.valuationCoverage;
   const coverageTone: "fresh" | "warn" | "neutral" =
     totalPositions > 0 && valuedPositions === totalPositions ? "fresh" : valuedPositions > 0 ? "warn" : "neutral";
