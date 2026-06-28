@@ -109,6 +109,7 @@ export function AssetHoldingsScreen() {
                   type="button"
                   aria-pressed={isActive}
                   onClick={() => setSelectedWalletId(w.id)}
+                  title={w.address}
                   className="cp-data text-xs transition"
                   style={{
                     padding: "6px 12px",
@@ -168,7 +169,7 @@ function SummaryStats({ summary }: { summary: PortfolioSummaryDto }) {
   const formattedValue = formatUsd(summary.totalValueQuote);
   const { valuedPositions, totalPositions } = summary.valuationCoverage;
   const coverageTone: "fresh" | "warn" | "neutral" =
-    valuedPositions === totalPositions ? "fresh" : valuedPositions > 0 ? "warn" : "neutral";
+    totalPositions > 0 && valuedPositions === totalPositions ? "fresh" : valuedPositions > 0 ? "warn" : "neutral";
 
   return (
     <>

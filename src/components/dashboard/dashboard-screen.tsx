@@ -47,6 +47,7 @@ export function DashboardScreen() {
   const [submittedParams, setSubmittedParams] = useState<SubmittedParams | null>(null);
   const [submittedWalletSource, setSubmittedWalletSource] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [hasInteracted, setHasInteracted] = useState(false);
 
   const trackedWalletsQuery = useTrackedWalletsQuery();
 
@@ -70,25 +71,39 @@ export function DashboardScreen() {
       )
     : null;
 
-  // Auto-load first tracked wallet on initial page view
+  // Auto-load first tracked wallet on initial page view, but not after the user
+  // has started editing the form — hasInteracted guards against overwriting
+  // in-progress manual input with wallets[0].
   const autoLoadedRef = useRef(false);
   useEffect(() => {
-    if (autoLoadedRef.current || submittedParams !== null) return;
+    if (autoLoadedRef.current || hasInteracted || submittedParams !== null) return;
     if (!trackedWalletsQuery.isSuccess) return;
     const wallets = trackedWalletsQuery.data?.wallets ?? [];
     if (wallets.length === 0) return;
     autoLoadedRef.current = true;
     const first = wallets[0];
     const params: SubmittedParams = { walletAddress: first.address.toLowerCase(), chainId: first.chainId };
+    setValidationError(null);
     setWalletAddress(first.address);
     setChainId(String(first.chainId));
     setSubmittedParams(params);
     setSubmittedWalletSource(resolveSubmittedWalletSource(params, wallets));
-  }, [trackedWalletsQuery.isSuccess, trackedWalletsQuery.data, submittedParams]);
+  }, [hasInteracted, trackedWalletsQuery.isSuccess, trackedWalletsQuery.data, submittedParams]);
 
   function handleSelectTrackedWallet(address: string, selectedChainId: string) {
+    setHasInteracted(true);
     setWalletAddress(address);
     setChainId(selectedChainId);
+  }
+
+  function handleWalletAddressChange(value: string) {
+    setHasInteracted(true);
+    setWalletAddress(value);
+  }
+
+  function handleChainIdChange(value: string) {
+    setHasInteracted(true);
+    setChainId(value);
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -168,8 +183,8 @@ export function DashboardScreen() {
         chainId={chainId}
         isLoading={submittedParams !== null && dashboardQuery.isFetching}
         selectedTrackedWalletLabel={selectedTrackedWalletLabel}
-        onWalletAddressChange={setWalletAddress}
-        onChainIdChange={setChainId}
+        onWalletAddressChange={handleWalletAddressChange}
+        onChainIdChange={handleChainIdChange}
         onSubmit={handleSubmit}
       />
 
