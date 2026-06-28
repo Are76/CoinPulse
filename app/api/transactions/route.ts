@@ -34,7 +34,8 @@ export async function GET(request: Request) {
   try {
     const page = await listCanonicalTransactions(args);
     return Response.json({ data: page });
-  } catch {
+  } catch (err) {
+    console.error("[GET /api/transactions] listCanonicalTransactions failed", { err, args });
     return buildInternalErrorResponse();
   }
 }

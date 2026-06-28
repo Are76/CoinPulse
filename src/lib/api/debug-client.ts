@@ -20,7 +20,6 @@ export const SOURCE_FAMILY_OPTIONS = [
   "DEX",
   "LP",
   "STAKING",
-  "NATIVE",
 ] as const;
 
 const healthReportSchema = z.object({
