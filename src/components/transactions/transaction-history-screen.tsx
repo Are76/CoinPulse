@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { PageContainer } from "@/components/ui/page-container";
 import { SectionCard } from "@/components/ui/section-card";
@@ -21,13 +21,13 @@ import type {
   TransactionDto,
   TransactionEntryDto,
   TransactionLedgerCoverageDto,
-  TransactionsPageDto,
+  TransactionPageInfoDto,
 } from "@/services/transactions/types";
 
 const DEFAULT_CHAIN_ID = "369";
 const TRANSACTIONS_SCHEMA_VERSION = "v1" as const;
 
-type SubmittedParams = { walletAddress: string; chainId: number; limit: number | undefined };
+type SubmittedParams = { walletAddress: string; chainId: number; limit: number | undefined; submitKey: number };
 
 function resolveSubmission(args: { walletAddress: string; chainId: string; limit: string }) {
   const trimmed = args.walletAddress.trim().toLowerCase();
@@ -72,12 +72,38 @@ export function TransactionHistoryScreen() {
   const [submittedParams, setSubmittedParams] = useState<SubmittedParams | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
+  // Pagination state
+  const [currentCursor, setCurrentCursor] = useState<string | undefined>(undefined);
+  const [accumulatedTransactions, setAccumulatedTransactions] = useState<TransactionDto[]>([]);
+  const [latestPageInfo, setLatestPageInfo] = useState<TransactionPageInfoDto | null>(null);
+  // Track the submitKey of the query that produced the current accumulated state
+  // so we can detect when results from a stale submit arrive
+  const activeSubmitKeyRef = useRef<number>(0);
+
   const transactionsQuery = useTransactionsQuery({
     walletAddress: submittedParams?.walletAddress ?? "",
     chainId: submittedParams?.chainId ?? 0,
     limit: submittedParams?.limit,
+    cursor: currentCursor,
     enabled: submittedParams !== null,
   });
+
+  useEffect(() => {
+    if (!transactionsQuery.data) return;
+    const data = transactionsQuery.data;
+    if (currentCursor === undefined) {
+      // First page — replace accumulated list entirely
+      setAccumulatedTransactions(data.transactions);
+    } else {
+      // Subsequent page — append, deduplicating by transactionId
+      setAccumulatedTransactions((prev) => {
+        const existingIds = new Set(prev.map((t) => t.transactionId));
+        const newTxns = data.transactions.filter((t) => !existingIds.has(t.transactionId));
+        return [...prev, ...newTxns];
+      });
+    }
+    setLatestPageInfo(data.pageInfo);
+  }, [transactionsQuery.data, currentCursor]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -85,10 +111,16 @@ export function TransactionHistoryScreen() {
     if (submission.validationError !== null) {
       setValidationError(submission.validationError);
       setSubmittedParams(null);
+      setCurrentCursor(undefined);
+      setAccumulatedTransactions([]);
+      setLatestPageInfo(null);
       return;
     }
     setValidationError(null);
     const params = submission.submittedParams;
+    const nextKey = activeSubmitKeyRef.current + 1;
+    activeSubmitKeyRef.current = nextKey;
+    // Remove all cached pages for the prior query
     queryClient.removeQueries({
       queryKey: queryKeys.transactions(TRANSACTIONS_SCHEMA_VERSION, {
         walletAddress: params.walletAddress,
@@ -96,11 +128,22 @@ export function TransactionHistoryScreen() {
         ...(params.limit !== undefined ? { limit: params.limit } : {}),
       }),
     });
-    setSubmittedParams(params);
+    setCurrentCursor(undefined);
+    setAccumulatedTransactions([]);
+    setLatestPageInfo(null);
+    setSubmittedParams({ ...params, submitKey: nextKey });
+  }
+
+  function handleLoadMore() {
+    if (latestPageInfo?.nextCursor) {
+      setCurrentCursor(latestPageInfo.nextCursor);
+    }
   }
 
   const isIdle = submittedParams === null && validationError === null;
-  const isFetching = submittedParams !== null && transactionsQuery.isFetching;
+  // Only show the initial full-page loading skeleton on the first fetch (no cursor, no prior data)
+  const isFirstPageLoading = submittedParams !== null && transactionsQuery.isLoading && currentCursor === undefined && accumulatedTransactions.length === 0;
+  const isLoadingMore = submittedParams !== null && transactionsQuery.isFetching && currentCursor !== undefined;
   const errorMessage = validationError ?? (transactionsQuery.isError ? getErrorMessage(transactionsQuery.error) : null);
 
   return (
@@ -140,8 +183,8 @@ export function TransactionHistoryScreen() {
             <input id="tx-limit" aria-label="Limit" className={fieldClassName} inputMode="numeric" placeholder="50" value={limit} onChange={(e) => setLimit(e.target.value)} />
           </LabeledField>
           <div className="flex items-end">
-            <button type="submit" disabled={isFetching} aria-disabled={isFetching} aria-busy={isFetching} className={submitButtonClassName}>
-              {isFetching ? "Loading…" : "Load transactions"}
+            <button type="submit" disabled={isFirstPageLoading} aria-disabled={isFirstPageLoading} aria-busy={isFirstPageLoading} className={submitButtonClassName}>
+              {isFirstPageLoading ? "Loading…" : "Load transactions"}
             </button>
           </div>
         </form>
@@ -152,13 +195,20 @@ export function TransactionHistoryScreen() {
         <EmptyState title="No query submitted" message="Enter a wallet address and click Load transactions to fetch canonical transaction history." />
       )}
       {errorMessage !== null && <ErrorState message={errorMessage} />}
-      {submittedParams !== null && transactionsQuery.isLoading && (
+      {isFirstPageLoading && (
         <LoadingState blocks={3} className="grid gap-4 md:grid-cols-3" />
       )}
 
       {/* Results */}
-      {transactionsQuery.data !== undefined && errorMessage === null && (
-        <TransactionResultView page={transactionsQuery.data} chainId={submittedParams?.chainId ?? 0} />
+      {accumulatedTransactions.length > 0 && latestPageInfo !== null && errorMessage === null && (
+        <TransactionResultView
+          transactions={accumulatedTransactions}
+          ledgerCoverage={transactionsQuery.data?.ledgerCoverage ?? { status: "unknown", reason: "Loading" }}
+          pageInfo={latestPageInfo}
+          chainId={submittedParams?.chainId ?? 0}
+          isLoadingMore={isLoadingMore}
+          onLoadMore={handleLoadMore}
+        />
       )}
     </PageContainer>
   );
@@ -166,11 +216,32 @@ export function TransactionHistoryScreen() {
 
 /* ── Result view ─────────────────────────────────────────────────────────── */
 
-function TransactionResultView({ page, chainId }: { page: TransactionsPageDto; chainId: number }) {
+function TransactionResultView({
+  transactions,
+  ledgerCoverage,
+  pageInfo,
+  chainId,
+  isLoadingMore,
+  onLoadMore,
+}: {
+  transactions: TransactionDto[];
+  ledgerCoverage: TransactionLedgerCoverageDto;
+  pageInfo: TransactionPageInfoDto;
+  chainId: number;
+  isLoadingMore: boolean;
+  onLoadMore: () => void;
+}) {
   return (
     <>
-      <LedgerCoveragePanel coverage={page.ledgerCoverage} />
-      <TransactionList transactions={page.transactions} coverage={page.ledgerCoverage} chainId={chainId} />
+      <LedgerCoveragePanel coverage={ledgerCoverage} />
+      <TransactionList
+        transactions={transactions}
+        coverage={ledgerCoverage}
+        chainId={chainId}
+        pageInfo={pageInfo}
+        isLoadingMore={isLoadingMore}
+        onLoadMore={onLoadMore}
+      />
     </>
   );
 }
@@ -203,7 +274,21 @@ function LedgerCoveragePanel({ coverage }: { coverage: TransactionLedgerCoverage
   );
 }
 
-function TransactionList({ transactions, coverage, chainId }: { transactions: TransactionDto[]; coverage: TransactionLedgerCoverageDto; chainId: number }) {
+function TransactionList({
+  transactions,
+  coverage,
+  chainId,
+  pageInfo,
+  isLoadingMore,
+  onLoadMore,
+}: {
+  transactions: TransactionDto[];
+  coverage: TransactionLedgerCoverageDto;
+  chainId: number;
+  pageInfo: TransactionPageInfoDto;
+  isLoadingMore: boolean;
+  onLoadMore: () => void;
+}) {
   if (transactions.length === 0) {
     if (coverage.status === "unknown" && coverage.reason === "wallet-not-tracked") {
       return <EmptyState title="Wallet not tracked" message="This wallet has no ledger entries. Import it via the wallet import page to begin tracking." />;
@@ -212,26 +297,42 @@ function TransactionList({ transactions, coverage, chainId }: { transactions: Tr
   }
 
   return (
-    <DataTableShell
-      title={`Transactions (${transactions.length})`}
-      subtitle="Canonical ledger entries from the backend. All fields are backend-provided — no local reconstruction."
-    >
-      <thead>
-        <tr>
-          <th scope="col" className={thClassName}>Occurred at</th>
-          <th scope="col" className={thClassName}>Tx hash</th>
-          <th scope="col" className={thClassName}>Type</th>
-          <th scope="col" className={thClassName}>Status</th>
-          <th scope="col" className={thClassName}>Entries</th>
-          <th scope="col" className={thClassName}>Warnings</th>
-        </tr>
-      </thead>
-      <tbody>
-        {transactions.map((tx) => (
-          <TransactionRow key={tx.transactionId} tx={tx} chainId={chainId} />
-        ))}
-      </tbody>
-    </DataTableShell>
+    <>
+      <DataTableShell
+        title={`Transactions (${transactions.length}${pageInfo.hasNextPage ? "+" : ""})`}
+        subtitle="Canonical ledger entries from the backend. All fields are backend-provided — no local reconstruction."
+      >
+        <thead>
+          <tr>
+            <th scope="col" className={thClassName}>Occurred at</th>
+            <th scope="col" className={thClassName}>Tx hash</th>
+            <th scope="col" className={thClassName}>Type</th>
+            <th scope="col" className={thClassName}>Status</th>
+            <th scope="col" className={thClassName}>Entries</th>
+            <th scope="col" className={thClassName}>Warnings</th>
+          </tr>
+        </thead>
+        <tbody>
+          {transactions.map((tx) => (
+            <TransactionRow key={tx.transactionId} tx={tx} chainId={chainId} />
+          ))}
+        </tbody>
+      </DataTableShell>
+      {pageInfo.hasNextPage && pageInfo.nextCursor !== null && (
+        <div className="flex justify-center pt-2">
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={isLoadingMore}
+            aria-disabled={isLoadingMore}
+            aria-busy={isLoadingMore}
+            className={submitButtonClassName}
+          >
+            {isLoadingMore ? "Loading…" : "Load more"}
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 

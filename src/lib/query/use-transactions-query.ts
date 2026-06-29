@@ -10,6 +10,7 @@ export type UseTransactionsQueryParams = {
   walletAddress: string;
   chainId: number;
   limit?: number;
+  cursor?: string;
   enabled?: boolean;
 };
 
@@ -17,6 +18,7 @@ export function useTransactionsQuery({
   walletAddress,
   chainId,
   limit,
+  cursor,
   enabled = true,
 }: UseTransactionsQueryParams) {
   const normalizedAddress = walletAddress.trim().toLowerCase();
@@ -26,12 +28,14 @@ export function useTransactionsQuery({
       walletAddress: normalizedAddress,
       chainId,
       ...(limit !== undefined ? { limit } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
     }),
     queryFn: () =>
       fetchTransactions({
         walletAddress: walletAddress.trim(),
         chainId,
         limit,
+        ...(cursor !== undefined ? { cursor } : {}),
       }),
     enabled: enabled && walletAddress.trim().length > 0,
     retry: false,

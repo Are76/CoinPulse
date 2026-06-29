@@ -12,6 +12,7 @@ export type FetchTransactionsArgs = {
   walletAddress: string;
   chainId: number;
   limit?: number;
+  cursor?: string;
 };
 
 export async function fetchTransactions(
@@ -23,6 +24,9 @@ export async function fetchTransactions(
   });
   if (args.limit !== undefined) {
     params.set("limit", String(args.limit));
+  }
+  if (args.cursor !== undefined) {
+    params.set("cursor", args.cursor);
   }
 
   const response = await fetchJson<ApiDataResponse<TransactionsPageDto>>(
