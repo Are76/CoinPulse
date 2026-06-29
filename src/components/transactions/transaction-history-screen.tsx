@@ -1,6 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { PageContainer } from "@/components/ui/page-container";
@@ -75,10 +76,16 @@ function truncateTxHash(txHash: string): string {
 
 export function TransactionHistoryScreen() {
   const queryClient = useQueryClient();
-  const [walletAddress, setWalletAddress] = useState("");
-  const [chainId, setChainId] = useState(DEFAULT_CHAIN_ID);
+  const searchParams = useSearchParams();
+
+  const initialWalletAddress = searchParams?.get("walletAddress") ?? "";
+  const initialChainId = searchParams?.get("chainId") ?? DEFAULT_CHAIN_ID;
+  const initialAssetId = searchParams?.get("assetId") ?? "";
+
+  const [walletAddress, setWalletAddress] = useState(initialWalletAddress);
+  const [chainId, setChainId] = useState(initialChainId);
   const [limit, setLimit] = useState("");
-  const [filterAssetId, setFilterAssetId] = useState("");
+  const [filterAssetId, setFilterAssetId] = useState(initialAssetId);
   const [filterActionType, setFilterActionType] = useState("");
   const [filterSourceFamily, setFilterSourceFamily] = useState("");
   const [filterProtocol, setFilterProtocol] = useState("");
@@ -92,6 +99,7 @@ export function TransactionHistoryScreen() {
   const [accumulatedTransactions, setAccumulatedTransactions] = useState<TransactionDto[]>([]);
   const [latestPage, setLatestPage] = useState<TransactionsPageDto | null>(null);
   const activeSubmitKeyRef = useRef<number>(0);
+  const drillDownSubmittedRef = useRef(false);
 
   const transactionsQuery = useTransactionsQuery({
     walletAddress: submittedParams?.walletAddress ?? "",
@@ -122,6 +130,29 @@ export function TransactionHistoryScreen() {
   // the query data reference is unchanged (e.g. in tests with stable mocks).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactionsQuery.data, currentCursor, submitKey]);
+
+  // Auto-submit once on mount when arriving via drill-down (assetId in URL)
+  useEffect(() => {
+    if (drillDownSubmittedRef.current) return;
+    if (!initialWalletAddress || !initialAssetId) return;
+    drillDownSubmittedRef.current = true;
+    const submission = resolveSubmission({
+      walletAddress: initialWalletAddress,
+      chainId: initialChainId,
+      limit: "",
+      filters: { assetId: initialAssetId },
+    });
+    if (submission.submittedParams === null) return;
+    const params = submission.submittedParams;
+    const nextKey = activeSubmitKeyRef.current + 1;
+    activeSubmitKeyRef.current = nextKey;
+    setCurrentCursor(undefined);
+    setAccumulatedTransactions([]);
+    setLatestPage(null);
+    setSubmittedParams({ ...params, submitKey: nextKey });
+  // Only run once on mount — intentionally omitting reactive deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -221,7 +252,7 @@ export function TransactionHistoryScreen() {
           </div>
 
           {/* Filters */}
-          <details className="rounded-[var(--radius-md)] border" style={{ borderColor: "rgba(255,255,255,0.065)" }}>
+          <details className="rounded-[var(--radius-md)] border" style={{ borderColor: "rgba(255,255,255,0.065)" }} open={!!initialAssetId}>
             <summary
               className="cursor-pointer px-4 py-3 text-xs font-semibold uppercase tracking-widest select-none"
               style={{ color: "#586070", letterSpacing: "0.08em" }}
