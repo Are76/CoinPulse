@@ -330,6 +330,8 @@ export function DebugSyncScreen() {
           </SurfaceCard>
 
           <RpcObservabilityCard rpcObservability={metaState.status.rpcObservability} />
+
+          <HexMiningObservationCard observationStatus={metaState.status.hexMining.observationStatus} />
         </>
       ) : null}
 
@@ -703,6 +705,97 @@ function getRunId(payload: unknown) {
 
 function toTitle(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function HexMiningObservationCard({
+  observationStatus,
+}: {
+  observationStatus: DebugStatusReportDto["hexMining"]["observationStatus"];
+}) {
+  const status = observationStatus.status;
+
+  const statusTone =
+    status === "available"
+      ? ("fresh" as const)
+      : status === "missing"
+        ? ("warn" as const)
+        : ("warn" as const);
+
+  const latestObservation =
+    status !== "unavailable" ? observationStatus.latestObservation : null;
+
+  const warnings =
+    status !== "unavailable" ? observationStatus.warnings : [];
+
+  return (
+    <SectionCard
+      title="HexMining Observation Status"
+      subtitle="Backend-reported HexMining observation state. Values are rendered verbatim from the debug status DTO."
+    >
+      <div className="grid gap-4 md:grid-cols-3">
+        <div
+          className="rounded-[var(--radius-md)] border p-4"
+          style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)" }}
+        >
+          <div
+            className="text-xs font-semibold uppercase tracking-widest"
+            style={{ color: "#586070", letterSpacing: "0.08em" }}
+          >
+            Observation Status
+          </div>
+          <div className="mt-3">
+            <LabelBadge label={status} tone={statusTone} />
+          </div>
+        </div>
+
+        <div
+          className="rounded-[var(--radius-md)] border p-4"
+          style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)" }}
+        >
+          <div
+            className="text-xs font-semibold uppercase tracking-widest"
+            style={{ color: "#586070", letterSpacing: "0.08em" }}
+          >
+            Latest Observation
+          </div>
+          <div className="mt-3 cp-data text-sm" style={{ color: "#e4e6f0" }}>
+            {latestObservation === null ? (
+              <span style={{ color: "#586070" }}>No observations recorded</span>
+            ) : (
+              <TimestampLabel value={latestObservation.observedAt} />
+            )}
+          </div>
+        </div>
+
+        <div
+          className="rounded-[var(--radius-md)] border p-4"
+          style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)" }}
+        >
+          <div
+            className="text-xs font-semibold uppercase tracking-widest"
+            style={{ color: "#586070", letterSpacing: "0.08em" }}
+          >
+            Days Covered
+          </div>
+          <div className="mt-3 cp-data text-sm" style={{ color: "#e4e6f0" }}>
+            {latestObservation === null ? (
+              <span style={{ color: "#586070" }}>—</span>
+            ) : (
+              `Day ${latestObservation.rangeStartDay} – ${latestObservation.rangeEndDay}`
+            )}
+          </div>
+        </div>
+      </div>
+
+      {warnings.length > 0 ? (
+        <div className="mt-4">
+          <WarningBanner>
+            <WarningList warnings={warnings} />
+          </WarningBanner>
+        </div>
+      ) : null}
+    </SectionCard>
+  );
 }
 
 function RpcObservabilityCard({
