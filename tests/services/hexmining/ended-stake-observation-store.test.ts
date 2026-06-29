@@ -90,20 +90,36 @@ function makeMockDb(initial: StoredRow[] = []) {
         where: { chainId: number; walletAddress: string };
         orderBy: Record<string, "asc" | "desc">[];
       }) {
-        const primary = args.orderBy[0] ?? {};
-        const dir: "asc" | "desc" =
-          "endBlockNumber" in primary ? primary.endBlockNumber : "asc";
-        return rows
-          .filter(
-            (r) =>
-              r.chainId === args.where.chainId &&
-              r.walletAddress === args.where.walletAddress,
-          )
-          .sort((a, b) =>
-            dir === "asc"
-              ? Number(a.endBlockNumber - b.endBlockNumber)
-              : Number(b.endBlockNumber - a.endBlockNumber),
-          );
+        const filtered = rows.filter(
+          (r) =>
+            r.chainId === args.where.chainId &&
+            r.walletAddress === args.where.walletAddress,
+        );
+
+        // Apply each orderBy entry in sequence (full multi-key sort).
+        const fieldOf = (r: StoredRow, field: string): string | bigint | number => {
+          if (field === "endBlockNumber") return r.endBlockNumber;
+          if (field === "endTxHash") return r.endTxHash;
+          if (field === "stakeId") return r.stakeId;
+          if (field === "id") return r.id;
+          return "";
+        };
+
+        return filtered.sort((a, b) => {
+          for (const entry of args.orderBy) {
+            const [field, dir] = Object.entries(entry)[0] as [string, "asc" | "desc"];
+            const av = fieldOf(a, field);
+            const bv = fieldOf(b, field);
+            let cmp: number;
+            if (typeof av === "bigint" && typeof bv === "bigint") {
+              cmp = av < bv ? -1 : av > bv ? 1 : 0;
+            } else {
+              cmp = String(av).localeCompare(String(bv));
+            }
+            if (cmp !== 0) return dir === "asc" ? cmp : -cmp;
+          }
+          return 0;
+        });
       },
     },
   };
@@ -252,6 +268,30 @@ describe("readEndedHexStakeObservations", () => {
     expect(rows.map((r) => r.stakeId)).toEqual(["1", "2", "3"]);
     expect(rows[0].endBlockNumber).toBe(19000000n);
     expect(rows[2].endBlockNumber).toBe(25000000n);
+  });
+
+  it("uses secondary sort keys deterministically when endBlockNumber ties", async () => {
+    const db = makeMockDb();
+    // Three stakes all ending in the same block — stakeId is the tie-breaker
+    await persistEndedHexStakeObservation(
+      { ...BASE_INPUT, stakeId: "300", endBlockNumber: 20000000n, endTxHash: "0xaaa" },
+      db,
+    );
+    await persistEndedHexStakeObservation(
+      { ...BASE_INPUT, stakeId: "100", endBlockNumber: 20000000n, endTxHash: "0xaaa" },
+      db,
+    );
+    await persistEndedHexStakeObservation(
+      { ...BASE_INPUT, stakeId: "200", endBlockNumber: 20000000n, endTxHash: "0xaaa" },
+      db,
+    );
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: BASE_INPUT.walletAddress },
+      db,
+    );
+    // endBlockNumber ties broken by endTxHash (same), then stakeId ascending
+    expect(rows.map((r) => r.stakeId)).toEqual(["100", "200", "300"]);
   });
 
   it("scopes results to chainId and walletAddress", async () => {
