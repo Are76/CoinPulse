@@ -22,6 +22,7 @@ import type {
   TransactionEntryDto,
   TransactionLedgerCoverageDto,
   TransactionPageInfoDto,
+  TransactionsPageDto,
 } from "@/services/transactions/types";
 
 const DEFAULT_CHAIN_ID = "369";
@@ -62,7 +63,7 @@ function truncateTxHash(txHash: string): string {
   return `${txHash.slice(0, 10)}…${txHash.slice(-8)}`;
 }
 
-/* ── Screen ──────────────────────────────────────────────────────────────── */
+/* ── Screen ────────────────────────────────────────────────────────────────────────────── */
 
 export function TransactionHistoryScreen() {
   const queryClient = useQueryClient();
@@ -75,9 +76,7 @@ export function TransactionHistoryScreen() {
   // Pagination state
   const [currentCursor, setCurrentCursor] = useState<string | undefined>(undefined);
   const [accumulatedTransactions, setAccumulatedTransactions] = useState<TransactionDto[]>([]);
-  const [latestPageInfo, setLatestPageInfo] = useState<TransactionPageInfoDto | null>(null);
-  // Track the submitKey of the query that produced the current accumulated state
-  // so we can detect when results from a stale submit arrive
+  const [latestPage, setLatestPage] = useState<TransactionsPageDto | null>(null);
   const activeSubmitKeyRef = useRef<number>(0);
 
   const transactionsQuery = useTransactionsQuery({
@@ -88,9 +87,11 @@ export function TransactionHistoryScreen() {
     enabled: submittedParams !== null,
   });
 
+  const submitKey = submittedParams?.submitKey ?? 0;
   useEffect(() => {
     if (!transactionsQuery.data) return;
     const data = transactionsQuery.data;
+    setLatestPage(data);
     if (currentCursor === undefined) {
       // First page — replace accumulated list entirely
       setAccumulatedTransactions(data.transactions);
@@ -102,8 +103,10 @@ export function TransactionHistoryScreen() {
         return [...prev, ...newTxns];
       });
     }
-    setLatestPageInfo(data.pageInfo);
-  }, [transactionsQuery.data, currentCursor]);
+  // submitKey is included so a new form submit re-fires the effect even when
+  // the query data reference is unchanged (e.g. in tests with stable mocks).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transactionsQuery.data, currentCursor, submitKey]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -113,7 +116,7 @@ export function TransactionHistoryScreen() {
       setSubmittedParams(null);
       setCurrentCursor(undefined);
       setAccumulatedTransactions([]);
-      setLatestPageInfo(null);
+      setLatestPage(null);
       return;
     }
     setValidationError(null);
@@ -130,19 +133,18 @@ export function TransactionHistoryScreen() {
     });
     setCurrentCursor(undefined);
     setAccumulatedTransactions([]);
-    setLatestPageInfo(null);
+    setLatestPage(null);
     setSubmittedParams({ ...params, submitKey: nextKey });
   }
 
   function handleLoadMore() {
-    if (latestPageInfo?.nextCursor) {
-      setCurrentCursor(latestPageInfo.nextCursor);
+    if (latestPage?.pageInfo.nextCursor) {
+      setCurrentCursor(latestPage.pageInfo.nextCursor);
     }
   }
 
   const isIdle = submittedParams === null && validationError === null;
-  // Only show the initial full-page loading skeleton on the first fetch (no cursor, no prior data)
-  const isFirstPageLoading = submittedParams !== null && transactionsQuery.isLoading && currentCursor === undefined && accumulatedTransactions.length === 0;
+  const isFirstPageLoading = submittedParams !== null && transactionsQuery.isLoading && currentCursor === undefined && latestPage === null;
   const isLoadingMore = submittedParams !== null && transactionsQuery.isFetching && currentCursor !== undefined;
   const errorMessage = validationError ?? (transactionsQuery.isError ? getErrorMessage(transactionsQuery.error) : null);
 
@@ -199,13 +201,13 @@ export function TransactionHistoryScreen() {
         <LoadingState blocks={3} className="grid gap-4 md:grid-cols-3" />
       )}
 
-      {/* Results */}
-      {accumulatedTransactions.length > 0 && latestPageInfo !== null && errorMessage === null && (
+      {/* Results: shown whenever we have a loaded page, even alongside a load-more error */}
+      {submittedParams !== null && latestPage !== null && (
         <TransactionResultView
           transactions={accumulatedTransactions}
-          ledgerCoverage={transactionsQuery.data?.ledgerCoverage ?? { status: "unknown", reason: "Loading" }}
-          pageInfo={latestPageInfo}
-          chainId={submittedParams?.chainId ?? 0}
+          ledgerCoverage={latestPage.ledgerCoverage}
+          pageInfo={latestPage.pageInfo}
+          chainId={submittedParams.chainId}
           isLoadingMore={isLoadingMore}
           onLoadMore={handleLoadMore}
         />
@@ -214,7 +216,7 @@ export function TransactionHistoryScreen() {
   );
 }
 
-/* ── Result view ─────────────────────────────────────────────────────────── */
+/* ── Result view ───────────────────────────────────────────────────────────────────────────── */
 
 function TransactionResultView({
   transactions,
@@ -442,7 +444,7 @@ function EntryRow({ entry }: { entry: TransactionEntryDto }) {
   );
 }
 
-/* ── Shared style constants ──────────────────────────────────────────────── */
+/* ── Shared style constants ──────────────────────────────────────────────────────────────────────────── */
 
 function LabeledField({ label, htmlFor, children }: { label: string; htmlFor?: string; children: React.ReactNode }) {
   return (
