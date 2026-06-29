@@ -19,7 +19,7 @@ CREATE TABLE "RawEndedHexStakeObservation" (
     "discoveryMethod" TEXT NOT NULL,
     "observedAt" TIMESTAMP(3) NOT NULL,
     "isComplete" BOOLEAN NOT NULL DEFAULT false,
-    "warnings" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "warnings" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "RawEndedHexStakeObservation_pkey" PRIMARY KEY ("id")
