@@ -78,9 +78,9 @@ export function TransactionHistoryScreen() {
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
 
-  const initialWalletAddress = searchParams.get("walletAddress") ?? "";
-  const initialChainId = searchParams.get("chainId") ?? DEFAULT_CHAIN_ID;
-  const initialAssetId = searchParams.get("assetId") ?? "";
+  const initialWalletAddress = searchParams?.get("walletAddress") ?? "";
+  const initialChainId = searchParams?.get("chainId") ?? DEFAULT_CHAIN_ID;
+  const initialAssetId = searchParams?.get("assetId") ?? "";
 
   const [walletAddress, setWalletAddress] = useState(initialWalletAddress);
   const [chainId, setChainId] = useState(initialChainId);
