@@ -328,6 +328,8 @@ export function DebugSyncScreen() {
               isTimestamp
             />
           </SurfaceCard>
+
+          <RpcObservabilityCard rpcObservability={metaState.status.rpcObservability} />
         </>
       ) : null}
 
@@ -701,6 +703,81 @@ function getRunId(payload: unknown) {
 
 function toTitle(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function RpcObservabilityCard({
+  rpcObservability,
+}: {
+  rpcObservability: DebugStatusReportDto["rpcObservability"];
+}) {
+  if (!rpcObservability) return null;
+
+  const { totalRequestCount, recentErrorCount, latestRequestAt } = rpcObservability;
+  const hasErrors = recentErrorCount > 0;
+
+  return (
+    <SectionCard
+      title="RPC Observability"
+      subtitle="Backend-reported RPC request counters and error tracking. Values are rendered verbatim from the debug status DTO."
+    >
+      <div className="grid gap-4 md:grid-cols-3">
+        <div
+          className="rounded-[var(--radius-md)] border p-4"
+          style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)" }}
+        >
+          <div
+            className="text-xs font-semibold uppercase tracking-widest"
+            style={{ color: "#586070", letterSpacing: "0.08em" }}
+          >
+            Total Requests
+          </div>
+          <div className="mt-3 cp-data text-sm" style={{ color: "#e4e6f0" }}>
+            {totalRequestCount.toLocaleString()}
+          </div>
+        </div>
+
+        <div
+          className="rounded-[var(--radius-md)] border p-4"
+          style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)" }}
+        >
+          <div
+            className="text-xs font-semibold uppercase tracking-widest"
+            style={{ color: "#586070", letterSpacing: "0.08em" }}
+          >
+            Recent Errors
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <span className="cp-data text-sm" style={{ color: "#e4e6f0" }}>
+              {recentErrorCount.toLocaleString()}
+            </span>
+            <LabelBadge
+              label={hasErrors ? "errors detected" : "no errors"}
+              tone={hasErrors ? "warn" : "fresh"}
+            />
+          </div>
+        </div>
+
+        <div
+          className="rounded-[var(--radius-md)] border p-4"
+          style={{ background: "#181d2c", borderColor: "rgba(255,255,255,0.065)" }}
+        >
+          <div
+            className="text-xs font-semibold uppercase tracking-widest"
+            style={{ color: "#586070", letterSpacing: "0.08em" }}
+          >
+            Latest Request
+          </div>
+          <div className="mt-3 cp-data text-sm" style={{ color: "#e4e6f0" }}>
+            {latestRequestAt === null ? (
+              <span style={{ color: "#586070" }}>No requests recorded</span>
+            ) : (
+              <TimestampLabel value={latestRequestAt} />
+            )}
+          </div>
+        </div>
+      </div>
+    </SectionCard>
+  );
 }
 
 const fieldClassName =
