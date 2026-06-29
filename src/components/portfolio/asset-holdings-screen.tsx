@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { EmptyState } from "@/components/ui/data-state/empty-state";
@@ -152,6 +153,7 @@ export function AssetHoldingsScreen() {
         <AssetHoldingsTable
           positions={dashboard.tokenPositions}
           chainId={dashboard.wallet.chainId}
+          walletAddress={dashboard.wallet.address}
         />
       ) : null}
     </PageContainer>
@@ -191,9 +193,11 @@ function SummaryStats({ summary }: { summary: PortfolioSummaryDto }) {
 function AssetHoldingsTable({
   positions,
   chainId,
+  walletAddress,
 }: {
   positions: DashboardTokenPositionDto[];
   chainId: number;
+  walletAddress: string;
 }) {
   if (positions.length === 0) {
     return (
@@ -207,7 +211,7 @@ function AssetHoldingsTable({
   return (
     <DataTableShell
       title={`${positions.length} position${positions.length === 1 ? "" : "s"}`}
-      subtitle={`chain ${chainId} · backend-resolved · no frontend calculation`}
+      subtitle={`chain ${chainId} · backend-resolved · no frontend calculation · click a row to view transactions`}
     >
       <thead>
         <tr>
@@ -220,19 +224,34 @@ function AssetHoldingsTable({
       </thead>
       <tbody>
         {positions.map((position) => (
-          <PositionRow key={position.assetId} position={position} />
+          <PositionRow key={position.assetId} position={position} walletAddress={walletAddress} chainId={chainId} />
         ))}
       </tbody>
     </DataTableShell>
   );
 }
 
-function PositionRow({ position }: { position: DashboardTokenPositionDto }) {
+function PositionRow({ position, walletAddress, chainId }: { position: DashboardTokenPositionDto; walletAddress: string; chainId: number }) {
+  const router = useRouter();
   const displayAddress = position.assetAddress ?? position.assetId;
+
+  function handleDrillDown() {
+    const params = new URLSearchParams({
+      walletAddress,
+      chainId: String(chainId),
+      assetId: position.assetId,
+    });
+    router.push(`/transactions?${params.toString()}`);
+  }
 
   return (
     <tr
-      style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
+      role="button"
+      tabIndex={0}
+      aria-label={`View transactions for ${displayAddress}`}
+      onClick={handleDrillDown}
+      onKeyDown={e => { if (e.key === "Enter" || e.key === " ") handleDrillDown(); }}
+      style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", cursor: "pointer" }}
       onMouseEnter={e => { e.currentTarget.style.background = "#1e2438"; }}
       onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
     >
