@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchTransactions } from "@/lib/api/transactions-client";
+import { fetchTransactions, type TransactionFilters } from "@/lib/api/transactions-client";
 import { QUERY_DEFAULTS } from "@/lib/query/query-defaults";
 import { queryKeys } from "@/lib/query/query-keys";
 
@@ -11,6 +11,7 @@ export type UseTransactionsQueryParams = {
   chainId: number;
   limit?: number;
   cursor?: string;
+  filters?: TransactionFilters;
   enabled?: boolean;
 };
 
@@ -19,6 +20,7 @@ export function useTransactionsQuery({
   chainId,
   limit,
   cursor,
+  filters,
   enabled = true,
 }: UseTransactionsQueryParams) {
   const normalizedAddress = walletAddress.trim().toLowerCase();
@@ -29,6 +31,7 @@ export function useTransactionsQuery({
       chainId,
       ...(limit !== undefined ? { limit } : {}),
       ...(cursor !== undefined ? { cursor } : {}),
+      ...(filters ? { filters } : {}),
     }),
     queryFn: () =>
       fetchTransactions({
@@ -36,6 +39,7 @@ export function useTransactionsQuery({
         chainId,
         limit,
         ...(cursor !== undefined ? { cursor } : {}),
+        filters,
       }),
     enabled: enabled && walletAddress.trim().length > 0,
     retry: false,

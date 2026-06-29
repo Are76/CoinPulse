@@ -13,7 +13,7 @@ import { DataTableShell } from "@/components/ui/data-table-shell";
 import { LabelBadge } from "@/components/ui/status/status-badge";
 import { ProvenanceChip } from "@/components/ui/provenance-chip";
 import { TimestampLabel } from "@/components/ui/value/timestamp-label";
-import { ApiClientError } from "@/lib/api/transactions-client";
+import { ApiClientError, type TransactionFilters } from "@/lib/api/transactions-client";
 import { queryKeys } from "@/lib/query/query-keys";
 import { useTransactionsQuery } from "@/lib/query/use-transactions-query";
 import { SUPPORTED_CHAINS } from "@/config/chains";
@@ -28,9 +28,9 @@ import type {
 const DEFAULT_CHAIN_ID = "369";
 const TRANSACTIONS_SCHEMA_VERSION = "v1" as const;
 
-type SubmittedParams = { walletAddress: string; chainId: number; limit: number | undefined; submitKey: number };
+type SubmittedParams = { walletAddress: string; chainId: number; limit: number | undefined; filters: TransactionFilters; submitKey: number };
 
-function resolveSubmission(args: { walletAddress: string; chainId: string; limit: string }) {
+function resolveSubmission(args: { walletAddress: string; chainId: string; limit: string; filters: TransactionFilters }) {
   const trimmed = args.walletAddress.trim().toLowerCase();
   if (!trimmed) return { validationError: "Wallet address is required.", submittedParams: null };
   const chainIdNum = Number(args.chainId);
@@ -43,7 +43,15 @@ function resolveSubmission(args: { walletAddress: string; chainId: string; limit
       return { validationError: "Limit must be a whole number between 1 and 100.", submittedParams: null };
     limit = n;
   }
-  return { validationError: null, submittedParams: { walletAddress: trimmed, chainId: chainIdNum, limit } };
+  // Only include filter values that are non-empty
+  const filters: TransactionFilters = {};
+  if (args.filters.assetId?.trim()) filters.assetId = args.filters.assetId.trim();
+  if (args.filters.actionType?.trim()) filters.actionType = args.filters.actionType.trim();
+  if (args.filters.sourceFamily?.trim()) filters.sourceFamily = args.filters.sourceFamily.trim();
+  if (args.filters.protocol?.trim()) filters.protocol = args.filters.protocol.trim();
+  if (args.filters.fromDate?.trim()) filters.fromDate = args.filters.fromDate.trim();
+  if (args.filters.toDate?.trim()) filters.toDate = args.filters.toDate.trim();
+  return { validationError: null, submittedParams: { walletAddress: trimmed, chainId: chainIdNum, limit, filters } };
 }
 
 function getErrorMessage(error: unknown): string {
@@ -70,6 +78,12 @@ export function TransactionHistoryScreen() {
   const [walletAddress, setWalletAddress] = useState("");
   const [chainId, setChainId] = useState(DEFAULT_CHAIN_ID);
   const [limit, setLimit] = useState("");
+  const [filterAssetId, setFilterAssetId] = useState("");
+  const [filterActionType, setFilterActionType] = useState("");
+  const [filterSourceFamily, setFilterSourceFamily] = useState("");
+  const [filterProtocol, setFilterProtocol] = useState("");
+  const [filterFromDate, setFilterFromDate] = useState("");
+  const [filterToDate, setFilterToDate] = useState("");
   const [submittedParams, setSubmittedParams] = useState<SubmittedParams | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -84,6 +98,7 @@ export function TransactionHistoryScreen() {
     chainId: submittedParams?.chainId ?? 0,
     limit: submittedParams?.limit,
     cursor: currentCursor,
+    filters: submittedParams?.filters,
     enabled: submittedParams !== null,
   });
 
@@ -110,7 +125,19 @@ export function TransactionHistoryScreen() {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const submission = resolveSubmission({ walletAddress, chainId, limit });
+    const submission = resolveSubmission({
+      walletAddress,
+      chainId,
+      limit,
+      filters: {
+        assetId: filterAssetId,
+        actionType: filterActionType,
+        sourceFamily: filterSourceFamily,
+        protocol: filterProtocol,
+        fromDate: filterFromDate,
+        toDate: filterToDate,
+      },
+    });
     if (submission.validationError !== null) {
       setValidationError(submission.validationError);
       setSubmittedParams(null);
@@ -123,12 +150,13 @@ export function TransactionHistoryScreen() {
     const params = submission.submittedParams;
     const nextKey = activeSubmitKeyRef.current + 1;
     activeSubmitKeyRef.current = nextKey;
-    // Remove all cached pages for the prior query
+    // Remove all cached pages for the prior query to ensure fresh results
     queryClient.removeQueries({
       queryKey: queryKeys.transactions(TRANSACTIONS_SCHEMA_VERSION, {
         walletAddress: params.walletAddress,
         chainId: params.chainId,
         ...(params.limit !== undefined ? { limit: params.limit } : {}),
+        ...(Object.keys(params.filters).length > 0 ? { filters: params.filters } : {}),
       }),
     });
     setCurrentCursor(undefined);
@@ -165,30 +193,135 @@ export function TransactionHistoryScreen() {
 
       {/* Query form */}
       <SectionCard title="Query transaction history" subtitle="Submit to fetch canonical transaction history for a wallet.">
-        <form className="grid gap-4 md:grid-cols-[minmax(0,1fr)_12rem_8rem_auto]" onSubmit={handleSubmit}>
-          <LabeledField label="Wallet address" htmlFor="tx-wallet-address">
-            <input
-              id="tx-wallet-address"
-              aria-label="Wallet address"
-              className={fieldClassName}
-              placeholder="0x…"
-              value={walletAddress}
-              onChange={(e) => setWalletAddress(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </LabeledField>
-          <LabeledField label="Chain ID" htmlFor="tx-chain-id">
-            <input id="tx-chain-id" aria-label="Chain ID" className={fieldClassName} inputMode="numeric" value={chainId} onChange={(e) => setChainId(e.target.value)} />
-          </LabeledField>
-          <LabeledField label="Limit" htmlFor="tx-limit">
-            <input id="tx-limit" aria-label="Limit" className={fieldClassName} inputMode="numeric" placeholder="50" value={limit} onChange={(e) => setLimit(e.target.value)} />
-          </LabeledField>
-          <div className="flex items-end">
-            <button type="submit" disabled={isFirstPageLoading} aria-disabled={isFirstPageLoading} aria-busy={isFirstPageLoading} className={submitButtonClassName}>
-              {isFirstPageLoading ? "Loading…" : "Load transactions"}
-            </button>
+        <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_12rem_8rem_auto]">
+            <LabeledField label="Wallet address" htmlFor="tx-wallet-address">
+              <input
+                id="tx-wallet-address"
+                aria-label="Wallet address"
+                className={fieldClassName}
+                placeholder="0x…"
+                value={walletAddress}
+                onChange={(e) => setWalletAddress(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </LabeledField>
+            <LabeledField label="Chain ID" htmlFor="tx-chain-id">
+              <input id="tx-chain-id" aria-label="Chain ID" className={fieldClassName} inputMode="numeric" value={chainId} onChange={(e) => setChainId(e.target.value)} />
+            </LabeledField>
+            <LabeledField label="Limit" htmlFor="tx-limit">
+              <input id="tx-limit" aria-label="Limit" className={fieldClassName} inputMode="numeric" placeholder="50" value={limit} onChange={(e) => setLimit(e.target.value)} />
+            </LabeledField>
+            <div className="flex items-end">
+              <button type="submit" disabled={isFirstPageLoading} aria-disabled={isFirstPageLoading} aria-busy={isFirstPageLoading} className={submitButtonClassName}>
+                {isFirstPageLoading ? "Loading…" : "Load transactions"}
+              </button>
+            </div>
           </div>
+
+          {/* Filters */}
+          <details className="rounded-[var(--radius-md)] border" style={{ borderColor: "rgba(255,255,255,0.065)" }}>
+            <summary
+              className="cursor-pointer px-4 py-3 text-xs font-semibold uppercase tracking-widest select-none"
+              style={{ color: "#586070", letterSpacing: "0.08em" }}
+            >
+              Filters
+              {(filterAssetId || filterActionType || filterSourceFamily || filterProtocol || filterFromDate || filterToDate) && (
+                <span className="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold" style={{ background: "#818cf8", color: "#0b0d14" }}>
+                  active
+                </span>
+              )}
+            </summary>
+            <div className="border-t px-4 py-4" style={{ borderColor: "rgba(255,255,255,0.065)" }}>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <LabeledField label="Asset ID" htmlFor="tx-filter-asset-id">
+                  <input
+                    id="tx-filter-asset-id"
+                    aria-label="Asset ID filter"
+                    className={fieldClassName}
+                    placeholder="chain:369:erc20:0x…"
+                    value={filterAssetId}
+                    onChange={(e) => setFilterAssetId(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </LabeledField>
+                <LabeledField label="Action type" htmlFor="tx-filter-action-type">
+                  <input
+                    id="tx-filter-action-type"
+                    aria-label="Action type filter"
+                    className={fieldClassName}
+                    placeholder="e.g. TRANSFER"
+                    value={filterActionType}
+                    onChange={(e) => setFilterActionType(e.target.value)}
+                    autoComplete="off"
+                  />
+                </LabeledField>
+                <LabeledField label="Source family" htmlFor="tx-filter-source-family">
+                  <input
+                    id="tx-filter-source-family"
+                    aria-label="Source family filter"
+                    className={fieldClassName}
+                    placeholder="e.g. TRANSFERS"
+                    value={filterSourceFamily}
+                    onChange={(e) => setFilterSourceFamily(e.target.value)}
+                    autoComplete="off"
+                  />
+                </LabeledField>
+                <LabeledField label="Protocol" htmlFor="tx-filter-protocol">
+                  <input
+                    id="tx-filter-protocol"
+                    aria-label="Protocol filter"
+                    className={fieldClassName}
+                    placeholder="e.g. pulsex-v2"
+                    value={filterProtocol}
+                    onChange={(e) => setFilterProtocol(e.target.value)}
+                    autoComplete="off"
+                  />
+                </LabeledField>
+                <LabeledField label="From date" htmlFor="tx-filter-from-date">
+                  <input
+                    id="tx-filter-from-date"
+                    aria-label="From date filter"
+                    type="datetime-local"
+                    className={fieldClassName}
+                    value={filterFromDate ? filterFromDate.slice(0, 16) : ""}
+                    onChange={(e) => setFilterFromDate(e.target.value ? new Date(e.target.value).toISOString() : "")}
+                  />
+                </LabeledField>
+                <LabeledField label="To date" htmlFor="tx-filter-to-date">
+                  <input
+                    id="tx-filter-to-date"
+                    aria-label="To date filter"
+                    type="datetime-local"
+                    className={fieldClassName}
+                    value={filterToDate ? filterToDate.slice(0, 16) : ""}
+                    onChange={(e) => setFilterToDate(e.target.value ? new Date(e.target.value).toISOString() : "")}
+                  />
+                </LabeledField>
+              </div>
+              {(filterAssetId || filterActionType || filterSourceFamily || filterProtocol || filterFromDate || filterToDate) && (
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    className="text-xs font-semibold hover:opacity-80 transition"
+                    style={{ color: "#586070" }}
+                    onClick={() => {
+                      setFilterAssetId("");
+                      setFilterActionType("");
+                      setFilterSourceFamily("");
+                      setFilterProtocol("");
+                      setFilterFromDate("");
+                      setFilterToDate("");
+                    }}
+                  >
+                    Clear all filters
+                  </button>
+                </div>
+              )}
+            </div>
+          </details>
         </form>
       </SectionCard>
 
