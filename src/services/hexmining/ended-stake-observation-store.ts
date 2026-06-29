@@ -125,7 +125,7 @@ type StoreClient = {
     }): Promise<{ id: string }>;
     findMany(args: {
       where: { chainId: number; walletAddress: string };
-      orderBy: { endBlockNumber: "asc" | "desc" }[];
+      orderBy: ({ endBlockNumber: "asc" | "desc" } | { endTxHash: "asc" | "desc" } | { stakeId: "asc" | "desc" } | { id: "asc" | "desc" })[];
     }): Promise<
       {
         id: string;
@@ -219,7 +219,12 @@ export async function readEndedHexStakeObservations(
       chainId: input.chainId,
       walletAddress: input.walletAddress.toLowerCase(),
     },
-    orderBy: [{ endBlockNumber: "asc" }],
+    orderBy: [
+      { endBlockNumber: "asc" },
+      { endTxHash: "asc" },
+      { stakeId: "asc" },
+      { id: "asc" },
+    ],
   });
 
   return records.map((r) => ({

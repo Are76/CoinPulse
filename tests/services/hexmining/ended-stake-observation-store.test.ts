@@ -88,9 +88,11 @@ function makeMockDb(initial: StoredRow[] = []) {
       },
       async findMany(args: {
         where: { chainId: number; walletAddress: string };
-        orderBy: { endBlockNumber: "asc" | "desc" }[];
+        orderBy: Record<string, "asc" | "desc">[];
       }) {
-        const dir = args.orderBy[0]?.endBlockNumber ?? "asc";
+        const primary = args.orderBy[0] ?? {};
+        const dir: "asc" | "desc" =
+          "endBlockNumber" in primary ? primary.endBlockNumber : "asc";
         return rows
           .filter(
             (r) =>
