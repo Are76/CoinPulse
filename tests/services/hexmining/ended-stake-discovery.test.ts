@@ -334,6 +334,52 @@ describe("discoverEndedHexStakes", () => {
     expect(created).toEqual(["1", "2", "3"]);
   });
 
+  it("excludes non-hex protocol END actions", async () => {
+    const hexAction = makeAction({ stakeId: 1n, protocolSlug: "hex" });
+    const otherAction = makeAction({ stakeId: 2n, protocolSlug: "other_stake_protocol" });
+    const rawClient = makeRawClient([hexAction, otherAction], new Map([[1n, null], [2n, null]]));
+
+    const created: string[] = [];
+    const obsClient = {
+      rawEndedHexStakeObservation: {
+        findFirst: async () => null,
+        create: async (args: { data: PersistEndedHexStakeObservationInput & { id?: string } }) => {
+          created.push(args.data.stakeId as string);
+          return { id: "obs-1" };
+        },
+        findMany: async () => [],
+      },
+    };
+
+    const result = await discoverEndedHexStakes(BASE_ARGS, {
+      rawClient,
+      observationClient: obsClient as never,
+    });
+
+    expect(result.discovered).toBe(1);
+    expect(created).toEqual(["1"]);
+  });
+
+  it("surfaces lockedDay warnings in the result warnings array", async () => {
+    const action = makeAction({ stakeId: 42n });
+    const rawClient = makeRawClient([action], new Map([[42n, null]]));
+
+    const obsClient = {
+      rawEndedHexStakeObservation: {
+        findFirst: async () => null,
+        create: async () => ({ id: "obs-1" }),
+        findMany: async () => [],
+      },
+    };
+
+    const result = await discoverEndedHexStakes(BASE_ARGS, {
+      rawClient,
+      observationClient: obsClient as never,
+    });
+
+    expect(result.warnings.some((w) => w.includes("hexmining-ended-stake-lockedday-unknown"))).toBe(true);
+  });
+
   it("always sets lockedDay and stakeShares to null", async () => {
     const action = makeAction();
     const rawClient = makeRawClient([action], new Map([[942663n, makeAction({ actionKind: "START" })]]));

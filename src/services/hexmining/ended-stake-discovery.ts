@@ -71,8 +71,11 @@ export async function discoverEndedHexStakes(
     rawClient,
   );
 
-  const endActions = allActions.filter((a) => a.actionKind === "END");
+  const endActions = allActions.filter(
+    (a) => a.actionKind === "END" && a.protocolSlug === "hex",
+  );
 
+  let discovered = 0;
   let persisted = 0;
   let skipped = 0;
   const warnings: string[] = [];
@@ -84,13 +87,14 @@ export async function discoverEndedHexStakes(
       continue;
     }
 
+    discovered++;
+
     const startRecord = await readStakeStartSnapshotByStakeId(
       { chainId, walletAddress, stakeId: action.stakeId },
       rawClient,
     );
 
     const stakeIdStr = action.stakeId.toString();
-    const actionWarnings: string[] = [WARN_LOCKED_DAY_UNKNOWN];
 
     const observationInput: PersistEndedHexStakeObservationInput = {
       chainId,
@@ -110,8 +114,10 @@ export async function discoverEndedHexStakes(
       discoveryMethod: "raw_stake_action",
       observedAt: new Date(),
       isComplete: false,
-      warnings: actionWarnings,
+      warnings: [WARN_LOCKED_DAY_UNKNOWN],
     };
+
+    warnings.push(`${WARN_LOCKED_DAY_UNKNOWN}:stake=${stakeIdStr}`);
 
     const result = await persistEndedHexStakeObservation(
       observationInput,
@@ -126,7 +132,7 @@ export async function discoverEndedHexStakes(
   }
 
   return {
-    discovered: endActions.length,
+    discovered,
     persisted,
     skipped,
     warnings,
