@@ -60,7 +60,7 @@ export async function discoverEndedHexStakes(
   input: DiscoverEndedHexStakesInput,
   clients: DiscoveryClients = {
     rawClient: getDb(),
-    observationClient: getDb() as ObservationClient,
+    observationClient: getDb() as unknown as ObservationClient,
   },
 ): Promise<DiscoverEndedHexStakesResult> {
   const { chainId, walletAddress, fromBlock, toBlock } = input;
