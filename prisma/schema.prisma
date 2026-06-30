@@ -106,6 +106,7 @@ model Chain {
   rpcRequestLogs                  RpcRequestLog[]
   reorgEvents                     ReorgEvent[]
   rawHexDailyDataObservations     RawHexDailyDataObservation[]
+  rawEndedHexStakeObservations    RawEndedHexStakeObservation[]
   hexStakeListSnapshots           HexStakeListSnapshot[]
 }
 
@@ -670,6 +671,61 @@ model RawHexDailyDataObservationInvalidation {
 
   @@index([observationId])
   @@index([supersededByObservationId])
+}
+
+// ─── HexMining Phase 5 — raw ended stake observation model ───────────────────
+//
+// Each RawEndedHexStakeObservation row represents one persisted discovery of
+// an ended HEX stake for a wallet on PulseChain. Rows are append-only raw
+// audit evidence — never mutated after write.
+//
+// discoveryMethod records how the ended stake was found:
+//   "raw_stake_action" — found via existing RawStakeAction endStake record
+//   "rpc_history"      — found via direct RPC transaction history scan
+//
+// lockedDay and stakeShares are nullable because they are not available from
+// endStake calldata alone. They may be populated if the corresponding
+// startStake block snapshot is available or via historical RPC lookup.
+//
+// yieldHex is the raw yield in hearts (bigint decimal string) from the
+// endStake confirmation. Null if the endStake record lacks yieldRaw.
+//
+// isComplete: false signals that one or more fields could not be recovered
+// (e.g., lockedDay or stakeShares is null). The DTO must surface this as a
+// warning — never coerce missing fields to zero.
+//
+// Multiple rows may exist for the same (walletAddress, chainId, stakeId)
+// if the stake is re-discovered from a different source or block. The service
+// layer enforces deduplication using (chainId, walletAddress, stakeId,
+// endBlockNumber, discoveryMethod) before writing.
+
+model RawEndedHexStakeObservation {
+  id               String       @id @default(cuid())
+  chainId          Int
+  sourceFamily     SourceFamily @default(HEXMINING)
+  walletAddress    String
+  stakeId          String
+  stakeIndex       Int?
+  stakedDays       Int?
+  lockedDay        Int?
+  stakeShares      String?
+  principalHex     String?
+  yieldHex         String?
+  penaltyHex       String?
+  endTxHash        String
+  endBlockNumber   BigInt
+  startTxHash      String?
+  startBlockNumber BigInt?
+  discoveryMethod  String
+  observedAt       DateTime
+  isComplete       Boolean      @default(false)
+  warnings         String[]     @default([])
+  createdAt        DateTime     @default(now())
+  chain            Chain        @relation(fields: [chainId], references: [id], onDelete: Restrict)
+
+  @@index([chainId, walletAddress, stakeId])
+  @@index([chainId, walletAddress, endBlockNumber])
+  @@index([chainId, sourceFamily])
 }
 
 // ─── HexMining stake list snapshot ────────────────────────────────────────────
