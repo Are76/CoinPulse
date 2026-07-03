@@ -300,6 +300,34 @@ describe("discoverHsiStakeObservations", () => {
     expect(persistenceClient._calls[0].hsiTokenId).toBe(UINT256_MAX);
   });
 
+  it("returns ok: false with unsupported-chain code and makes zero RPC or persistence calls", async () => {
+    let getBlockNumberCalled = false;
+    let readContractCalled = false;
+    const publicClient = {
+      async getBlockNumber() {
+        getBlockNumberCalled = true;
+        return BLOCK;
+      },
+      async readContract() {
+        readContractCalled = true;
+        return 0n;
+      },
+    } as unknown as import("@/services/hexmining/hsi-discovery").HsiDiscoveryReadClient;
+    const persistenceClient = makePersistenceClient();
+
+    const result = await discoverHsiStakeObservations(
+      { chainId: 1, walletAddress: WALLET, hsiAddress: HEDRON_ADDRESS },
+      { publicClient, persistenceClient },
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("hexmining-hsi-discovery-unsupported-chain");
+    expect(getBlockNumberCalled).toBe(false);
+    expect(readContractCalled).toBe(false);
+    expect(persistenceClient._calls).toHaveLength(0);
+  });
+
   it("returns ok: false when getBlockNumber fails", async () => {
     const publicClient = makePublicClient({
       blockNumberError: new Error("network unreachable"),
@@ -433,7 +461,7 @@ describe("discoverHsiStakeObservations", () => {
 
     await discoverHsiStakeObservations(
       {
-        chainId: 1,
+        chainId: 369,
         walletAddress: WALLET,
         hsiAddress: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       },
@@ -441,7 +469,7 @@ describe("discoverHsiStakeObservations", () => {
     );
 
     const call = persistenceClient._calls[0];
-    expect(call.chainId).toBe(1);
+    expect(call.chainId).toBe(369);
     expect(call.hsiAddress).toBe("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   });
 });

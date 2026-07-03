@@ -74,6 +74,14 @@ export async function discoverHsiStakeObservations(
   input: DiscoverHsiStakeObservationsInput,
   deps: HsiDiscoveryDeps,
 ): Promise<DiscoverHsiStakeObservationsResult> {
+  if (input.chainId !== 369) {
+    return {
+      ok: false,
+      code: "hexmining-hsi-discovery-unsupported-chain",
+      warnings: [],
+    };
+  }
+
   const persistenceClient =
     deps.persistenceClient ??
     (getDb() as unknown as PersistenceClient);
