@@ -192,6 +192,10 @@ export async function discoverHsiStakeObservations(
     }
   }
 
+  if (!warnings.includes(WARN_STAKE_FIELDS_UNKNOWN)) {
+    warnings.push(WARN_STAKE_FIELDS_UNKNOWN);
+  }
+
   return {
     ok: true,
     discovered,

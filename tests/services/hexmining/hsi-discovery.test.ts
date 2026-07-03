@@ -229,20 +229,25 @@ describe("discoverHsiStakeObservations", () => {
     expect(call.observedAt).toEqual(observedAt);
   });
 
-  it("populates warnings with hexmining-hsi-stake-fields-unknown for each observation", async () => {
+  it("populates warnings with hexmining-hsi-stake-fields-unknown for each observation and in the batch result", async () => {
     const publicClient = makePublicClient({
       balanceOf: 1n,
       tokenIds: [42n],
     });
     const persistenceClient = makePersistenceClient();
 
-    await discoverHsiStakeObservations(
+    const result = await discoverHsiStakeObservations(
       { chainId: CHAIN_ID, walletAddress: WALLET, hsiAddress: HEDRON_ADDRESS },
       { publicClient, persistenceClient },
     );
 
-    const call = persistenceClient._calls[0];
-    expect(call.warnings).toContain("hexmining-hsi-stake-fields-unknown");
+    // per-observation warning
+    expect(persistenceClient._calls[0].warnings).toContain("hexmining-hsi-stake-fields-unknown");
+
+    // batch-level result warning (exactly once, no duplicates)
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.warnings.filter((w) => w === "hexmining-hsi-stake-fields-unknown")).toHaveLength(1);
   });
 
   it("normalizes walletAddress to lowercase before persistence", async () => {
