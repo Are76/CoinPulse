@@ -2,9 +2,9 @@
 
 > **AI USAGE NOTE:** This is the condensed active working document (~200 lines). Full historical context, completed-phase details, PR logs, validation history, and research records are in [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md). **For routine implementation work, read only this file.** Use `grep` to locate specific gates or sections. Do not load the archive into context unless explicitly asked.
 
-**Document status:** Phase 4C complete and gate-lifted — PRs #208–#252 merged. Public estimated yield is live. Gate 10 executed 2026-06-14 (PR #252); Gate 11 gate-lift PR #252 promotes valid evidence paths to `status: "estimated"` with non-null `yieldHex`. All §11.14 gates resolved.
+**Document status:** Phase 5 complete — PRs #307–#310 merged. Ended stake persistence, discovery, reader, DTO assembly, and read-only API route are all live on main. Phase 4C remains complete and gate-lifted (PRs #208–#252). Public estimated yield is live for valid evidence paths.
 **Created:** 2026-06-06
-**Last updated:** 2026-06-14 (PR #252: Gate 10 evidence collected and Gate 11 production estimator promoted)
+**Last updated:** 2026-07-03 (PRs #307–#310: Phase 5 ended stake pipeline complete)
 
 **Archive:** [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md) — historical PR logs, completed phase details, research records, validation history, full §1–§15 prose.
 
@@ -21,7 +21,7 @@
 | Phase 4A | Observation persistence, status API, and operator surface | ✅ Complete — merged PRs #199–#202 |
 | Phase 4B | dailyDataRange read boundary, persistence wiring, and gated operator route | ✅ Complete — merged PRs #204, #205, #206 |
 | Phase 4C | Yield estimation and DTO wiring | ✅ Complete and gate-lifted — PRs #208–#252 merged; formula, DTO contract, reader assembly, route wiring, contract coverage, live-data evidence, and production promotion complete |
-| Phase 5 | Ended stake discovery | 🔲 Not started |
+| Phase 5 | Ended stake discovery and reader | ✅ Complete — merged PRs #307–#310 |
 | Phase 6 | HSI and HTT source families | 🔲 Not started |
 | Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
 
@@ -198,3 +198,53 @@ feat(hexmining): lift public estimated yield gate after live-data verification
 - No `valuation.status`/`pnl.status` changes (remain `"unsupported"` until Phase 7)
 
 Full historical context and all prior decisions: [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md)
+
+---
+
+## Phase 5 Completion Record
+
+**Status:** Complete — PRs #307–#310 merged to main (2026-07-03).
+
+Phase 5 delivered a backend pipeline for discovering and reading ended HEX stakes from persisted `RawStakeAction` endStake records. No frontend UI, no pricing, no valuation, no PnL, no HSI/HTT, and no Ethereum eHEX were introduced.
+
+### Slices merged
+
+| PR | Slice | What it delivered |
+|---|---|---|
+| #307 | Slice 1 — Observation model and store | `RawEndedHexStakeObservation` Prisma model, migration, `persistEndedHexStakeObservation`, `readEndedHexStakeObservations`, idempotent upsert, observation store tests |
+| #308 | Slice 2 — Discovery service | `discoverEndedHexStakes`: reads `RawStakeAction` END records, cross-references START records, persists observations with `isComplete: false` and `lockedDay: null`, discovery tests |
+| #309 | Slice 3 — Reader and DTO assembly | `readEndedHexStakes`, `EndedHexStakeDto`, `EndedHexStakeListDto`, bigint → decimal string serialization, reader tests |
+| #310 | Slice 4 — API route | `GET /api/hexmining/ended-stakes` wiring `readEndedHexStakes`, Zod validation, 400/500 error envelopes, route contract tests |
+
+### Service and data flow
+
+```
+RawStakeAction (END rows)
+  └─ discoverEndedHexStakes()
+       ├─ cross-references START record by stakeId
+       └─ persistEndedHexStakeObservation()
+            └─ RawEndedHexStakeObservation (persisted)
+                 └─ readEndedHexStakeObservations()
+                      └─ readEndedHexStakes()
+                           └─ EndedHexStakeListDto
+                                └─ GET /api/hexmining/ended-stakes
+```
+
+### Key architectural constraints (Phase 5)
+
+- `lockedDay` and `stakeShares` are always `null` on discovery — they cannot be recovered from `RawStakeAction` records. `isComplete: false` is set on every observation at discovery time with warning `hexmining-ended-stake-lockedday-unknown`.
+- `discoveryMethod` is always `"raw_stake_action"` for Phase 5 observations.
+- Bigint fields (`endBlockNumber`, `startBlockNumber`) are serialized as decimal strings in the DTO.
+- The reader owns DTO assembly. The API route delegates entirely to the reader with no additional transformation.
+- List-level `isComplete` is `false` when any stake observation has `isComplete: false`.
+- List-level `warnings` aggregates all individual stake warnings.
+
+### What Phase 5 deliberately did not include
+
+- No `lockedDay` or `stakeShares` recovery (no on-chain backfill from `stakeLists`)
+- No `status: "exact"` yield (requires `yieldHex` confirmed at endStake — deferred)
+- No HSI or HTT source families
+- No pricing, valuation, or PnL
+- No frontend UI or HexMining ended-stake display
+- No Ethereum eHEX
+- No schema changes after Slice 1

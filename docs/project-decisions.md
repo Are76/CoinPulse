@@ -1,6 +1,6 @@
 # CoinPulse Project Decisions
 
-**Last updated:** 2026-06-14
+**Last updated:** 2026-07-03
 
 ---
 
@@ -464,3 +464,35 @@ Do not: What must not happen as a result
 **Implications:** Any docs PR that updates gate status must include the PR reference that actually lifted the gate. For Gate 10 / Gate 11, that reference is PR #252.
 
 **Do not:** Write gate-lift claims for future gates or phases without a recorded, merged implementation PR with evidence.
+
+---
+
+## D-028: Ended Stake Observations Are Always Incomplete at Discovery Time
+
+**Status:** Active
+
+**Evidence:** [E1] `docs/v2-hexmining-roadmap.md` Phase 5 Completion Record; [E2] PRs #307–#308 merged; [E3] `src/services/hexmining/ended-stake-discovery.ts`, `src/services/hexmining/ended-stake-observation-store.ts`.
+
+**Decision:** Every `RawEndedHexStakeObservation` row persisted by `discoverEndedHexStakes()` is set to `isComplete: false` with `lockedDay: null` and `stakeShares: null`. The warning `hexmining-ended-stake-lockedday-unknown` is always included. This reflects a structural limit of Phase 5: `RawStakeAction` END records do not contain `lockedDay` or `stakeShares`, and no on-chain backfill from `stakeLists` is implemented.
+
+**Rationale:** Correctness requires surfacing the incompleteness explicitly rather than fabricating or approximating missing fields. A future phase may recover `lockedDay` and `stakeShares` via an on-chain lookup and patch the observation.
+
+**Implications:** Consumers of `EndedHexStakeListDto` must handle `isComplete: false` rows and null `lockedDay`/`stakeShares` on every Phase 5 observation. `isComplete: true` on the list DTO is only possible if all stake observations are complete, which does not occur for any Phase 5–discovered row.
+
+**Do not:** Set `lockedDay` or `stakeShares` from `RawStakeAction` fields or from inference. Do not suppress the `hexmining-ended-stake-lockedday-unknown` warning. Do not treat `isComplete: false` as an error — it is the expected and correct state for Phase 5.
+
+---
+
+## D-029: Ended Stake Reader Owns DTO Assembly; API Route Delegates Entirely
+
+**Status:** Active
+
+**Evidence:** [E1] `docs/v2-hexmining-roadmap.md` Phase 5 Completion Record; [E2] PRs #309–#310 merged; [E3] `src/services/hexmining/ended-stake-reader.ts`, `app/api/hexmining/ended-stakes/route.ts`.
+
+**Decision:** `readEndedHexStakes()` is the sole assembly point for `EndedHexStakeDto` and `EndedHexStakeListDto`. The `GET /api/hexmining/ended-stakes` route validates input, calls the reader, and returns `{ data: result }` — it performs no additional transformation. Bigint serialization (block numbers as decimal strings), null preservation, warning aggregation, and `isComplete` rollup all occur inside the reader.
+
+**Rationale:** Consistent with D-001 (backend truth first) and D-003 (DTO-first frontend). The reader is the testable contract boundary. The route is a thin wire.
+
+**Implications:** Any future change to the DTO shape, serialization, or list-level aggregation must be made inside the reader, not in the route. The route contract tests mock the reader — they do not duplicate reader logic.
+
+**Do not:** Add DTO transformation, field renaming, or list aggregation logic to the route handler. Do not add pricing, valuation, or PnL fields to the ended stake DTO until Phase 7 prerequisites are explicitly met.
