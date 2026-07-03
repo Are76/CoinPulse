@@ -802,7 +802,7 @@ model RawHsiStakeObservation {
   createdAt       DateTime     @default(now())
   chain           Chain        @relation(fields: [chainId], references: [id], onDelete: Restrict)
 
-  @@unique([chainId, walletAddress, hsiAddress, hsiTokenId, observedAtBlock])
+  @@unique([chainId, walletAddress, hsiAddress, hsiTokenId, observedAtBlock], map: "RawHsiStakeObs_identity_key")
   @@index([chainId, walletAddress])
   @@index([chainId, sourceFamily])
 }
