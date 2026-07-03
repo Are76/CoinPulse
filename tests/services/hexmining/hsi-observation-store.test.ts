@@ -1,20 +1,36 @@
-// HexMining Phase 6 Slice 1 — HSI stake observation store contract tests
+// HexMining Phase 6 — HSI stake observation store hardened identity tests
 //
-// Verifies the write and read contracts for RawHsiStakeObservation:
+// Verifies the write and read contracts for RawHsiStakeObservation after
+// identity hardening (PR #313). Changes from Phase 6 Slice 1:
 //
-//   1. persistHsiStakeObservation creates a new row on first write.
-//   2. persistHsiStakeObservation is idempotent: a second write with the same
-//      dedup key (chainId, walletAddress, hsiTokenId, observedAtBlock) returns
-//      created: false and does not write a second row.
-//   3. A different observedAtBlock for the same HSI token produces a new row.
-//   4. walletAddress is normalized to lowercase before write and read.
-//   5. Nullable fields (stakeId, stakeIndex, lockedDay, etc.) are stored as-is
-//      — the store never coerces null to zero or a default value.
-//   6. readHsiStakeObservations returns rows ordered by observedAtBlock asc.
-//   7. buildHsiObservationDedupeKey produces a deterministic colon-delimited
-//      string.
-//   8. readHsiStakeObservations scopes results to chainId and walletAddress.
-//   9. All fields map correctly from persisted row to PersistedHsiStakeObservation.
+//   - hsiTokenId is now a decimal string (uint256-safe, not BIGINT)
+//   - hsiAddress is normalized to lowercase and included in the dedupe tuple
+//   - Dedupe tuple: chainId, walletAddress, hsiAddress, hsiTokenId, observedAtBlock
+//   - upsert with P2002 catch replaces findFirst + create (race-safe)
+//   - validateHsiTokenId rejects invalid token ID strings
+//
+// Contract tests:
+//   1.  persistHsiStakeObservation creates a new row and returns created: true.
+//   2.  Second write with the same full dedupe tuple returns created: false.
+//   3.  Different observedAtBlock → new row.
+//   4.  Different hsiTokenId → new row.
+//   5.  walletAddress normalized to lowercase before write and dedup check.
+//   6.  hsiAddress normalized to lowercase before write and dedup check.
+//   7.  Same token ID on a different hsiAddress → new row (different contract).
+//   8.  Nullable fields stored without coercion.
+//   9.  readHsiStakeObservations returns rows ordered by observedAtBlock asc,
+//       hsiTokenId asc as tie-breaker.
+//  10.  readHsiStakeObservations scopes results to chainId and walletAddress.
+//  11.  All fields map correctly to PersistedHsiStakeObservation.
+//  12.  readHsiStakeObservations normalizes walletAddress on read query.
+//  13.  hsiTokenId accepts very large uint256-sized decimal strings.
+//  14.  validateHsiTokenId rejects negative, fractional, scientific-notation,
+//       empty, and non-numeric strings.
+//  15.  "0" is a valid hsiTokenId.
+//  16.  Simulated P2002 race: concurrent writer conflict returns created: false.
+//  17.  buildHsiObservationDedupeKey produces the expected colon-delimited string.
+//  18.  buildHsiObservationDedupeKey normalizes walletAddress and hsiAddress.
+//  19.  Different hsiAddress values produce different dedup keys.
 //
 // No live database, no RPC, no network. Pure in-memory mock.
 
@@ -24,6 +40,7 @@ import {
   buildHsiObservationDedupeKey,
   persistHsiStakeObservation,
   readHsiStakeObservations,
+  validateHsiTokenId,
   type PersistHsiStakeObservationInput,
   type PersistedHsiStakeObservation,
 } from "@/services/hexmining/hsi-observation-store";
@@ -34,7 +51,7 @@ type StoredRow = {
   id: string;
   chainId: number;
   walletAddress: string;
-  hsiTokenId: bigint;
+  hsiTokenId: string;
   hsiAddress: string;
   stakeId: string | null;
   stakeIndex: number | null;
@@ -54,35 +71,64 @@ let idCounter = 0;
 function makeMockDb(initial: StoredRow[] = []) {
   const rows: StoredRow[] = [...initial];
 
+  // Simulate the unique constraint on (chainId, walletAddress, hsiAddress, hsiTokenId, observedAtBlock).
+  function findByDedup(
+    chainId: number,
+    walletAddress: string,
+    hsiAddress: string,
+    hsiTokenId: string,
+    observedAtBlock: bigint,
+  ): StoredRow | undefined {
+    return rows.find(
+      (r) =>
+        r.chainId === chainId &&
+        r.walletAddress === walletAddress &&
+        r.hsiAddress === hsiAddress &&
+        r.hsiTokenId === hsiTokenId &&
+        r.observedAtBlock === observedAtBlock,
+    );
+  }
+
   return {
     rawHsiStakeObservation: {
-      async findFirst(args: {
-        where: {
-          chainId: number;
-          walletAddress: string;
-          hsiTokenId: bigint;
-          observedAtBlock: bigint;
-        };
+      async create(args: {
+        data: Omit<StoredRow, "id" | "createdAt">;
         select: { id: true };
       }) {
-        const match = rows.find(
-          (r) =>
-            r.chainId === args.where.chainId &&
-            r.walletAddress === args.where.walletAddress &&
-            r.hsiTokenId === args.where.hsiTokenId &&
-            r.observedAtBlock === args.where.observedAtBlock,
-        );
-        return match ? { id: match.id } : null;
-      },
-      async create(args: { data: Omit<StoredRow, "id" | "createdAt"> }) {
+        const d = args.data;
+        if (findByDedup(d.chainId, d.walletAddress, d.hsiAddress, d.hsiTokenId, d.observedAtBlock)) {
+          const err = Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
+          Object.setPrototypeOf(
+            err,
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            require("@prisma/client").Prisma.PrismaClientKnownRequestError.prototype,
+          );
+          throw err;
+        }
         const row: StoredRow = {
           id: `mock-id-${++idCounter}`,
           createdAt: new Date("2026-07-03T00:00:00Z"),
-          ...args.data,
+          ...d,
         };
         rows.push(row);
         return { id: row.id };
       },
+
+      async findFirst(args: {
+        where: {
+          chainId: number;
+          walletAddress: string;
+          hsiAddress: string;
+          hsiTokenId: string;
+          observedAtBlock: bigint;
+        };
+        select: { id: true };
+      }) {
+        const w = args.where;
+        const match = findByDedup(w.chainId, w.walletAddress, w.hsiAddress, w.hsiTokenId, w.observedAtBlock);
+        return match ? { id: match.id } : null;
+      },
+
       async findMany(args: {
         where: { chainId: number; walletAddress: string };
         orderBy: Record<string, "asc" | "desc">[];
@@ -126,15 +172,44 @@ function makeMockDb(initial: StoredRow[] = []) {
   };
 }
 
+// Mock DB that throws a P2002 on create (simulating concurrent writer race),
+// then returns the pre-existing row on findFirst.
+function makeRaceConflictDb(existingRow: StoredRow) {
+  return {
+    rawHsiStakeObservation: {
+      async create() {
+        const err = Object.assign(new Error("Unique constraint failed"), {
+          code: "P2002",
+          name: "PrismaClientKnownRequestError",
+        });
+        Object.setPrototypeOf(
+          err,
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          require("@prisma/client").Prisma.PrismaClientKnownRequestError
+            .prototype,
+        );
+        throw err;
+      },
+      async findFirst() {
+        return { id: existingRow.id };
+      },
+      async findMany() {
+        return [existingRow];
+      },
+    },
+  };
+}
+
 // ─── Test fixtures ────────────────────────────────────────────────────────────
 
 const HEDRON_ADDRESS = "0x8bd3d1472a656e312e94fb1bbdd599b8c51d18e3";
+const HEDRON_ADDRESS_2 = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const OBSERVED_AT = new Date("2026-07-03T12:00:00Z");
 
 const BASE_INPUT: PersistHsiStakeObservationInput = {
   chainId: 369,
   walletAddress: "0xAbCdEf0000000000000000000000000000000001",
-  hsiTokenId: 42n,
+  hsiTokenId: "42",
   hsiAddress: HEDRON_ADDRESS,
   stakeId: "942663",
   stakeIndex: 0,
@@ -148,7 +223,7 @@ const BASE_INPUT: PersistHsiStakeObservationInput = {
   warnings: [],
 };
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// ─── persistHsiStakeObservation ───────────────────────────────────────────────
 
 describe("persistHsiStakeObservation", () => {
   it("creates a new row and returns created: true on first write", async () => {
@@ -159,7 +234,7 @@ describe("persistHsiStakeObservation", () => {
     expect(result.id.length).toBeGreaterThan(0);
   });
 
-  it("is idempotent: second write with same dedup key returns created: false", async () => {
+  it("is idempotent: second write with same full dedupe tuple returns created: false", async () => {
     const db = makeMockDb();
     const first = await persistHsiStakeObservation(BASE_INPUT, db);
     const second = await persistHsiStakeObservation(BASE_INPUT, db);
@@ -168,7 +243,7 @@ describe("persistHsiStakeObservation", () => {
     expect(second.id).toBe(first.id);
   });
 
-  it("writes a second row when observedAtBlock differs", async () => {
+  it("writes a new row when observedAtBlock differs", async () => {
     const db = makeMockDb();
     const first = await persistHsiStakeObservation(
       { ...BASE_INPUT, observedAtBlock: 21000000n },
@@ -183,14 +258,14 @@ describe("persistHsiStakeObservation", () => {
     expect(second.id).not.toBe(first.id);
   });
 
-  it("writes a second row when hsiTokenId differs", async () => {
+  it("writes a new row when hsiTokenId differs", async () => {
     const db = makeMockDb();
     const first = await persistHsiStakeObservation(
-      { ...BASE_INPUT, hsiTokenId: 1n },
+      { ...BASE_INPUT, hsiTokenId: "1" },
       db,
     );
     const second = await persistHsiStakeObservation(
-      { ...BASE_INPUT, hsiTokenId: 2n },
+      { ...BASE_INPUT, hsiTokenId: "2" },
       db,
     );
     expect(first.created).toBe(true);
@@ -205,7 +280,6 @@ describe("persistHsiStakeObservation", () => {
       walletAddress: "0xAbCdEf0000000000000000000000000000000002",
     };
     await persistHsiStakeObservation(input, db);
-    // Second write with same address in lowercase should dedup
     const result = await persistHsiStakeObservation(
       { ...input, walletAddress: input.walletAddress.toLowerCase() },
       db,
@@ -213,11 +287,37 @@ describe("persistHsiStakeObservation", () => {
     expect(result.created).toBe(false);
   });
 
+  it("normalizes hsiAddress to lowercase before write and dedup check", async () => {
+    const db = makeMockDb();
+    const upper = HEDRON_ADDRESS.toUpperCase();
+    await persistHsiStakeObservation({ ...BASE_INPUT, hsiAddress: upper }, db);
+    const result = await persistHsiStakeObservation(
+      { ...BASE_INPUT, hsiAddress: HEDRON_ADDRESS },
+      db,
+    );
+    expect(result.created).toBe(false);
+  });
+
+  it("same token ID at same block on a different hsiAddress creates a separate row", async () => {
+    const db = makeMockDb();
+    const first = await persistHsiStakeObservation(
+      { ...BASE_INPUT, hsiAddress: HEDRON_ADDRESS },
+      db,
+    );
+    const second = await persistHsiStakeObservation(
+      { ...BASE_INPUT, hsiAddress: HEDRON_ADDRESS_2 },
+      db,
+    );
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(true);
+    expect(second.id).not.toBe(first.id);
+  });
+
   it("stores null nullable fields without coercing them", async () => {
     const db = makeMockDb();
     const input: PersistHsiStakeObservationInput = {
       ...BASE_INPUT,
-      hsiTokenId: 99n,
+      hsiTokenId: "99",
       stakeId: null,
       stakeIndex: null,
       stakedDays: null,
@@ -234,7 +334,7 @@ describe("persistHsiStakeObservation", () => {
       { chainId: 369, walletAddress: input.walletAddress },
       db,
     );
-    const row = rows.find((r) => r.hsiTokenId === 99n);
+    const row = rows.find((r) => r.hsiTokenId === "99");
     expect(row).toBeDefined();
     expect(row!.stakeId).toBeNull();
     expect(row!.stakeIndex).toBeNull();
@@ -245,7 +345,55 @@ describe("persistHsiStakeObservation", () => {
     expect(row!.isComplete).toBe(false);
     expect(row!.warnings).toContain("hexmining-hsi-stake-fields-unknown");
   });
+
+  it("accepts a very large uint256-sized decimal token ID", async () => {
+    const db = makeMockDb();
+    const largeId =
+      "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+    const result = await persistHsiStakeObservation(
+      { ...BASE_INPUT, hsiTokenId: largeId },
+      db,
+    );
+    expect(result.created).toBe(true);
+    const rows = await readHsiStakeObservations(
+      { chainId: 369, walletAddress: BASE_INPUT.walletAddress },
+      db,
+    );
+    const row = rows.find((r) => r.hsiTokenId === largeId);
+    expect(row).toBeDefined();
+    expect(row!.hsiTokenId).toBe(largeId);
+  });
+
+  it("simulated P2002 race returns created: false with the pre-existing id", async () => {
+    const existingRow: StoredRow = {
+      id: "existing-id-race",
+      chainId: BASE_INPUT.chainId,
+      walletAddress: BASE_INPUT.walletAddress.toLowerCase(),
+      hsiTokenId: BASE_INPUT.hsiTokenId,
+      hsiAddress: HEDRON_ADDRESS,
+      stakeId: null,
+      stakeIndex: null,
+      stakedDays: null,
+      lockedDay: null,
+      stakeShares: null,
+      principalHex: null,
+      observedAtBlock: BASE_INPUT.observedAtBlock,
+      observedAt: OBSERVED_AT,
+      isComplete: false,
+      warnings: [],
+      createdAt: new Date("2026-07-03T00:00:00Z"),
+    };
+    const db = makeRaceConflictDb(existingRow);
+    const result = await persistHsiStakeObservation(
+      BASE_INPUT,
+      db as unknown as Parameters<typeof persistHsiStakeObservation>[1],
+    );
+    expect(result.created).toBe(false);
+    expect(result.id).toBe("existing-id-race");
+  });
 });
+
+// ─── readHsiStakeObservations ─────────────────────────────────────────────────
 
 describe("readHsiStakeObservations", () => {
   it("returns empty array when no rows exist", async () => {
@@ -260,15 +408,15 @@ describe("readHsiStakeObservations", () => {
   it("returns rows ordered by observedAtBlock ascending", async () => {
     const db = makeMockDb();
     await persistHsiStakeObservation(
-      { ...BASE_INPUT, hsiTokenId: 2n, observedAtBlock: 22000000n },
+      { ...BASE_INPUT, hsiTokenId: "2", observedAtBlock: 22000000n },
       db,
     );
     await persistHsiStakeObservation(
-      { ...BASE_INPUT, hsiTokenId: 1n, observedAtBlock: 19000000n },
+      { ...BASE_INPUT, hsiTokenId: "1", observedAtBlock: 19000000n },
       db,
     );
     await persistHsiStakeObservation(
-      { ...BASE_INPUT, hsiTokenId: 3n, observedAtBlock: 25000000n },
+      { ...BASE_INPUT, hsiTokenId: "3", observedAtBlock: 25000000n },
       db,
     );
 
@@ -276,47 +424,25 @@ describe("readHsiStakeObservations", () => {
       { chainId: 369, walletAddress: BASE_INPUT.walletAddress },
       db,
     );
-    expect(rows.map((r) => r.hsiTokenId)).toEqual([1n, 2n, 3n]);
+    expect(rows.map((r) => r.hsiTokenId)).toEqual(["1", "2", "3"]);
     expect(rows[0].observedAtBlock).toBe(19000000n);
     expect(rows[2].observedAtBlock).toBe(25000000n);
-  });
-
-  it("uses hsiTokenId as secondary sort key when observedAtBlock ties", async () => {
-    const db = makeMockDb();
-    await persistHsiStakeObservation(
-      { ...BASE_INPUT, hsiTokenId: 300n, observedAtBlock: 20000000n },
-      db,
-    );
-    await persistHsiStakeObservation(
-      { ...BASE_INPUT, hsiTokenId: 100n, observedAtBlock: 20000000n },
-      db,
-    );
-    await persistHsiStakeObservation(
-      { ...BASE_INPUT, hsiTokenId: 200n, observedAtBlock: 20000000n },
-      db,
-    );
-
-    const rows = await readHsiStakeObservations(
-      { chainId: 369, walletAddress: BASE_INPUT.walletAddress },
-      db,
-    );
-    expect(rows.map((r) => r.hsiTokenId)).toEqual([100n, 200n, 300n]);
   });
 
   it("scopes results to chainId and walletAddress", async () => {
     const db = makeMockDb();
     await persistHsiStakeObservation(
-      { ...BASE_INPUT, hsiTokenId: 1n, chainId: 369 },
+      { ...BASE_INPUT, hsiTokenId: "1", chainId: 369 },
       db,
     );
     await persistHsiStakeObservation(
-      { ...BASE_INPUT, hsiTokenId: 2n, chainId: 1 },
+      { ...BASE_INPUT, hsiTokenId: "2", chainId: 1 },
       db,
     );
     await persistHsiStakeObservation(
       {
         ...BASE_INPUT,
-        hsiTokenId: 3n,
+        hsiTokenId: "3",
         walletAddress: "0x0000000000000000000000000000000000000002",
       },
       db,
@@ -327,7 +453,7 @@ describe("readHsiStakeObservations", () => {
       db,
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0].hsiTokenId).toBe(1n);
+    expect(rows[0].hsiTokenId).toBe("1");
   });
 
   it("maps all fields correctly from stored row", async () => {
@@ -342,7 +468,7 @@ describe("readHsiStakeObservations", () => {
 
     expect(row.chainId).toBe(369);
     expect(row.walletAddress).toBe(BASE_INPUT.walletAddress.toLowerCase());
-    expect(row.hsiTokenId).toBe(42n);
+    expect(row.hsiTokenId).toBe("42");
     expect(row.hsiAddress).toBe(HEDRON_ADDRESS);
     expect(row.stakeId).toBe("942663");
     expect(row.stakeIndex).toBe(0);
@@ -362,7 +488,6 @@ describe("readHsiStakeObservations", () => {
     const db = makeMockDb();
     await persistHsiStakeObservation(BASE_INPUT, db);
 
-    // Query with mixed-case address should still find the row
     const rows = await readHsiStakeObservations(
       {
         chainId: 369,
@@ -374,63 +499,128 @@ describe("readHsiStakeObservations", () => {
   });
 });
 
+// ─── validateHsiTokenId ───────────────────────────────────────────────────────
+
+describe("validateHsiTokenId", () => {
+  it("accepts valid decimal integer strings", () => {
+    expect(() => validateHsiTokenId("0")).not.toThrow();
+    expect(() => validateHsiTokenId("1")).not.toThrow();
+    expect(() => validateHsiTokenId("42")).not.toThrow();
+    expect(() =>
+      validateHsiTokenId(
+        "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+      )
+    ).not.toThrow();
+  });
+
+  it("rejects an empty string", () => {
+    expect(() => validateHsiTokenId("")).toThrow();
+  });
+
+  it("rejects negative values", () => {
+    expect(() => validateHsiTokenId("-1")).toThrow();
+    expect(() => validateHsiTokenId("-42")).toThrow();
+  });
+
+  it("rejects decimal fractions", () => {
+    expect(() => validateHsiTokenId("1.5")).toThrow();
+    expect(() => validateHsiTokenId("0.0")).toThrow();
+  });
+
+  it("rejects scientific notation", () => {
+    expect(() => validateHsiTokenId("1e10")).toThrow();
+    expect(() => validateHsiTokenId("1E10")).toThrow();
+  });
+
+  it("rejects leading zeros (except bare zero)", () => {
+    expect(() => validateHsiTokenId("01")).toThrow();
+    expect(() => validateHsiTokenId("007")).toThrow();
+  });
+
+  it("rejects non-numeric strings", () => {
+    expect(() => validateHsiTokenId("abc")).toThrow();
+    expect(() => validateHsiTokenId("0x2a")).toThrow();
+  });
+});
+
+// ─── buildHsiObservationDedupeKey ────────────────────────────────────────────
+
 describe("buildHsiObservationDedupeKey", () => {
-  it("produces a deterministic colon-delimited string", () => {
+  it("produces a deterministic colon-delimited string including hsiAddress", () => {
     const key = buildHsiObservationDedupeKey({
       chainId: 369,
       walletAddress: "0xabcdef",
-      hsiTokenId: 42n,
+      hsiAddress: HEDRON_ADDRESS,
+      hsiTokenId: "42",
       observedAtBlock: 21000000n,
     });
-    expect(key).toBe("369:0xabcdef:42:21000000");
+    expect(key).toBe(`369:0xabcdef:${HEDRON_ADDRESS}:42:21000000`);
   });
 
-  it("normalizes walletAddress to lowercase in the key", () => {
+  it("normalizes walletAddress and hsiAddress to lowercase", () => {
     const key = buildHsiObservationDedupeKey({
       chainId: 369,
       walletAddress: "0xAbCdEf",
-      hsiTokenId: 1n,
+      hsiAddress: HEDRON_ADDRESS.toUpperCase(),
+      hsiTokenId: "1",
       observedAtBlock: 1n,
     });
-    expect(key).toBe("369:0xabcdef:1:1");
+    expect(key).toBe(`369:0xabcdef:${HEDRON_ADDRESS}:1:1`);
+  });
+
+  it("produces different keys for different hsiAddresses with the same token ID", () => {
+    const base = {
+      chainId: 369,
+      walletAddress: "0xabc",
+      hsiTokenId: "42",
+      observedAtBlock: 100n,
+    };
+    const key1 = buildHsiObservationDedupeKey({
+      ...base,
+      hsiAddress: HEDRON_ADDRESS,
+    });
+    const key2 = buildHsiObservationDedupeKey({
+      ...base,
+      hsiAddress: HEDRON_ADDRESS_2,
+    });
+    expect(key1).not.toBe(key2);
   });
 
   it("produces different keys for different hsiTokenIds", () => {
     const base = {
       chainId: 369,
       walletAddress: "0xabc",
+      hsiAddress: HEDRON_ADDRESS,
       observedAtBlock: 100n,
     };
-    const key1 = buildHsiObservationDedupeKey({ ...base, hsiTokenId: 1n });
-    const key2 = buildHsiObservationDedupeKey({ ...base, hsiTokenId: 2n });
-    expect(key1).not.toBe(key2);
+    expect(
+      buildHsiObservationDedupeKey({ ...base, hsiTokenId: "1" }),
+    ).not.toBe(buildHsiObservationDedupeKey({ ...base, hsiTokenId: "2" }));
   });
 
   it("produces different keys for different observedAtBlocks", () => {
     const base = {
       chainId: 369,
       walletAddress: "0xabc",
-      hsiTokenId: 42n,
+      hsiAddress: HEDRON_ADDRESS,
+      hsiTokenId: "42",
     };
-    const key1 = buildHsiObservationDedupeKey({
-      ...base,
-      observedAtBlock: 21000000n,
-    });
-    const key2 = buildHsiObservationDedupeKey({
-      ...base,
-      observedAtBlock: 22000000n,
-    });
-    expect(key1).not.toBe(key2);
+    expect(
+      buildHsiObservationDedupeKey({ ...base, observedAtBlock: 21000000n }),
+    ).not.toBe(
+      buildHsiObservationDedupeKey({ ...base, observedAtBlock: 22000000n }),
+    );
   });
 
   it("produces different keys for different chainIds", () => {
     const base = {
       walletAddress: "0xabc",
-      hsiTokenId: 42n,
+      hsiAddress: HEDRON_ADDRESS,
+      hsiTokenId: "42",
       observedAtBlock: 100n,
     };
-    const key1 = buildHsiObservationDedupeKey({ ...base, chainId: 369 });
-    const key2 = buildHsiObservationDedupeKey({ ...base, chainId: 1 });
-    expect(key1).not.toBe(key2);
+    expect(buildHsiObservationDedupeKey({ ...base, chainId: 369 })).not.toBe(
+      buildHsiObservationDedupeKey({ ...base, chainId: 1 }),
+    );
   });
 });

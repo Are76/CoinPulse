@@ -1,5 +1,7 @@
 import "server-only";
 
+import { Prisma } from "@prisma/client";
+
 import { getDb } from "@/lib/db";
 
 // ─── Input types ──────────────────────────────────────────────────────────────
@@ -7,7 +9,7 @@ import { getDb } from "@/lib/db";
 export type PersistHsiStakeObservationInput = {
   chainId: number;
   walletAddress: string;
-  hsiTokenId: bigint;
+  hsiTokenId: string;
   hsiAddress: string;
   stakeId: string | null;
   stakeIndex: number | null;
@@ -32,7 +34,7 @@ export type PersistedHsiStakeObservation = {
   id: string;
   chainId: number;
   walletAddress: string;
-  hsiTokenId: bigint;
+  hsiTokenId: string;
   hsiAddress: string;
   stakeId: string | null;
   stakeIndex: number | null;
@@ -47,22 +49,41 @@ export type PersistedHsiStakeObservation = {
   createdAt: Date;
 };
 
+// ─── Validation ───────────────────────────────────────────────────────────────
+//
+// ERC-721 token IDs are uint256 on-chain. They must be stored as decimal
+// strings to avoid int64 truncation. "0" is valid; negatives and fractions
+// are not; scientific notation is not accepted.
+
+const DECIMAL_UINT_RE = /^(0|[1-9]\d*)$/;
+
+export function validateHsiTokenId(value: string): void {
+  if (!DECIMAL_UINT_RE.test(value)) {
+    throw new Error(
+      `Invalid hsiTokenId "${value}": must be a non-negative decimal integer string with no fractions or scientific notation.`,
+    );
+  }
+}
+
 // ─── Dedup key ────────────────────────────────────────────────────────────────
 //
-// Deduplication uses (chainId, walletAddress, hsiTokenId, observedAtBlock).
-// The same HSI token observed at the same block is the same observation.
-// A new block produces a new row, preserving the full observation history.
+// Deduplication uses (chainId, walletAddress, hsiAddress, hsiTokenId,
+// observedAtBlock). hsiAddress is included because ERC-721 token IDs are
+// scoped to their contract — the same token ID on two different Hedron
+// contracts is a different HSI.
 
 export function buildHsiObservationDedupeKey(args: {
   chainId: number;
   walletAddress: string;
-  hsiTokenId: bigint;
+  hsiAddress: string;
+  hsiTokenId: string;
   observedAtBlock: bigint;
 }): string {
   return [
     args.chainId,
     args.walletAddress.toLowerCase(),
-    args.hsiTokenId.toString(),
+    args.hsiAddress.toLowerCase(),
+    args.hsiTokenId,
     args.observedAtBlock.toString(),
   ].join(":");
 }
@@ -71,20 +92,11 @@ export function buildHsiObservationDedupeKey(args: {
 
 type StoreClient = {
   rawHsiStakeObservation: {
-    findFirst(args: {
-      where: {
-        chainId: number;
-        walletAddress: string;
-        hsiTokenId: bigint;
-        observedAtBlock: bigint;
-      };
-      select: { id: true };
-    }): Promise<{ id: string } | null>;
     create(args: {
       data: {
         chainId: number;
         walletAddress: string;
-        hsiTokenId: bigint;
+        hsiTokenId: string;
         hsiAddress: string;
         stakeId: string | null;
         stakeIndex: number | null;
@@ -97,7 +109,18 @@ type StoreClient = {
         isComplete: boolean;
         warnings: string[];
       };
+      select: { id: true };
     }): Promise<{ id: string }>;
+    findFirst(args: {
+      where: {
+        chainId: number;
+        walletAddress: string;
+        hsiAddress: string;
+        hsiTokenId: string;
+        observedAtBlock: bigint;
+      };
+      select: { id: true };
+    }): Promise<{ id: string } | null>;
     findMany(args: {
       where: { chainId: number; walletAddress: string };
       orderBy: (
@@ -110,7 +133,7 @@ type StoreClient = {
         id: string;
         chainId: number;
         walletAddress: string;
-        hsiTokenId: bigint;
+        hsiTokenId: string;
         hsiAddress: string;
         stakeId: string | null;
         stakeIndex: number | null;
@@ -130,49 +153,61 @@ type StoreClient = {
 
 // ─── Persistence ──────────────────────────────────────────────────────────────
 //
-// Returns the id of the created or pre-existing row.
-// Skips write if a row with the same dedup key already exists.
+// Returns the id of the created or pre-existing row and whether this call
+// created it. Race-safe: the database unique constraint on the full dedupe
+// tuple means concurrent writers will get a P2002 conflict rather than
+// duplicate rows. On P2002 we re-read via findFirst and return created: false.
 
 export async function persistHsiStakeObservation(
   input: PersistHsiStakeObservationInput,
   client: StoreClient = getDb() as unknown as StoreClient,
 ): Promise<{ id: string; created: boolean }> {
+  validateHsiTokenId(input.hsiTokenId);
+
   const walletAddress = input.walletAddress.toLowerCase();
+  const hsiAddress = input.hsiAddress.toLowerCase();
 
-  const existing = await client.rawHsiStakeObservation.findFirst({
-    where: {
-      chainId: input.chainId,
-      walletAddress,
-      hsiTokenId: input.hsiTokenId,
-      observedAtBlock: input.observedAtBlock,
-    },
-    select: { id: true },
-  });
-
-  if (existing) {
-    return { id: existing.id, created: false };
+  try {
+    const row = await client.rawHsiStakeObservation.create({
+      data: {
+        chainId: input.chainId,
+        walletAddress,
+        hsiTokenId: input.hsiTokenId,
+        hsiAddress,
+        stakeId: input.stakeId,
+        stakeIndex: input.stakeIndex,
+        stakedDays: input.stakedDays,
+        lockedDay: input.lockedDay,
+        stakeShares: input.stakeShares,
+        principalHex: input.principalHex,
+        observedAtBlock: input.observedAtBlock,
+        observedAt: input.observedAt,
+        isComplete: input.isComplete,
+        warnings: input.warnings,
+      },
+      select: { id: true },
+    });
+    return { id: row.id, created: true };
+  } catch (err) {
+    // Row already exists (idempotent re-write or concurrent writer race).
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      const existing = await client.rawHsiStakeObservation.findFirst({
+        where: {
+          chainId: input.chainId,
+          walletAddress,
+          hsiAddress,
+          hsiTokenId: input.hsiTokenId,
+          observedAtBlock: input.observedAtBlock,
+        },
+        select: { id: true },
+      });
+      if (existing) return { id: existing.id, created: false };
+    }
+    throw err;
   }
-
-  const created = await client.rawHsiStakeObservation.create({
-    data: {
-      chainId: input.chainId,
-      walletAddress,
-      hsiTokenId: input.hsiTokenId,
-      hsiAddress: input.hsiAddress,
-      stakeId: input.stakeId,
-      stakeIndex: input.stakeIndex,
-      stakedDays: input.stakedDays,
-      lockedDay: input.lockedDay,
-      stakeShares: input.stakeShares,
-      principalHex: input.principalHex,
-      observedAtBlock: input.observedAtBlock,
-      observedAt: input.observedAt,
-      isComplete: input.isComplete,
-      warnings: input.warnings,
-    },
-  });
-
-  return { id: created.id, created: true };
 }
 
 // ─── Read ──────────────────────────────────────────────────────────────────────
@@ -200,7 +235,7 @@ export async function readHsiStakeObservations(
     id: r.id,
     chainId: r.chainId,
     walletAddress: r.walletAddress,
-    hsiTokenId: r.hsiTokenId as bigint,
+    hsiTokenId: r.hsiTokenId,
     hsiAddress: r.hsiAddress,
     stakeId: r.stakeId,
     stakeIndex: r.stakeIndex,

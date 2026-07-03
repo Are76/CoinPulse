@@ -762,8 +762,11 @@ model HexStakeListSnapshot {
 // is a HEX stake that has been tokenized as an NFT via the Hedron protocol.
 // Rows are append-only raw audit evidence — never mutated after write.
 //
-// hsiTokenId is the Hedron NFT token ID that uniquely identifies this HSI.
-// hsiAddress is the Hedron contract address the HSI was observed against.
+// hsiTokenId is stored as a decimal string because ERC-721 token IDs are
+// uint256-sized on-chain and cannot be safely stored in BIGINT (int64).
+// hsiAddress is the Hedron contract address (lowercase) the HSI was observed
+// against. Because ERC-721 IDs are scoped to their contract, hsiAddress is
+// part of the canonical identity tuple.
 //
 // The underlying HEX stake fields (stakeId, stakeIndex, stakedDays,
 // lockedDay, stakeShares, principalHex) are nullable because they may not
@@ -774,16 +777,17 @@ model HexStakeListSnapshot {
 // recovered. The DTO must surface this as a warning, never coerce missing
 // fields to zero.
 //
-// Deduplication uses (chainId, walletAddress, hsiTokenId, observedAtBlock)
-// before writing. Multiple rows for the same HSI are allowed if they were
-// observed at different blocks.
+// Deduplication uses (chainId, walletAddress, hsiAddress, hsiTokenId,
+// observedAtBlock) enforced by a database-level unique constraint.
+// Multiple rows for the same HSI are allowed if they were observed at
+// different blocks.
 
 model RawHsiStakeObservation {
   id              String       @id @default(cuid())
   chainId         Int
   sourceFamily    SourceFamily @default(HEXMINING)
   walletAddress   String
-  hsiTokenId      BigInt
+  hsiTokenId      String
   hsiAddress      String
   stakeId         String?
   stakeIndex      Int?
@@ -798,7 +802,7 @@ model RawHsiStakeObservation {
   createdAt       DateTime     @default(now())
   chain           Chain        @relation(fields: [chainId], references: [id], onDelete: Restrict)
 
+  @@unique([chainId, walletAddress, hsiAddress, hsiTokenId, observedAtBlock], map: "RawHsiStakeObs_identity_key")
   @@index([chainId, walletAddress])
-  @@index([chainId, walletAddress, hsiTokenId])
   @@index([chainId, sourceFamily])
 }
