@@ -218,6 +218,45 @@ export type HexStakeDto = {
   warnings: string[];
 };
 
+// ─── Ended stake DTO ─────────────────────────────────────────────────────────
+//
+// Assembled from persisted RawEndedHexStakeObservation rows (Phase 5).
+// All bigint fields serialized as decimal strings for JSON safety.
+// No pricing, no valuation, no PnL — raw observation data only.
+
+export type EndedHexStakeDto = {
+  schemaVersion: "v1";
+  id: string;
+  chainId: number;
+  walletAddress: string;
+  stakeId: string;
+  stakeIndex: number | null;
+  stakedDays: number | null;
+  lockedDay: number | null;
+  stakeShares: string | null;
+  principalHex: string | null;
+  yieldHex: string | null;
+  penaltyHex: string | null;
+  endTxHash: string;
+  endBlockNumber: string;      // bigint serialized as decimal string
+  startTxHash: string | null;
+  startBlockNumber: string | null;  // bigint serialized as decimal string
+  discoveryMethod: string;
+  observedAt: string;          // ISO 8601
+  isComplete: boolean;
+  warnings: string[];
+};
+
+export type EndedHexStakeListDto = {
+  schemaVersion: "v1";
+  chainId: number;
+  walletAddress: string;
+  stakes: EndedHexStakeDto[];
+  totalCount: number;
+  isComplete: boolean;
+  warnings: string[];
+};
+
 // ─── Stake list response DTO ──────────────────────────────────────────────────
 //
 // isComplete: false when the read was truncated due to rate limits or errors.
