@@ -1,6 +1,6 @@
 # CoinPulse AI Handoff
 
-**Last updated:** 2026-06-15
+**Last updated:** 2026-07-03
 
 ---
 
@@ -69,13 +69,13 @@ These rules apply to every PR. [E1]
 
 ---
 
-## Current Project Status (after PR #265)
+## Current Project Status (after PR #310)
 
 **Backend/DTO truth posture:** The canonical backend pipeline is the source of truth. All DTO contracts expose `schemaVersion`, provenance, freshness, status, and warnings. No production DTO contains mock fallback truth. [E2]
 
 **Frontend query posture:** TanStack Query is used for all reads via hooks in `src/lib/query/use-*.ts`. Query key conventions and staleTime/gcTime policy are documented in `docs/data-fetching-architecture.md`. [E1]
 
-**HexMining / Gate 10 / Gate 11 posture:** Phase 4C is complete and gate-lifted. PR #252 executed Gate 10 live-data verification and promoted the Gate 11 production estimator path. Public estimated yield is live for valid evidence paths: `estimateHexMiningYield` can return `status: "estimated"` with non-null `yieldHex`, and `/api/hexmining/stakes` wires the estimator through the reader. [E1] [E2] [E3]
+**HexMining posture:** Phase 4C complete and gate-lifted (PR #252). Phase 5 complete (PRs #307–#310). Public estimated yield is live for valid evidence paths. Ended stake pipeline (persistence, discovery, reader, DTO, API route) is live. Phase 6 (HSI/HTT) and Phase 7 (pricing/valuation/PnL) are not started. [E1] [E2] [E3]
 
 **Source/RPC policy posture:** PR #249 removed the hardcoded `pulsechainstats.com` RPC default. No third-party RPC default is hardcoded. Runtime/operator/env/CLI-supplied RPC is the authoritative transport. PR #246 established the accepted authoritative PulseChain source reference doc. [E2]
 
@@ -102,10 +102,18 @@ These rules apply to every PR. [E1]
 - Gate 10 live-data evidence: PR #252 — real PulseChain historical day range verified. [E2]
 - Gate 11 production promotion: PR #252 — valid evidence paths surface public `"estimated"` yield. [E2] [E3]
 
-**What is still deferred after Gate 11:**
-- Ended stake discovery / exact yield (`status: "exact"`) remains Phase 5. [E1]
+**What is complete after Phase 5 (PRs #307–#310):**
+- `RawEndedHexStakeObservation` persistence model and idempotent store. [E2] [E3]
+- `discoverEndedHexStakes()` — reads `RawStakeAction` END records, cross-references START records, persists observations. [E2] [E3]
+- `readEndedHexStakes()` — reads persisted observations and assembles `EndedHexStakeListDto`. [E2] [E3]
+- `EndedHexStakeDto` and `EndedHexStakeListDto` — typed DTO contracts with bigint-as-string serialization. [E2] [E3]
+- `GET /api/hexmining/ended-stakes` — read-only API route with Zod validation and error envelopes. [E2] [E3]
+
+**What is still deferred after Phase 5:**
+- `lockedDay` and `stakeShares` recovery / exact yield (`status: "exact"`) — no on-chain backfill implemented. [E1]
 - HSI/HTT source families remain Phase 6. [E1]
 - HexMining pricing, valuation, and PnL remain Phase 7; `valuation.status` and `pnl.status` stay `"unsupported"`. [E1] [E3]
+- Ended stake frontend UI — no display in the app. [E1]
 - Ethereum eHEX remains future scope. [E1]
 
 **Operator tools available (do NOT treat as gate-lift):**
@@ -162,20 +170,26 @@ These rules apply to every PR. [E1]
 | #263 | API client fetch helper consolidated (frontend chore) | [E2] |
 | #264 | PnL edge-status route contract tests added (low-confidence price, summary warning deduplication) | [E2] |
 | #265 | Token metadata stale/conflicting provenance route contract tests added | [E2] |
+| #307 | Phase 5 Slice 1 — `RawEndedHexStakeObservation` model, migration, and observation store | [E2] |
+| #308 | Phase 5 Slice 2 — `discoverEndedHexStakes()` discovery service | [E2] |
+| #309 | Phase 5 Slice 3 — `readEndedHexStakes()`, `EndedHexStakeDto`, `EndedHexStakeListDto` | [E2] |
+| #310 | Phase 5 Slice 4 — `GET /api/hexmining/ended-stakes` read-only API route | [E2] |
 
 ---
 
-## Post-Gate-11 Posture
+## Post-Phase-5 Posture
 
-After PR #252: [E1] [E2] [E3]
+After PRs #252 (Gate 11) and #307–#310 (Phase 5): [E1] [E2] [E3]
 
 1. Gate 10 evidence collection is complete.
 2. Gate 11 public estimated-yield promotion is merged.
 3. Valid evidence paths may surface public `status: "estimated"` with non-null `estimatedYieldHex`.
 4. BPD-spanning ranges still carry unresolved BPD attribution as `bpdYieldHex: null` plus warning.
-5. Pricing, valuation, PnL, ended stakes, HSI/HTT, and Ethereum eHEX remain deferred to their documented phases.
+5. Phase 5 ended stake pipeline is complete: persistence, discovery, reader, DTO assembly, and API route are all live.
+6. Ended stake observations always have `isComplete: false` and `lockedDay: null` at discovery time — no on-chain backfill is implemented.
+7. Pricing, valuation, PnL, HSI/HTT, frontend ended-stake UI, and Ethereum eHEX remain deferred to their documented phases.
 
-Do not treat Gate 11 as approval for Phase 5, Phase 6, Phase 7, Ethereum/Base execution, or frontend accounting/pricing/PnL logic. [E1]
+Do not treat Phase 5 completion as approval for Phase 6, Phase 7, Ethereum/Base execution, frontend accounting/pricing/PnL logic, or ended-stake exact-yield. [E1]
 
 ---
 
@@ -188,7 +202,7 @@ Read docs/ai-handoff.md first.
 
 Then read the specific PR, roadmap, or docs I mention.
 
-Treat Gate 10 and Gate 11 as lifted by PR #252, but do not infer later HexMining phases from that gate lift.
+Treat Gate 10 and Gate 11 as lifted by PR #252. Phase 5 (ended stake pipeline) is complete via PRs #307–#310. Do not infer Phase 6 or Phase 7 from either gate lift or Phase 5 completion.
 Do not propose runtime changes until you identify:
 1. current latest merged PR,
 2. current gate/status,
