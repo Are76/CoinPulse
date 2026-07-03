@@ -105,6 +105,7 @@ export async function discoverHsiStakeObservations(
       abi: HEDRON_ABI,
       functionName: "balanceOf",
       args: [walletAddress as `0x${string}`],
+      blockNumber: observedAtBlock,
     })) as bigint;
   } catch (error) {
     const failure = classifyRpcFailure({ error });
@@ -141,6 +142,7 @@ export async function discoverHsiStakeObservations(
         abi: HEDRON_ABI,
         functionName: "tokenOfOwnerByIndex",
         args: [walletAddress as `0x${string}`, BigInt(i)],
+        blockNumber: observedAtBlock,
       })) as bigint;
     } catch (error) {
       const failure = classifyRpcFailure({ error });
