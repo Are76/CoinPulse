@@ -312,7 +312,7 @@ describe("discoverHsiStakeObservations", () => {
         readContractCalled = true;
         return 0n;
       },
-    } as unknown as import("@/services/hexmining/hsi-discovery").HsiDiscoveryReadClient;
+    } as unknown as HsiDiscoveryReadClient;
     const persistenceClient = makePersistenceClient();
 
     const result = await discoverHsiStakeObservations(
