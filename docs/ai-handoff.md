@@ -1,6 +1,6 @@
 # CoinPulse AI Handoff
 
-**Last updated:** 2026-07-03
+**Last updated:** 2026-07-04
 
 ---
 
@@ -69,13 +69,13 @@ These rules apply to every PR. [E1]
 
 ---
 
-## Current Project Status (after PR #310)
+## Current Project Status (after PR #319)
 
 **Backend/DTO truth posture:** The canonical backend pipeline is the source of truth. All DTO contracts expose `schemaVersion`, provenance, freshness, status, and warnings. No production DTO contains mock fallback truth. [E2]
 
 **Frontend query posture:** TanStack Query is used for all reads via hooks in `src/lib/query/use-*.ts`. Query key conventions and staleTime/gcTime policy are documented in `docs/data-fetching-architecture.md`. [E1]
 
-**HexMining posture:** Phase 4C complete and gate-lifted (PR #252). Phase 5 complete (PRs #307–#310). Public estimated yield is live for valid evidence paths. Ended stake pipeline (persistence, discovery, reader, DTO, API route) is live. Phase 6 (HSI/HTT) and Phase 7 (pricing/valuation/PnL) are not started. [E1] [E2] [E3]
+**HexMining posture:** Phase 4C complete and gate-lifted (PR #252). Phase 5 complete (PRs #307–#310). Public estimated yield is live for valid evidence paths. Ended stake pipeline (persistence, discovery, reader, DTO, API route) is live. Phase 6 **HSI backend implementation is complete** (PRs #312–#317: persistence, discovery, reader enrichment, live-verification tooling), but HSI is **not yet exposed via the public DTO/API** — `HexStakeSource` is still `"native"` only and `GET /api/hexmining/stakes` still calls only `readNativeHexStakes`. **HSI live verification is deferred pending availability of an HSI-owning wallet** (the tooling shipped but no live run occurred). Public HSI DTO/API integration, the **HTT** source family within Phase 6, and Phase 7 (pricing/valuation/PnL) are not started. Native active-stake reads (Phase 2) gained live-verification tooling (#318) — a live run against the fixture wallet recorded stakeCount 32 / 32 with all checks passing — and deterministic single-block read pinning (#319). [E1] [E2] [E3]
 
 **Source/RPC policy posture:** PR #249 removed the hardcoded `pulsechainstats.com` RPC default. No third-party RPC default is hardcoded. Runtime/operator/env/CLI-supplied RPC is the authoritative transport. PR #246 established the accepted authoritative PulseChain source reference doc. [E2]
 
@@ -109,11 +109,24 @@ These rules apply to every PR. [E1]
 - `EndedHexStakeDto` and `EndedHexStakeListDto` — typed DTO contracts with bigint-as-string serialization. [E2] [E3]
 - `GET /api/hexmining/ended-stakes` — read-only API route with Zod validation and error envelopes. [E2] [E3]
 
-**What is still deferred after Phase 5:**
-- `lockedDay` and `stakeShares` recovery / exact yield (`status: "exact"`) — no on-chain backfill implemented. [E1]
-- HSI/HTT source families remain Phase 6. [E1]
+**What is complete after Phase 6 HSI implementation (PRs #312–#317):**
+- `RawHsiStakeObservation` persistence model and idempotent store. [E2] [E3]
+- `discoverHsiStakes()` — reads HSI NFT ownership, pins reads to a captured `observedAtBlock`, rejects unsupported `chainId` before RPC/persistence. [E2] [E3]
+- HSI reader (stake enrichment) — enriches persisted observations and flips `isComplete`. [E2] [E3]
+- HSI live-verification **tooling** (`runHsiLiveVerification`, CLI wrapper, runbook, evidence template) — mock-validated; presence/consistency booleans only. [E2] [E3]
+- Note: this is a **backend pipeline only**. HSI is not exposed via the public DTO/API — `HexStakeSource` is typed `"native"` only and `GET /api/hexmining/stakes` calls only `readNativeHexStakes`. Public HSI DTO/API integration is not yet done. [E3]
+
+**What is complete for native active-stake reads (PRs #318–#319):**
+- Native active-stake live-verification tooling (#318) — operator runner/CLI/runbook/evidence, mock-tested; a live run against fixture wallet `0x75f808367720951e789d47e9e9db51148d9aa765` recorded stakeCount 32 / enumeratedCount 32 with all checks passing. This runner reads native `stakeCount`/`stakeLists` only and does not query HSI/ERC-721 ownership. [E2] [E3]
+- Production native stake reader block pinning (#319) — `readNativeHexStakes` pins every `stakeCount`/`stakeLists` read to a single captured block, with graceful `latest` fallback preserved. [E2] [E3]
+
+**What is still deferred after Phase 6 HSI implementation:**
+- **HSI live verification — NOT completed. Deferred pending availability of an HSI-owning wallet.** PR #316 shipped tooling only; no live run occurred and the evidence template is `PENDING OPERATOR EXECUTION`. No HSI-owning wallet is currently available to verify against. Do not state that HSI verification passed. [E1] [E2]
+- **Public HSI DTO/API integration** — `HexStakeSource` (`"hsi"`), public DTO fields, and route wiring not yet done. [E1] [E3]
+- **HTT** (Hedron Token Transfer / Actuator delegated) source family — not started. [E1]
+- `lockedDay` and `stakeShares` recovery / exact yield (`status: "exact"`) for ended stakes — no on-chain backfill implemented; no ended-stake live verification exists. [E1]
 - HexMining pricing, valuation, and PnL remain Phase 7; `valuation.status` and `pnl.status` stay `"unsupported"`. [E1] [E3]
-- Ended stake frontend UI — no display in the app. [E1]
+- Ended stake and HSI frontend UI — no display in the app. [E1]
 - Ethereum eHEX remains future scope. [E1]
 
 **Operator tools available (do NOT treat as gate-lift):**
@@ -174,22 +187,31 @@ These rules apply to every PR. [E1]
 | #308 | Phase 5 Slice 2 — `discoverEndedHexStakes()` discovery service | [E2] |
 | #309 | Phase 5 Slice 3 — `readEndedHexStakes()`, `EndedHexStakeDto`, `EndedHexStakeListDto` | [E2] |
 | #310 | Phase 5 Slice 4 — `GET /api/hexmining/ended-stakes` read-only API route | [E2] |
+| #311 | Phase 5 implementation-status finalization docs | [E2] |
+| #312 | Phase 6 HSI Slice 1 — `RawHsiStakeObservation` model, migration, and observation store | [E2] |
+| #313 | HSI Slice 1 hardening — `RawHsiStakeObservation` identity/storage safety and migration index naming | [E2] |
+| #314 | Phase 6 HSI Slice 2 — `discoverHsiStakes()` discovery service (block-pinned, chainId-guarded) | [E2] |
+| #315 | Phase 6 HSI Slice 3 — HSI reader (stake enrichment) | [E2] |
+| #316 | Phase 6 HSI Slice 4 — HSI live-verification **tooling** (no live run; evidence `PENDING OPERATOR EXECUTION`) | [E2] |
+| #317 | Docs — align `RawHsiStakeObservation` comment with two-phase lifecycle | [E2] |
+| #318 | Native active-stake live-verification tooling — live run recorded stakeCount 32/32, all checks passed | [E2] |
+| #319 | Production native stake reader pins `stakeCount`/`stakeLists` reads to a single captured block | [E2] |
 
 ---
 
-## Post-Phase-5 Posture
+## Post-Phase-6-HSI-Implementation Posture
 
-After PRs #252 (Gate 11) and #307–#310 (Phase 5): [E1] [E2] [E3]
+After PRs #252 (Gate 11), #307–#310 (Phase 5), #312–#317 (Phase 6 HSI implementation), and #318–#319 (native active-stake verification/pinning): [E1] [E2] [E3]
 
-1. Gate 10 evidence collection is complete.
-2. Gate 11 public estimated-yield promotion is merged.
-3. Valid evidence paths may surface public `status: "estimated"` with non-null `estimatedYieldHex`.
-4. BPD-spanning ranges still carry unresolved BPD attribution as `bpdYieldHex: null` plus warning.
-5. Phase 5 ended stake pipeline is complete: persistence, discovery, reader, DTO assembly, and API route are all live.
-6. Ended stake observations always have `isComplete: false` and `lockedDay: null` at discovery time — no on-chain backfill is implemented.
-7. Pricing, valuation, PnL, HSI/HTT, frontend ended-stake UI, and Ethereum eHEX remain deferred to their documented phases.
+1. Gate 10 evidence collection is complete; Gate 11 public estimated-yield promotion is merged.
+2. Valid evidence paths may surface public `status: "estimated"` with non-null `estimatedYieldHex`; BPD-spanning ranges still carry `bpdYieldHex: null` plus warning.
+3. Phase 5 ended stake pipeline is complete (persistence, discovery, reader, DTO, API route). Ended stake observations always have `isComplete: false` and `lockedDay: null` at discovery time — no on-chain backfill, and no ended-stake live verification exists.
+4. Phase 6 **HSI backend implementation is complete**: persistence (#312–#313), discovery (#314), reader enrichment (#315), and live-verification tooling (#316) are all live. HSI is **not yet exposed via the public DTO/API** (`HexStakeSource` is `"native"` only; the public stakes route calls only `readNativeHexStakes`) — public HSI DTO/API integration is not started.
+5. **HSI live verification is NOT completed. It is deferred pending availability of an HSI-owning wallet.** The tooling shipped but no live run occurred; the evidence template is `PENDING OPERATOR EXECUTION`. No HSI-owning wallet is currently available. Do not claim HSI verification passed.
+6. Native active-stake reads (Phase 2) now have live-verification tooling (#318, live run recorded 32/32 stakes, all checks passed) and single-block read pinning in the production reader (#319).
+7. The **HTT** source family (rest of Phase 6), Phase 7 pricing/valuation/PnL, frontend ended-stake/HSI UI, ended-stake exact-yield, and Ethereum eHEX all remain deferred to their documented phases.
 
-Do not treat Phase 5 completion as approval for Phase 6, Phase 7, Ethereum/Base execution, frontend accounting/pricing/PnL logic, or ended-stake exact-yield. [E1]
+Do not treat Phase 6 HSI implementation as approval for HSI live-verification claims, HTT, Phase 7, Ethereum/Base execution, frontend accounting/pricing/PnL logic, or ended-stake exact-yield. [E1]
 
 ---
 
@@ -202,7 +224,7 @@ Read docs/ai-handoff.md first.
 
 Then read the specific PR, roadmap, or docs I mention.
 
-Treat Gate 10 and Gate 11 as lifted by PR #252. Phase 5 (ended stake pipeline) is complete via PRs #307–#310. Do not infer Phase 6 or Phase 7 from either gate lift or Phase 5 completion.
+Treat Gate 10 and Gate 11 as lifted by PR #252. Phase 5 (ended stake pipeline) is complete via PRs #307–#310. Phase 6 HSI implementation is complete via PRs #312–#317, but HSI live verification is deferred pending an HSI-owning wallet (do not claim it passed). Native active-stake verification tooling (#318) and reader block pinning (#319) are merged. Do not infer HTT, Phase 7, or any HSI live-verification pass from HSI implementation completion.
 Do not propose runtime changes until you identify:
 1. current latest merged PR,
 2. current gate/status,

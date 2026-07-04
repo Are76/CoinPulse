@@ -1,6 +1,6 @@
 # CoinPulse Project Decisions
 
-**Last updated:** 2026-07-03
+**Last updated:** 2026-07-04
 
 ---
 
@@ -496,3 +496,35 @@ Do not: What must not happen as a result
 **Implications:** Any future change to the DTO shape, serialization, or list-level aggregation must be made inside the reader, not in the route. The route contract tests mock the reader — they do not duplicate reader logic.
 
 **Do not:** Add DTO transformation, field renaming, or list aggregation logic to the route handler. Do not add pricing, valuation, or PnL fields to the ended stake DTO until Phase 7 prerequisites are explicitly met.
+
+---
+
+## D-030: HSI Implementation Complete; HSI Live Verification Deferred
+
+**Status:** Active — HSI implementation complete (PRs #312–#317); HSI live verification deferred
+
+**Evidence:** [E1] `docs/v2-hexmining-roadmap.md` Phase 6 HSI Completion Record; [E2] PRs #312–#317 merged; [E3] `src/services/hexmining/hsi-discovery.ts`, `src/services/hexmining/hsi-reader.ts`, `src/services/hexmining/hsi-observation-store.ts`, `src/services/hexmining/hsi-live-verification-runner.ts`.
+
+**Decision:** The Phase 6 HSI (Hedron Stake Instance) **backend pipeline** is implemented across observation persistence (#312–#313), discovery (#314), reader enrichment (#315), and live-verification **tooling** (#316), with a docs alignment follow-up (#317). This is backend-only: HSI is **not yet exposed through the public DTO/API** — `HexStakeSource` is still typed `"native"` only and the public `GET /api/hexmining/stakes` route still calls only `readNativeHexStakes`. HSI **live verification itself was not executed** and is deferred pending availability of an HSI-owning wallet. The verification tooling shipped mock-validated only; the evidence template remains `PENDING OPERATOR EXECUTION`.
+
+**Rationale:** PR #316 delivered the operator runner, CLI wrapper, runbook, and evidence template, but a genuine live run requires a configured PulseChain RPC, a synced database, and an authorized HSI-holding wallet. No HSI-owning wallet is currently available to verify against. (The native verification runner in #318 reads HEX `stakeCount`/`stakeLists` only and does not query HSI/ERC-721 ownership, so it does not itself measure HSI NFT count.) Fabricating a verification report would violate the project's anti-fabrication and evidence-first guardrails (see D-017, D-020).
+
+**Implications:** HSI persistence, discovery, and reader enrichment are live on main as a backend pipeline. HSI is not surfaced in any public DTO or API response yet. The correct HSI live-verification status is: **deferred pending availability of an HSI-owning wallet.** Documentation must not state that HSI live verification passed. Public HSI DTO/API integration, and the HTT (Hedron Token Transfer / Actuator delegated) source family — the remainder of Phase 6 — are not started.
+
+**Do not:** State or imply that HSI live verification passed or that a live HSI run occurred. Do not state that HSI is exposed through public DTO/API contracts. Do not infer public HSI DTO/API integration, HTT support, Phase 7 pricing/valuation/PnL, or HSI frontend UI from HSI backend-implementation completion. Do not treat the existence of the HSI verification runner/runbook as a completed verification (consistent with D-020).
+
+---
+
+## D-031: Native Stake Reader Pins Reads to a Single Captured Block
+
+**Status:** Active — merged in PR #319 (follow-up to native live-verification tooling PR #318)
+
+**Evidence:** [E2] PRs #318–#319 merged; [E3] `src/services/hexmining/reader.ts` (`readNativeHexStakes`), `src/services/hexmining/native-stake-live-verification-runner.ts`.
+
+**Decision:** `readNativeHexStakes` captures the current block once up front and pins **every** `stakeCount` and `stakeLists` read to that single captured block. This aligns the production reader with the deterministic single-block pattern already used by the native live-verification runner (#318). If `getBlockNumber` fails, `capturedBlock` stays undefined, reads fall back to `latest`, and the existing `hexmining-provenance-block-unavailable` warning plus graceful degradation are preserved. `currentDay` is intentionally left unpinned — it is outside the `stakeCount`/`stakeLists` race, feeds yield-range math, and is not read by the verification runner.
+
+**Rationale:** Previously the reader captured a block number only for provenance and issued each `stakeCount`/`stakeLists` read at `latest` independently, which could theoretically race if stake state changed between calls. Pinning all reads to one block makes a single production read internally consistent and reproducible. PR #318's native live-verification tooling drives the existing read path and reports presence/consistency booleans only (no pricing, valuation, yield, or PnL); a live run against the fixture wallet recorded `observedAtBlock` 26944376, stakeCount 32, enumeratedCount 32, all checks passed.
+
+**Implications:** Native active-stake reads (Phase 2) are now block-pinned and have operator live-verification tooling. This is hardening/verification of already-complete native work — not a new roadmap phase and not pricing/valuation/PnL. Ended-stake live verification does not exist; only native active-stake verification tooling was added.
+
+**Do not:** Reintroduce independent `latest` reads for `stakeCount`/`stakeLists` in the production native reader. Do not remove the `latest` fallback or the `hexmining-provenance-block-unavailable` warning. Do not claim ended-stake live verification exists, and do not treat #318/#319 as pricing, valuation, PnL, or a new phase.
