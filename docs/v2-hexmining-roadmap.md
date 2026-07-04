@@ -22,7 +22,7 @@
 | Phase 4B | dailyDataRange read boundary, persistence wiring, and gated operator route | ✅ Complete — merged PRs #204, #205, #206 |
 | Phase 4C | Yield estimation and DTO wiring | ✅ Complete and gate-lifted — PRs #208–#252 merged; formula, DTO contract, reader assembly, route wiring, contract coverage, live-data evidence, and production promotion complete |
 | Phase 5 | Ended stake discovery and reader | ✅ Complete — merged PRs #307–#310 |
-| Phase 6 | HSI and HTT source families | 🟡 HSI implementation complete — merged PRs #312–#317 (persistence, discovery, reader, live-verification tooling). HSI live verification **deferred pending availability of an HSI-owning wallet**. HTT source family not started. |
+| Phase 6 | HSI and HTT source families | 🟡 HSI backend implementation complete — merged PRs #312–#317 (persistence, discovery, reader enrichment, live-verification tooling). Not yet exposed via public DTO/API (`HexStakeSource` still `"native"` only). HSI live verification **deferred pending availability of an HSI-owning wallet**. HTT source family not started. |
 | Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
 
 > **Native active-stake reads (Phase 2) hardening:** after Phase 2 shipped, PR #318 added native active-stake live-verification tooling and PR #319 pinned the production native stake reader's `stakeCount`/`stakeLists` reads to a single captured block. See the Native Active-Stake Verification Record below.
@@ -257,7 +257,7 @@ RawStakeAction (END rows)
 
 **Status:** HSI implementation complete — PRs #312–#317 merged to main (2026-07-04). HSI live verification is **deferred pending availability of an HSI-owning wallet**.
 
-Phase 6 delivers the HSI (Hedron Stake Instance) source family: a backend pipeline that persists, discovers, and reads HSI stakes owned as Hedron NFTs. The HTT (Hedron Token Transfer / Actuator delegated) source family remains **not started**. No pricing, valuation, PnL, or frontend UI was introduced.
+Phase 6 delivers the HSI (Hedron Stake Instance) **backend pipeline**: observation persistence, discovery, and reader enrichment for HSI stakes owned as Hedron NFTs, plus operator live-verification tooling. **HSI is not yet exposed through the public HexMining DTO/API contract** — `HexStakeSource` is still typed `"native"` only and the public `GET /api/hexmining/stakes` route still calls only `readNativeHexStakes`. Public HSI DTO/API integration is not yet done (see Planned / not started). The HTT (Hedron Token Transfer / Actuator delegated) source family remains **not started**. No pricing, valuation, PnL, or frontend UI was introduced.
 
 ### Slices merged (Implemented)
 
@@ -272,10 +272,11 @@ Phase 6 delivers the HSI (Hedron Stake Instance) source family: a backend pipeli
 
 ### Deferred
 
-- **HSI live verification (not completed).** PR #316 shipped the verification *tooling* only. A genuine live run against a real PulseChain HSI **was not executed**. The available production fixture wallet `0x75f808367720951e789d47e9e9db51148d9aa765` holds **0 HSI NFTs** (confirmed by the native live verification in #318), so no HSI-owning wallet is currently available. The evidence template remains `PENDING OPERATOR EXECUTION`. Status: **deferred pending availability of an HSI-owning wallet.** Do not state that HSI verification passed.
+- **HSI live verification (not completed).** PR #316 shipped the verification *tooling* only. A genuine live run against a real PulseChain HSI **was not executed**. No HSI-owning wallet is currently available to run it against. (Note: the native runner in #318 only reads HEX `stakeCount`/`stakeLists` — it does not query HSI/ERC-721 ownership, so it does not itself measure HSI NFT count.) The evidence template remains `PENDING OPERATOR EXECUTION`. Status: **deferred pending availability of an HSI-owning wallet.** Do not state that HSI verification passed.
 
 ### Planned / not started
 
+- **Public HSI DTO/API integration** — wiring HSI into `HexStakeSource` (`"hsi"`), the public DTO contract, and the `GET /api/hexmining/stakes` route. Not yet done; the backend HSI pipeline above is not exposed publicly.
 - HTT (Hedron Token Transfer / Actuator delegated) source family.
 - HexMining pricing, valuation, and PnL (Phase 7) — `valuation.status` and `pnl.status` remain `"unsupported"`.
 - HSI frontend UI.
@@ -289,7 +290,7 @@ Phase 6 delivers the HSI (Hedron Stake Instance) source family: a backend pipeli
 
 ### Implemented
 
-- **#318 — Native active-stake live verification tooling.** Additive operator tooling (runner, CLI wrapper, runbook, evidence template, mock-only tests). It drives the existing `stakeCount` → `stakeLists` read path against a known PulseChain wallet and reports presence/consistency booleans only — no pricing, valuation, yield, or PnL. A live run against the production fixture wallet `0x75f808367720951e789d47e9e9db51148d9aa765` (chain ID 369, `observedAtBlock` 26944376) recorded **stakeCount 32 / enumeratedCount 32, all checks passed** — 32 native HEX stakes and 0 HSI NFTs, confirming the fixture wallet's native-only shape.
+- **#318 — Native active-stake live verification tooling.** Additive operator tooling (runner, CLI wrapper, runbook, evidence template, mock-only tests). It drives the existing `stakeCount` → `stakeLists` read path against a known PulseChain wallet and reports presence/consistency booleans only — no pricing, valuation, yield, or PnL. A live run against the production fixture wallet `0x75f808367720951e789d47e9e9db51148d9aa765` (chain ID 369, `observedAtBlock` 26944376) recorded **stakeCount 32 / enumeratedCount 32, all checks passed** — i.e. 32 native HEX stakes enumerated consistently. This runner checks native `stakeCount`/`stakeLists` only; it does not query HSI/ERC-721 ownership.
 - **#319 — Production native stake reader block pinning.** `readNativeHexStakes` now captures the current block once and pins **every** `stakeCount` and `stakeLists` read to that single block, removing the theoretical race where per-read `latest` calls could observe changed stake state mid-enumeration. `getBlockNumber` failure still degrades gracefully to `latest` with the existing `hexmining-provenance-block-unavailable` warning; `currentDay` is intentionally left unpinned.
 
 ### Not claimed
