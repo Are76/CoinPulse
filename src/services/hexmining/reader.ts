@@ -70,11 +70,19 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
     };
   }
 
+  // Capture a single block up front so stakeCount and every stakeLists read are
+  // pinned to the same chain state. Reading them at "latest" separately could
+  // race if stake state changes between calls. When the block probe fails we
+  // keep the existing graceful degradation: `capturedBlock` stays undefined and
+  // the reads fall back to "latest" rather than hiding real stakes behind an
+  // empty list.
   let observedAtBlock: string | null = null;
+  let capturedBlock: bigint | undefined;
 
   try {
     const blockNumber = await args.publicClient.getBlockNumber();
     observedAtBlock = blockNumber.toString();
+    capturedBlock = blockNumber;
   } catch {
     listWarnings.push("hexmining-provenance-block-unavailable");
   }
@@ -87,6 +95,7 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
       abi: PHEX_READ_ABI,
       functionName: "stakeCount",
       args: [walletAddress as `0x${string}`],
+      blockNumber: capturedBlock,
     })) as bigint;
   } catch (error) {
     const failure = classifyRpcFailure({ error });
@@ -142,6 +151,7 @@ export async function readNativeHexStakes(args: ReadNativeHexStakesArgs): Promis
         abi: PHEX_READ_ABI,
         functionName: "stakeLists",
         args: [walletAddress as `0x${string}`, index],
+        blockNumber: capturedBlock,
       })) as readonly [number, bigint, bigint, number, number, number, boolean];
 
       const stakeId = raw[0];
