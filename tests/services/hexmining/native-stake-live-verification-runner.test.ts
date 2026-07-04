@@ -211,6 +211,20 @@ describe("runNativeStakeLiveVerification", () => {
     expect(report.allChecksPassed).toBe(false);
   });
 
+  it("fails closed on an absurd/corrupt stakeCount instead of enumerating", async () => {
+    const huge = 1_000_000n; // beyond MAX_REASONABLE_STAKE_COUNT (100_000)
+    const { deps, calls } = makePublicClient({ stakeCount: huge });
+
+    const report = await runNativeStakeLiveVerification(BASE_INPUT, deps);
+
+    expect(report.ok).toBe(false);
+    expect(report.code).toBe("hexmining-native-verification-stakecount-out-of-range");
+    expect(report.stakeCount).toBeNull();
+    expect(report.allChecksPassed).toBe(false);
+    // No enumeration was attempted.
+    expect(calls.some((c) => c.functionName === "stakeLists")).toBe(false);
+  });
+
   it("fails closed when the block RPC read throws", async () => {
     const { deps } = makePublicClient({ blockError: new Error("ECONNREFUSED") });
 

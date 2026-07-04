@@ -24,6 +24,12 @@ import { classifyRpcFailure } from "@/services/rpc/rpc-failure-taxonomy";
 
 const PULSECHAIN_CHAIN_ID = 369;
 
+// Upper bound on the number of native stakes we will enumerate. Real wallets
+// hold at most a few thousand; this cap fails closed if `stakeCount` decodes to
+// a corrupt/absurd value (e.g. a uint256 beyond Number.MAX_SAFE_INTEGER, which
+// would otherwise make the enumeration loop hang instead of erroring).
+const MAX_REASONABLE_STAKE_COUNT = 100_000n;
+
 // ─── HEX native stake ABI ─────────────────────────────────────────────────────
 //
 // Same reads the native stake sync uses. `stakeLists` returns the packed stake
@@ -141,7 +147,7 @@ export async function runNativeStakeLiveVerification(
   };
 
   // Guardrail: PulseChain only. Fail closed before any RPC.
-  if (input.chainId !== PULSECHAIN_CHAIN_ID) {
+  if (!isPulsechainVerificationChain(input.chainId)) {
     report.code = "hexmining-native-verification-unsupported-chain";
     return finalize(report);
   }
@@ -167,6 +173,12 @@ export async function runNativeStakeLiveVerification(
       args: [walletAddress as `0x${string}`],
       blockNumber: observedAtBlock,
     })) as bigint;
+    // Fail closed on a corrupt/absurd count rather than entering an unbounded
+    // (potentially hanging) enumeration loop.
+    if (raw < 0n || raw > MAX_REASONABLE_STAKE_COUNT) {
+      report.code = "hexmining-native-verification-stakecount-out-of-range";
+      return finalize(report);
+    }
     stakeCount = Number(raw);
   } catch (error) {
     const failure = classifyRpcFailure({ error });
@@ -223,6 +235,10 @@ export async function runNativeStakeLiveVerification(
     everyStakeHasStakedDays: report.stakes.every((s) => s.stakedDays != null),
     everyStakeHasStakeHearts: report.stakes.every((s) => s.stakeHearts != null),
     noDuplicateStakeIds: new Set(observedStakeIds).size === observedStakeIds.length,
+    // Asserts a single block was captured up front; that same `observedAtBlock`
+    // is threaded into every `readContract` call above by construction, so this
+    // confirms "a block was captured and all reads were pinned to it" — it is
+    // not (and cannot be) a post-hoc check that the node honored the pin.
     allReadsFromSingleBlock: report.observedAtBlock != null,
   };
 

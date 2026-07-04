@@ -16,7 +16,7 @@ reports what each read produced.
 
 Verify that the native HEX active-stake read path
 
-```
+```text
 stakeCount → stakeLists (enumerated)
 ```
 
