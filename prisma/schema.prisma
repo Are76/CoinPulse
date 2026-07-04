@@ -760,7 +760,19 @@ model HexStakeListSnapshot {
 // Each RawHsiStakeObservation row represents one persisted observation of an
 // HSI (Hedron Stake Instance) stake held by a wallet on PulseChain. An HSI
 // is a HEX stake that has been tokenized as an NFT via the Hedron protocol.
-// Rows are append-only raw audit evidence — never mutated after write.
+//
+// Lifecycle — these rows follow a deterministic two-phase lifecycle:
+//   1. Discovery creates an incomplete observation. Enumeration of the
+//      wallet's HSI NFTs writes a row with the stake metadata fields null
+//      and isComplete = false.
+//   2. Reader enrichment performs one update on that existing row, back-
+//      filling the resolved stake metadata and setting isComplete = true.
+// The row's identity is immutable: the identity fields (chainId,
+// walletAddress, hsiAddress, hsiTokenId, observedAtBlock) are never
+// rewritten, and sourceFamily/observedAt provenance is never changed.
+// Enrichment only fills stake metadata and flips isComplete — it locates the
+// row by primary key, so it never affects deduplication. No rows are ever
+// deleted, and no pricing or financial values are calculated on these rows.
 //
 // hsiTokenId is stored as a decimal string because ERC-721 token IDs are
 // uint256-sized on-chain and cannot be safely stored in BIGINT (int64).
@@ -769,13 +781,14 @@ model HexStakeListSnapshot {
 // part of the canonical identity tuple.
 //
 // The underlying HEX stake fields (stakeId, stakeIndex, stakedDays,
-// lockedDay, stakeShares, principalHex) are nullable because they may not
-// be recoverable if the RPC call to read the stake struct fails or returns
-// incomplete data. The store never coerces null fields to zero or a default.
+// lockedDay, stakeShares, principalHex) are nullable because they are left
+// null at discovery, and may still be unrecoverable at enrichment if the RPC
+// call to read the stake struct fails or returns incomplete data. The store
+// never coerces null fields to zero or a default.
 //
-// isComplete: false signals that one or more stake fields could not be
-// recovered. The DTO must surface this as a warning, never coerce missing
-// fields to zero.
+// isComplete: false signals that one or more stake fields have not yet been
+// recovered (either awaiting enrichment or unrecoverable at enrichment). The
+// DTO must surface this as a warning, never coerce missing fields to zero.
 //
 // Deduplication uses (chainId, walletAddress, hsiAddress, hsiTokenId,
 // observedAtBlock) enforced by a database-level unique constraint.
