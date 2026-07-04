@@ -532,8 +532,29 @@ function createStakeEndPublicClient(walletAddress: string) {
   };
 }
 
-function createLegacySelectorPublicClient(walletAddress: string) {
+type LegacyStakeFunction = "startStake" | "endStake";
+
+function createLegacySelectorPublicClient(
+  walletAddress: string,
+  legacyFunction: LegacyStakeFunction,
+) {
   const walletTopic = "0x0000000000000000000000001111111111111111111111111111111111111111";
+  const txHash = `0xlegacy${legacyFunction}`;
+  // The decoder rejects the legacy selector before any transfer-shape check, so
+  // an outbound pHEX transfer is enough to make the transaction a candidate for
+  // both the legacy startStake (0x128bfcae) and endStake (0x89e7f551) inputs.
+  const input =
+    legacyFunction === "startStake"
+      ? encodeFunctionData({
+          abi: LEGACY_PHEX_STAKE_ABI,
+          functionName: "startStake",
+          args: [100000000n, 365n],
+        })
+      : encodeFunctionData({
+          abi: LEGACY_PHEX_STAKE_ABI,
+          functionName: "endStake",
+          args: [3n, 42],
+        });
 
   return {
     getLogs: vi.fn(async (args: { topics?: readonly (string | readonly string[] | null)[] }) => {
@@ -546,7 +567,7 @@ function createLegacySelectorPublicClient(walletAddress: string) {
               blockNumber: 140n,
               data: "0x0000000000000000000000000000000000000000000000000000000005f5e100",
               logIndex: 2,
-              transactionHash: "0xlegacystart",
+              transactionHash: txHash,
               topics: [
                 TRANSFER_EVENT_TOPIC0,
                 walletTopic,
@@ -566,7 +587,7 @@ function createLegacySelectorPublicClient(walletAddress: string) {
       throw new Error("legacy selector must be rejected before any contract read");
     }),
     getTransaction: vi.fn(async () => ({
-      hash: "0xlegacystart",
+      hash: txHash,
       blockHash: "0xblock140",
       blockNumber: 140n,
       transactionIndex: 3,
@@ -574,16 +595,12 @@ function createLegacySelectorPublicClient(walletAddress: string) {
       to: PHEX_ADDRESS_LOWER,
       value: 0n,
       gasPrice: 2_000_000_000n,
-      // Encoded with the pre-fix selector 0x128bfcae, which no longer exists in
-      // the production ABI and must be skipped as an unsupported selector.
-      input: encodeFunctionData({
-        abi: LEGACY_PHEX_STAKE_ABI,
-        functionName: "startStake",
-        args: [100000000n, 365n],
-      }),
+      // Encoded with a pre-fix selector (0x128bfcae / 0x89e7f551) that no longer
+      // exists in the production ABI and must be skipped as an unsupported selector.
+      input,
     })),
     getTransactionReceipt: vi.fn(async () => ({
-      transactionHash: "0xlegacystart",
+      transactionHash: txHash,
       blockHash: "0xblock140",
       blockNumber: 140n,
       gasUsed: 150_000n,
@@ -812,33 +829,39 @@ describe("stake sync flow", () => {
     expect(stores.ledgerEntries.size).toBe(0);
   });
 
-  it("rejects legacy startStake/endStake selectors and persists no stake actions", async () => {
-    const stores = createMemoryStores();
-    const walletAddress = "0x1111111111111111111111111111111111111111";
-    const dependencies = createSyncDependencies({
-      db: stores.db as never,
-      publicClient: createLegacySelectorPublicClient(walletAddress) as never,
-    });
+  it.each([
+    { legacyFunction: "startStake" as const, selector: "0x128bfcae" },
+    { legacyFunction: "endStake" as const, selector: "0x89e7f551" },
+  ])(
+    "rejects the legacy $legacyFunction selector ($selector) and persists no stake actions",
+    async ({ legacyFunction }) => {
+      const stores = createMemoryStores();
+      const walletAddress = "0x1111111111111111111111111111111111111111";
+      const dependencies = createSyncDependencies({
+        db: stores.db as never,
+        publicClient: createLegacySelectorPublicClient(walletAddress, legacyFunction) as never,
+      });
 
-    const result = await runWalletSync({
-      wallet: { id: "wallet_1", chainId: 369, address: walletAddress },
-      sourceFamilies: ["STAKING"],
-      startBlock: 140n,
-      endBlock: 140n,
-      policyLabel: "stake-legacy-selector",
-      dependencies,
-    });
+      const result = await runWalletSync({
+        wallet: { id: "wallet_1", chainId: 369, address: walletAddress },
+        sourceFamilies: ["STAKING"],
+        startBlock: 140n,
+        endBlock: 140n,
+        policyLabel: `stake-legacy-${legacyFunction}`,
+        dependencies,
+      });
 
-    // The pHEX transfer is still ingested as a raw log, but the transaction
-    // carries the pre-fix selector 0x128bfcae, which the decoder no longer
-    // recognizes, so no stake action or ledger entry is produced.
-    expect(result.counts).toEqual({
-      rawLogs: 1,
-      actionGroups: 0,
-      ledgerEntries: 0,
-    });
-    expect(result.warningCount).toBeGreaterThanOrEqual(1);
-    expect(stores.rawStakeActions.size).toBe(0);
-    expect(stores.ledgerEntries.size).toBe(0);
-  });
+      // The pHEX transfer is still ingested as a raw log, but the transaction
+      // carries a pre-fix selector (0x128bfcae / 0x89e7f551) that the decoder no
+      // longer recognizes, so no stake action or ledger entry is produced.
+      expect(result.counts).toEqual({
+        rawLogs: 1,
+        actionGroups: 0,
+        ledgerEntries: 0,
+      });
+      expect(result.warningCount).toBeGreaterThanOrEqual(1);
+      expect(stores.rawStakeActions.size).toBe(0);
+      expect(stores.ledgerEntries.size).toBe(0);
+    },
+  );
 });
