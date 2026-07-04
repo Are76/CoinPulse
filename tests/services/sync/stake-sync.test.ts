@@ -7,7 +7,17 @@ import { runWalletSync } from "@/services/sync/sync-orchestrator";
 import { createSyncDependencies, TRANSFER_EVENT_TOPIC0 } from "@/services/sync/transfer-sync";
 
 const PHEX_ADDRESS_LOWER = PHEX_ADDRESS.toLowerCase();
+// Real on-chain HEX stake selectors: stakeStart = 0x52a438b8, stakeEnd = 0x343009a2.
+// Encoding with these names proves the production decoder handles the genuine
+// selectors emitted by the native PulseChain HEX contract.
 const PHEX_STAKE_ABI = parseAbi([
+  "function stakeStart(uint256 newStakedHearts, uint256 newStakedDays)",
+  "function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam)",
+]);
+
+// Pre-fix (incorrect) selectors the production decoder must now reject:
+// startStake = 0x128bfcae, endStake = 0x89e7f551.
+const LEGACY_PHEX_STAKE_ABI = parseAbi([
   "function startStake(uint256 newStakedHearts, uint256 newStakedDays)",
   "function endStake(uint256 stakeIndex, uint40 stakeIdParam)",
 ]);
@@ -448,7 +458,7 @@ function createStakeStartPublicClient(walletAddress: string) {
       gasPrice: 2_000_000_000n,
       input: encodeFunctionData({
         abi: PHEX_STAKE_ABI,
-        functionName: "startStake",
+        functionName: "stakeStart",
         args: [100000000n, 365n],
       }),
     })),
@@ -507,7 +517,7 @@ function createStakeEndPublicClient(walletAddress: string) {
       gasPrice: 2_000_000_000n,
       input: encodeFunctionData({
         abi: PHEX_STAKE_ABI,
-        functionName: "endStake",
+        functionName: "stakeEnd",
         args: [3n, 42],
       }),
     })),
@@ -516,6 +526,84 @@ function createStakeEndPublicClient(walletAddress: string) {
       blockHash: "0xblock141",
       blockNumber: 141n,
       gasUsed: 160_000n,
+      effectiveGasPrice: 2_000_000_000n,
+      logs: [],
+    })),
+  };
+}
+
+type LegacyStakeFunction = "startStake" | "endStake";
+
+function createLegacySelectorPublicClient(
+  walletAddress: string,
+  legacyFunction: LegacyStakeFunction,
+) {
+  const walletTopic = "0x0000000000000000000000001111111111111111111111111111111111111111";
+  const txHash = `0xlegacy${legacyFunction}`;
+  // The decoder rejects the legacy selector before any transfer-shape check, so
+  // an outbound pHEX transfer is enough to make the transaction a candidate for
+  // both the legacy startStake (0x128bfcae) and endStake (0x89e7f551) inputs.
+  const input =
+    legacyFunction === "startStake"
+      ? encodeFunctionData({
+          abi: LEGACY_PHEX_STAKE_ABI,
+          functionName: "startStake",
+          args: [100000000n, 365n],
+        })
+      : encodeFunctionData({
+          abi: LEGACY_PHEX_STAKE_ABI,
+          functionName: "endStake",
+          args: [3n, 42],
+        });
+
+  return {
+    getLogs: vi.fn(async (args: { topics?: readonly (string | readonly string[] | null)[] }) => {
+      const outgoing = args.topics?.[1] === walletTopic;
+      return outgoing
+        ? [
+            {
+              address: PHEX_ADDRESS_LOWER,
+              blockHash: "0xblock140",
+              blockNumber: 140n,
+              data: "0x0000000000000000000000000000000000000000000000000000000005f5e100",
+              logIndex: 2,
+              transactionHash: txHash,
+              topics: [
+                TRANSFER_EVENT_TOPIC0,
+                walletTopic,
+                "0x0000000000000000000000002b591e99afe9f32eaa6214f7b7629768c40eeb39",
+              ],
+            },
+          ]
+        : [];
+    }),
+    getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+      number: blockNumber,
+      hash: "0xblock140",
+      parentHash: "0xblock139",
+      timestamp: 1_700_000_500n,
+    })),
+    readContract: vi.fn(async () => {
+      throw new Error("legacy selector must be rejected before any contract read");
+    }),
+    getTransaction: vi.fn(async () => ({
+      hash: txHash,
+      blockHash: "0xblock140",
+      blockNumber: 140n,
+      transactionIndex: 3,
+      from: walletAddress,
+      to: PHEX_ADDRESS_LOWER,
+      value: 0n,
+      gasPrice: 2_000_000_000n,
+      // Encoded with a pre-fix selector (0x128bfcae / 0x89e7f551) that no longer
+      // exists in the production ABI and must be skipped as an unsupported selector.
+      input,
+    })),
+    getTransactionReceipt: vi.fn(async () => ({
+      transactionHash: txHash,
+      blockHash: "0xblock140",
+      blockNumber: 140n,
+      gasUsed: 150_000n,
       effectiveGasPrice: 2_000_000_000n,
       logs: [],
     })),
@@ -707,7 +795,7 @@ describe("stake sync flow", () => {
           gasPrice: 2_000_000_000n,
           input: encodeFunctionData({
             abi: PHEX_STAKE_ABI,
-            functionName: "startStake",
+            functionName: "stakeStart",
             args: [100000000n, 365n],
           }),
         })),
@@ -740,4 +828,40 @@ describe("stake sync flow", () => {
     expect(stores.rawStakeActions.size).toBe(0);
     expect(stores.ledgerEntries.size).toBe(0);
   });
+
+  it.each([
+    { legacyFunction: "startStake" as const, selector: "0x128bfcae" },
+    { legacyFunction: "endStake" as const, selector: "0x89e7f551" },
+  ])(
+    "rejects the legacy $legacyFunction selector ($selector) and persists no stake actions",
+    async ({ legacyFunction }) => {
+      const stores = createMemoryStores();
+      const walletAddress = "0x1111111111111111111111111111111111111111";
+      const dependencies = createSyncDependencies({
+        db: stores.db as never,
+        publicClient: createLegacySelectorPublicClient(walletAddress, legacyFunction) as never,
+      });
+
+      const result = await runWalletSync({
+        wallet: { id: "wallet_1", chainId: 369, address: walletAddress },
+        sourceFamilies: ["STAKING"],
+        startBlock: 140n,
+        endBlock: 140n,
+        policyLabel: `stake-legacy-${legacyFunction}`,
+        dependencies,
+      });
+
+      // The pHEX transfer is still ingested as a raw log, but the transaction
+      // carries a pre-fix selector (0x128bfcae / 0x89e7f551) that the decoder no
+      // longer recognizes, so no stake action or ledger entry is produced.
+      expect(result.counts).toEqual({
+        rawLogs: 1,
+        actionGroups: 0,
+        ledgerEntries: 0,
+      });
+      expect(result.warningCount).toBeGreaterThanOrEqual(1);
+      expect(stores.rawStakeActions.size).toBe(0);
+      expect(stores.ledgerEntries.size).toBe(0);
+    },
+  );
 });

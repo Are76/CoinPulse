@@ -27,9 +27,14 @@ import {
 
 const PHEX_ADDRESS_LOWER = PHEX_ADDRESS.toLowerCase();
 
+// The native PulseChain HEX contract exposes stake mutations as stakeStart /
+// stakeEnd (selectors 0x52a438b8 / 0x343009a2), not startStake / endStake.
+// The function signatures must match the on-chain names exactly so viem derives
+// the correct selectors; otherwise every genuine HEX stake transaction fails to
+// decode and is skipped as UNSUPPORTED.
 const PHEX_STAKE_ABI = parseAbi([
-  "function startStake(uint256 newStakedHearts, uint256 newStakedDays)",
-  "function endStake(uint256 stakeIndex, uint40 stakeIdParam)",
+  "function stakeStart(uint256 newStakedHearts, uint256 newStakedDays)",
+  "function stakeEnd(uint256 stakeIndex, uint40 stakeIdParam)",
   "function stakeCount(address stakerAddr) view returns (uint256)",
   "function stakeLists(address stakerAddr, uint256 stakeIndex) view returns (uint40 stakeId, uint72 stakedHearts, uint72 stakeShares, uint16 lockedDay, uint16 stakedDays, uint16 unlockedDay, bool isAutoStake)",
 ]);
@@ -375,7 +380,7 @@ function decodeStakeCall(input: string | null | undefined): DecodedStakeCall {
       data: input as `0x${string}`,
     });
 
-    if (decoded.functionName === "startStake") {
+    if (decoded.functionName === "stakeStart") {
       const [principalRaw, stakedDays] = decoded.args as readonly [bigint, bigint];
 
       return {
@@ -385,7 +390,7 @@ function decodeStakeCall(input: string | null | undefined): DecodedStakeCall {
       };
     }
 
-    if (decoded.functionName === "endStake") {
+    if (decoded.functionName === "stakeEnd") {
       const [stakeIndex, stakeIdParam] = decoded.args as readonly [
         bigint,
         bigint | number,
