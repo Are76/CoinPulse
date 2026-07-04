@@ -56,11 +56,19 @@ function makePublicClient(config: {
   stakeCountError?: unknown;
   stakes?: StakeTuple[];
   throwIndices?: number[];
+  rpcChainId?: number;
+  chainIdError?: unknown;
 }) {
   const calls: ReadCall[] = [];
   let getBlockNumberCalls = 0;
+  let getChainIdCalls = 0;
 
   const client = {
+    async getChainId() {
+      getChainIdCalls++;
+      if (config.chainIdError) throw config.chainIdError;
+      return config.rpcChainId ?? CHAIN_ID;
+    },
     async getBlockNumber() {
       getBlockNumberCalls++;
       if (config.blockError) throw config.blockError;
@@ -93,6 +101,7 @@ function makePublicClient(config: {
     deps: { publicClient: client } as NativeStakeLiveVerificationDeps,
     calls,
     getBlockNumberCallCount: () => getBlockNumberCalls,
+    getChainIdCallCount: () => getChainIdCalls,
   };
 }
 
@@ -274,13 +283,53 @@ describe("runNativeStakeLiveVerification", () => {
   });
 
   it("short-circuits on an unsupported chain before any RPC", async () => {
-    const { deps, calls, getBlockNumberCallCount } = makePublicClient({ stakeCount: 2n, stakes: [STAKE_A, STAKE_B] });
+    const { deps, calls, getBlockNumberCallCount, getChainIdCallCount } = makePublicClient({ stakeCount: 2n, stakes: [STAKE_A, STAKE_B] });
 
     const report = await runNativeStakeLiveVerification({ ...BASE_INPUT, chainId: 1 }, deps);
 
     expect(report.ok).toBe(false);
     expect(report.code).toBe("hexmining-native-verification-unsupported-chain");
     expect(report.allChecksPassed).toBe(false);
+    // Declared-chain guard fails closed before touching the node at all.
+    expect(getChainIdCallCount()).toBe(0);
+    expect(getBlockNumberCallCount()).toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("fails closed when the connected RPC serves a non-PulseChain chain", async () => {
+    // Declared chainId is 369, but the node reports Ethereum mainnet (1): the
+    // HEX stake ABI exists there too, so this must not emit PulseChain evidence.
+    const { deps, calls, getBlockNumberCallCount } = makePublicClient({
+      rpcChainId: 1,
+      stakeCount: 2n,
+      stakes: [STAKE_A, STAKE_B],
+    });
+
+    const report = await runNativeStakeLiveVerification(BASE_INPUT, deps);
+
+    expect(report.ok).toBe(false);
+    expect(report.code).toBe("hexmining-native-verification-rpc-chain-mismatch");
+    expect(report.warnings.some((w) => w.includes("expected=369") && w.includes("got=1"))).toBe(true);
+    expect(report.allChecksPassed).toBe(false);
+    // No block capture and no stake reads once the chain mismatch is detected.
+    expect(report.observedAtBlock).toBeNull();
+    expect(getBlockNumberCallCount()).toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("fails closed when the getChainId RPC read throws", async () => {
+    const { deps, calls, getBlockNumberCallCount } = makePublicClient({
+      chainIdError: new Error("request timed out"),
+      stakeCount: 2n,
+      stakes: [STAKE_A, STAKE_B],
+    });
+
+    const report = await runNativeStakeLiveVerification(BASE_INPUT, deps);
+
+    expect(report.ok).toBe(false);
+    expect(report.code).toBe("hexmining-native-verification-chainid-rpc-timeout");
+    expect(report.allChecksPassed).toBe(false);
+    expect(report.observedAtBlock).toBeNull();
     expect(getBlockNumberCallCount()).toBe(0);
     expect(calls).toHaveLength(0);
   });

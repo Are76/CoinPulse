@@ -45,7 +45,7 @@ const PHEX_STAKE_ABI = parseAbi([
 
 export type NativeStakeLiveVerificationReadClient = Pick<
   PublicClient,
-  "readContract" | "getBlockNumber"
+  "readContract" | "getBlockNumber" | "getChainId"
 >;
 
 export type NativeStakeLiveVerificationInput = {
@@ -146,9 +146,31 @@ export async function runNativeStakeLiveVerification(
     allChecksPassed: false,
   };
 
-  // Guardrail: PulseChain only. Fail closed before any RPC.
+  // Guardrail: PulseChain only (caller-declared). Fail closed before any RPC.
   if (!isPulsechainVerificationChain(input.chainId)) {
     report.code = "hexmining-native-verification-unsupported-chain";
+    return finalize(report);
+  }
+
+  // Guardrail: verify the *connected* RPC actually serves PulseChain (369).
+  // `input.chainId` above is caller-supplied and is trivially satisfied by the
+  // CLI (which hard-codes 369). Without asking the node, an operator who points
+  // `--rpcUrl` at an Ethereum/mainnet/fork endpoint — where the original HEX
+  // contract implements the same stake ABI — would get chainId:369 PASS evidence
+  // for non-PulseChain data. Ask the node and fail closed before any evidence read.
+  let rpcChainId: number;
+  try {
+    rpcChainId = await deps.publicClient.getChainId();
+  } catch (error) {
+    const failure = classifyRpcFailure({ error });
+    report.code = `hexmining-native-verification-chainid-rpc-${failure.code}`;
+    return finalize(report);
+  }
+  if (!isPulsechainVerificationChain(rpcChainId)) {
+    report.code = "hexmining-native-verification-rpc-chain-mismatch";
+    report.warnings.push(
+      `hexmining-native-verification-rpc-chain-mismatch:expected=${PULSECHAIN_CHAIN_ID},got=${rpcChainId}`,
+    );
     return finalize(report);
   }
 
