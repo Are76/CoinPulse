@@ -2,9 +2,9 @@
 
 > **AI USAGE NOTE:** This is the condensed active working document (~200 lines). Full historical context, completed-phase details, PR logs, validation history, and research records are in [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md). **For routine implementation work, read only this file.** Use `grep` to locate specific gates or sections. Do not load the archive into context unless explicitly asked.
 
-**Document status:** Phase 5 complete — PRs #307–#310 merged. Ended stake persistence, discovery, reader, DTO assembly, and read-only API route are all live on main. Phase 4C remains complete and gate-lifted (PRs #208–#252). Public estimated yield is live for valid evidence paths.
+**Document status:** Phase 6 HSI implementation complete — PRs #312–#317 merged. HSI observation persistence, discovery, reader enrichment, and live-verification tooling are all live on main; HSI live verification itself is deferred pending availability of an HSI-owning wallet. Native active-stake reads (Phase 2) gained live-verification tooling (#318) and deterministic single-block read pinning (#319). Phase 5 remains complete (PRs #307–#310). Phase 4C remains complete and gate-lifted (PRs #208–#252). Public estimated yield is live for valid evidence paths. HTT source family remains not started.
 **Created:** 2026-06-06
-**Last updated:** 2026-07-03 (PRs #307–#310: Phase 5 ended stake pipeline complete)
+**Last updated:** 2026-07-04 (PRs #312–#317: Phase 6 HSI implementation complete; PRs #318–#319: native active-stake live-verification tooling and read block pinning)
 
 **Archive:** [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md) — historical PR logs, completed phase details, research records, validation history, full §1–§15 prose.
 
@@ -22,8 +22,10 @@
 | Phase 4B | dailyDataRange read boundary, persistence wiring, and gated operator route | ✅ Complete — merged PRs #204, #205, #206 |
 | Phase 4C | Yield estimation and DTO wiring | ✅ Complete and gate-lifted — PRs #208–#252 merged; formula, DTO contract, reader assembly, route wiring, contract coverage, live-data evidence, and production promotion complete |
 | Phase 5 | Ended stake discovery and reader | ✅ Complete — merged PRs #307–#310 |
-| Phase 6 | HSI and HTT source families | 🔲 Not started |
+| Phase 6 | HSI and HTT source families | 🟡 HSI implementation complete — merged PRs #312–#317 (persistence, discovery, reader, live-verification tooling). HSI live verification **deferred pending availability of an HSI-owning wallet**. HTT source family not started. |
 | Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
+
+> **Native active-stake reads (Phase 2) hardening:** after Phase 2 shipped, PR #318 added native active-stake live-verification tooling and PR #319 pinned the production native stake reader's `stakeCount`/`stakeLists` reads to a single captured block. See the Native Active-Stake Verification Record below.
 
 ---
 
@@ -248,3 +250,49 @@ RawStakeAction (END rows)
 - No frontend UI or HexMining ended-stake display
 - No Ethereum eHEX
 - No schema changes after Slice 1
+
+---
+
+## Phase 6 HSI Completion Record
+
+**Status:** HSI implementation complete — PRs #312–#317 merged to main (2026-07-04). HSI live verification is **deferred pending availability of an HSI-owning wallet**.
+
+Phase 6 delivers the HSI (Hedron Stake Instance) source family: a backend pipeline that persists, discovers, and reads HSI stakes owned as Hedron NFTs. The HTT (Hedron Token Transfer / Actuator delegated) source family remains **not started**. No pricing, valuation, PnL, or frontend UI was introduced.
+
+### Slices merged (Implemented)
+
+| PR | Slice | What it delivered |
+|---|---|---|
+| #312 | Slice 1 — Observation persistence | `RawHsiStakeObservation` Prisma model, migration, and idempotent observation store |
+| #313 | Slice 1 hardening | Hardened `RawHsiStakeObservation` identity/storage safety and migration index naming |
+| #314 | Slice 2 — Discovery service | `discoverHsiStakes`: reads HSI NFT ownership, pins reads to a captured `observedAtBlock`, rejects unsupported `chainId` before RPC/persistence, persists two-phase-lifecycle observations |
+| #315 | Slice 3 — Reader (stake enrichment) | HSI reader that enriches persisted observations with stake fields and flips `isComplete` |
+| #316 | Slice 4 — Live-verification **tooling** | `runHsiLiveVerification` runner, opt-in CLI wrapper, operator runbook, and evidence template (mock-validated); presence/consistency booleans only |
+| #317 | Docs alignment | Aligned `RawHsiStakeObservation` comment with the two-phase lifecycle |
+
+### Deferred
+
+- **HSI live verification (not completed).** PR #316 shipped the verification *tooling* only. A genuine live run against a real PulseChain HSI **was not executed**. The available production fixture wallet `0x75f808367720951e789d47e9e9db51148d9aa765` holds **0 HSI NFTs** (confirmed by the native live verification in #318), so no HSI-owning wallet is currently available. The evidence template remains `PENDING OPERATOR EXECUTION`. Status: **deferred pending availability of an HSI-owning wallet.** Do not state that HSI verification passed.
+
+### Planned / not started
+
+- HTT (Hedron Token Transfer / Actuator delegated) source family.
+- HexMining pricing, valuation, and PnL (Phase 7) — `valuation.status` and `pnl.status` remain `"unsupported"`.
+- HSI frontend UI.
+- Ethereum eHEX.
+
+---
+
+## Native Active-Stake Verification Record
+
+**Status:** Complete — PRs #318–#319 merged to main (2026-07-04). These are hardening/verification follow-ups to the already-complete native active-stake reads (Phase 2). No new roadmap phase.
+
+### Implemented
+
+- **#318 — Native active-stake live verification tooling.** Additive operator tooling (runner, CLI wrapper, runbook, evidence template, mock-only tests). It drives the existing `stakeCount` → `stakeLists` read path against a known PulseChain wallet and reports presence/consistency booleans only — no pricing, valuation, yield, or PnL. A live run against the production fixture wallet `0x75f808367720951e789d47e9e9db51148d9aa765` (chain ID 369, `observedAtBlock` 26944376) recorded **stakeCount 32 / enumeratedCount 32, all checks passed** — 32 native HEX stakes and 0 HSI NFTs, confirming the fixture wallet's native-only shape.
+- **#319 — Production native stake reader block pinning.** `readNativeHexStakes` now captures the current block once and pins **every** `stakeCount` and `stakeLists` read to that single block, removing the theoretical race where per-read `latest` calls could observe changed stake state mid-enumeration. `getBlockNumber` failure still degrades gracefully to `latest` with the existing `hexmining-provenance-block-unavailable` warning; `currentDay` is intentionally left unpinned.
+
+### Not claimed
+
+- No ended-stake live verification exists — the ended-stake pipeline (Phase 5) is discovery/reader only; do not claim live verification for it.
+- No pricing, valuation, PnL, or frontend accounting was introduced by #318 or #319.
