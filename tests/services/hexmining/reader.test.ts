@@ -23,6 +23,7 @@ type MockReadContractArgs = {
   abi: readonly unknown[];
   functionName: string;
   args?: readonly unknown[];
+  blockNumber?: bigint;
 };
 
 function makeDefaultReadContract() {
@@ -1067,5 +1068,157 @@ describe("yield estimator wiring", () => {
     // Must NOT emit "applicable" + null combination — that would violate BPD correlation.
     expect(y.bpdYieldStatus).toBe("unknown");
     expect(y.bpdYieldHex).toBeNull();
+  });
+});
+
+// ─── Block pinning — deterministic reads at one captured block ───────────────────
+//
+// Hardening: the native reader must capture a single block up front and pin the
+// stakeCount read and every stakeLists read to that same block, so stake state
+// cannot race between reads. These tests inspect the exact `blockNumber` threaded
+// into each readContract call and the number of getBlockNumber calls.
+
+describe("readNativeHexStakes — block pinning determinism", () => {
+  // A recording client that captures the full readContract args (including
+  // blockNumber) for every call, and counts getBlockNumber invocations.
+  function makeRecordingClient(opts: {
+    readContract: (args: MockReadContractArgs) => Promise<unknown>;
+    getBlockNumber?: () => Promise<bigint>;
+  }) {
+    const readContractMock = vi.fn(opts.readContract);
+    const getBlockNumberMock = vi.fn(opts.getBlockNumber ?? (async () => DEFAULT_BLOCK));
+    const client = {
+      getBlockNumber: getBlockNumberMock,
+      readContract: readContractMock,
+    } as unknown as HexMiningReadClient;
+    const callsFor = (functionName: string) =>
+      readContractMock.mock.calls
+        .map((c) => c[0] as MockReadContractArgs)
+        .filter((a) => a.functionName === functionName);
+    return { client, readContractMock, getBlockNumberMock, callsFor };
+  }
+
+  // 38. stakeCount and every stakeLists read are pinned to the one captured block.
+  it("pins stakeCount and every stakeLists read to the single captured block", async () => {
+    const { client, getBlockNumberMock, callsFor } = makeRecordingClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 3n;
+        if (functionName === "currentDay") return DEFAULT_CURRENT_DAY;
+        if (functionName === "stakeLists") return NOMINAL_STAKE;
+        throw new Error(`unexpected function: ${functionName}`);
+      },
+    });
+
+    await readNativeHexStakes({ publicClient: client, walletAddress: WALLET, chainId: CHAIN_ID });
+
+    // Captured exactly once per reader execution where native stakes are read.
+    expect(getBlockNumberMock).toHaveBeenCalledTimes(1);
+
+    const stakeCountCalls = callsFor("stakeCount");
+    expect(stakeCountCalls).toHaveLength(1);
+    expect(stakeCountCalls[0]!.blockNumber).toBe(DEFAULT_BLOCK);
+
+    const stakeListsCalls = callsFor("stakeLists");
+    expect(stakeListsCalls).toHaveLength(3);
+    for (const call of stakeListsCalls) {
+      expect(call.blockNumber).toBe(DEFAULT_BLOCK);
+    }
+
+    // stakeCount and stakeLists all share the identical captured block value.
+    const pinned = new Set(
+      [...stakeCountCalls, ...stakeListsCalls].map((c) => c.blockNumber),
+    );
+    expect(pinned).toEqual(new Set([DEFAULT_BLOCK]));
+  });
+
+  // 39. Zero-stake wallet: stakeCount still pinned, no stakeLists reads, block probed once.
+  it("pins stakeCount to the captured block and reads no stakeLists for a zero-stake wallet", async () => {
+    const { client, getBlockNumberMock, callsFor } = makeRecordingClient({
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 0n;
+        throw new Error(`unexpected function: ${functionName}`);
+      },
+    });
+
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+    });
+
+    expect(getBlockNumberMock).toHaveBeenCalledTimes(1);
+    const stakeCountCalls = callsFor("stakeCount");
+    expect(stakeCountCalls).toHaveLength(1);
+    expect(stakeCountCalls[0]!.blockNumber).toBe(DEFAULT_BLOCK);
+    expect(callsFor("stakeLists")).toHaveLength(0);
+
+    // Zero-stake behavior remains safe and unchanged.
+    expect(result.stakes).toEqual([]);
+    expect(result.totalCount).toBe(0);
+    expect(result.isComplete).toBe(true);
+    expect(result.observedAtBlock).toBe(DEFAULT_BLOCK.toString());
+  });
+
+  // 40. getBlockNumber RPC failure is handled safely: reads fall back to latest,
+  //     no internals leak, and existing graceful-degradation behavior is preserved.
+  it("falls back to latest-block reads without leaking internals when getBlockNumber fails", async () => {
+    const { client, getBlockNumberMock, callsFor } = makeRecordingClient({
+      getBlockNumber: async () => {
+        throw new Error("getBlockNumber timeout secret-internal-detail");
+      },
+      readContract: async ({ functionName }: MockReadContractArgs) => {
+        if (functionName === "stakeCount") return 2n;
+        if (functionName === "currentDay") return DEFAULT_CURRENT_DAY;
+        if (functionName === "stakeLists") return NOMINAL_STAKE;
+        throw new Error(`unexpected function: ${functionName}`);
+      },
+    });
+
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+    });
+
+    // Block probed exactly once; no retry storm.
+    expect(getBlockNumberMock).toHaveBeenCalledTimes(1);
+
+    // Without a captured block, reads fall back to "latest" (blockNumber undefined)
+    // rather than hiding real stakes behind an empty list.
+    expect(callsFor("stakeCount")[0]!.blockNumber).toBeUndefined();
+    for (const call of callsFor("stakeLists")) {
+      expect(call.blockNumber).toBeUndefined();
+    }
+
+    // Existing safe-degradation contract preserved (matches prior getBlockNumber-throws test).
+    expect(result.observedAtBlock).toBeNull();
+    expect(result.warnings).toContain("hexmining-provenance-block-unavailable");
+    expect(result.stakes).toHaveLength(2);
+    expect(result.isComplete).toBe(true);
+
+    // Does not leak the raw error / internal details anywhere in the output.
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("secret-internal-detail");
+    expect(serialized).not.toContain("timeout");
+  });
+
+  // 41. Regression: existing unsupported pricing/valuation/pnl/yield sentinels are
+  //     unchanged by block pinning (no financial calculation was introduced).
+  it("leaves pricing, valuation, pnl, and yield unsupported sentinels unchanged under block pinning", async () => {
+    const { client } = makeRecordingClient({
+      readContract: makeDefaultReadContract(),
+    });
+    const result = await readNativeHexStakes({
+      publicClient: client,
+      walletAddress: WALLET,
+      chainId: CHAIN_ID,
+    });
+    const stake = result.stakes[0]!;
+    expect(stake.pricing.status).toBe("unsupported");
+    expect(stake.valuation.status).toBe("unsupported");
+    expect(stake.valuation.valueQuote).toBeNull();
+    expect(stake.pnl.status).toBe("unsupported");
+    expect(stake.yield.status).toBe("unsupported");
+    expect(stake.yield.estimatedYieldHearts).toBeNull();
   });
 });
