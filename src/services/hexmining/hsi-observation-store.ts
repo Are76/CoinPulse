@@ -28,6 +28,22 @@ export type ReadHsiStakeObservationsInput = {
   walletAddress: string;
 };
 
+// Enrichment input for an already-persisted incomplete observation. The reader
+// slice (Phase 6 Slice 3) resolves the underlying HEX stake struct and back-fills
+// these fields on the existing row. Identity fields (chainId, walletAddress,
+// hsiAddress, hsiTokenId, observedAtBlock) are never touched — only the stake
+// metadata, isComplete, and warnings are updated.
+export type EnrichHsiStakeObservationInput = {
+  id: string;
+  stakeId: string;
+  stakeIndex: number;
+  stakedDays: number;
+  lockedDay: number;
+  stakeShares: string;
+  principalHex: string;
+  warnings: string[];
+};
+
 // ─── Output types ─────────────────────────────────────────────────────────────
 
 export type PersistedHsiStakeObservation = {
@@ -208,6 +224,65 @@ export async function persistHsiStakeObservation(
     }
     throw err;
   }
+}
+
+// ─── Enrichment client ──────────────────────────────────────────────────────────
+//
+// The enrichment path additionally needs `update`. It is kept as a superset of
+// StoreClient (rather than baked into StoreClient) so the write/read contracts
+// and their existing mocks stay untouched.
+
+type EnrichStoreClient = StoreClient & {
+  rawHsiStakeObservation: {
+    update(args: {
+      where: { id: string };
+      data: {
+        stakeId: string;
+        stakeIndex: number;
+        stakedDays: number;
+        lockedDay: number;
+        stakeShares: string;
+        principalHex: string;
+        isComplete: boolean;
+        warnings: string[];
+      };
+      select: { id: true };
+    }): Promise<{ id: string }>;
+  };
+};
+
+// ─── Enrichment update ──────────────────────────────────────────────────────────
+//
+// Back-fills the underlying HEX stake metadata on an existing incomplete
+// observation and flips isComplete to true. The row is located by primary key
+// (id) only — the identity tuple is left untouched, so this never affects
+// deduplication. Warnings are replaced wholesale with the caller-supplied set
+// (the reader strips the discovery "stake-fields-unknown" warning before
+// calling). Stake fields are written verbatim from the caller with no coercion.
+//
+// This is the only mutation path for RawHsiStakeObservation. It is used strictly
+// to complete the discover → enrich lifecycle; it never rewrites identity fields
+// and never deletes rows.
+
+export async function enrichHsiStakeObservation(
+  input: EnrichHsiStakeObservationInput,
+  client: EnrichStoreClient = getDb() as unknown as EnrichStoreClient,
+): Promise<{ id: string }> {
+  const row = await client.rawHsiStakeObservation.update({
+    where: { id: input.id },
+    data: {
+      stakeId: input.stakeId,
+      stakeIndex: input.stakeIndex,
+      stakedDays: input.stakedDays,
+      lockedDay: input.lockedDay,
+      stakeShares: input.stakeShares,
+      principalHex: input.principalHex,
+      isComplete: true,
+      warnings: input.warnings,
+    },
+    select: { id: true },
+  });
+  return { id: row.id };
 }
 
 // ─── Read ──────────────────────────────────────────────────────────────────────
