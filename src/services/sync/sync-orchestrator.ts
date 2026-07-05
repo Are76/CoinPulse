@@ -182,7 +182,14 @@ export async function runWalletSync<TLog = unknown>(args: {
 
       counts.rawLogs += ingestResult.rawLogCount;
       warningCount += ingestResult.warnings.length;
-      warningDetails.push(...ingestResult.warnings);
+      // Append one-by-one instead of `push(...ingestResult.warnings)`: a single
+      // window can emit hundreds of thousands of warnings (e.g. STAKING over a
+      // heavily-traded pHEX range), and spreading that many arguments exceeds
+      // V8's call-argument limit and throws `RangeError: Maximum call stack size
+      // exceeded`.
+      for (const warning of ingestResult.warnings) {
+        warningDetails.push(warning);
+      }
       latestSafeBlock = ingestResult.toBlock;
       currentRange = {
         sourceFamily: plan.sourceFamily,
@@ -265,6 +272,18 @@ export async function runWalletSync<TLog = unknown>(args: {
       latestSafeBlock: latestSafeBlock ?? args.endBlock,
     };
   } catch (error) {
+    // Log the full error (with stack) independently of the DB write, so the
+    // real failure is visible in server logs even if persisting the SyncRun
+    // itself fails.
+    console.error("Wallet sync failed", {
+      runId: run.id,
+      stage: currentStage,
+      sourceFamily: currentRange?.sourceFamily,
+      fromBlock: currentRange?.fromBlock?.toString(),
+      toBlock: currentRange?.toBlock?.toString(),
+      error,
+    });
+
     await runStore.updateRun({
       runId: run.id,
       status: "FAILED",
@@ -340,8 +359,14 @@ function buildSyncFailureMessage(args: {
       : "unknown-range";
   const errorName = args.error instanceof Error ? args.error.name : typeof args.error;
   const errorCategory = classifySyncError(args.error);
+  // Preserve the underlying message so failures are diagnosable. `errorName`
+  // + category alone (e.g. "RangeError/unexpected_error") is a label, not a
+  // diagnosis — the real V8 message ("Invalid array length", etc.) is what
+  // pinpoints the throw site.
+  const errorDetail =
+    args.error instanceof Error && args.error.message ? `: ${args.error.message}` : "";
 
-  return `[${args.stage}] ${range}: ${errorName}/${errorCategory}`;
+  return `[${args.stage}] ${range}: ${errorName}/${errorCategory}${errorDetail}`;
 }
 
 
