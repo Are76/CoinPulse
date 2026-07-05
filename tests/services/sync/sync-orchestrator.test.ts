@@ -352,6 +352,59 @@ describe("runWalletSync", () => {
     );
   });
 
+  it("redacts provider URLs and connection strings from the persisted failure detail", async () => {
+    const runStore = createRunStore();
+    const cursorStore = {
+      getCursor: vi.fn(async () => null),
+      upsertCursor: vi.fn(async () => undefined),
+    };
+    const secretRpcUrl = "https://rpc.example.com/v1/SUPER_SECRET_KEY_123";
+    const secretDbUrl = "postgresql://admin:hunter2@db.internal:5432/coinpulse";
+    const ingest = vi.fn(async () => ({
+      rawLogCount: 1,
+      latestBlockHash: "0xhash",
+      logs: [{ txHash: "0xtx", logIndex: 1 }],
+      fromBlock: 10n,
+      toBlock: 20n,
+      warnings: [],
+    }));
+    const normalize = vi.fn(async () => {
+      throw new Error(`HTTP request failed: ${secretRpcUrl} against ${secretDbUrl}`);
+    });
+
+    await expect(
+      runWalletSync({
+        wallet: {
+          id: "wallet_1",
+          chainId: 369,
+          address: "0x1111111111111111111111111111111111111111",
+        },
+        sourceFamilies: ["STAKING"],
+        startBlock: 10n,
+        endBlock: 20n,
+        policyLabel: "redaction-window",
+        dependencies: {
+          runStore,
+          cursorStore,
+          ingestSourceFamily: ingest,
+          normalizeSourceFamily: normalize,
+          persistLedger: vi.fn(),
+        },
+      }),
+    ).rejects.toThrow();
+
+    const lastUpdate = runStore.updates.at(-1) as { errorMessage: string };
+    // Still diagnosable: stage + range + error class remain.
+    expect(lastUpdate.errorMessage).toContain("NORMALIZING_LEDGER");
+    expect(lastUpdate.errorMessage).toContain("STAKING 10-20");
+    // Secrets are redacted, not persisted / exposed via the debug API.
+    expect(lastUpdate.errorMessage).toContain("[redacted-url]");
+    expect(lastUpdate.errorMessage).not.toContain("SUPER_SECRET_KEY_123");
+    expect(lastUpdate.errorMessage).not.toContain("rpc.example.com");
+    expect(lastUpdate.errorMessage).not.toContain("hunter2");
+    expect(lastUpdate.errorMessage).not.toContain("db.internal");
+  });
+
   it("fails fast when the concrete sync path is asked to run unsupported source families", async () => {
     await expect(
       runWalletSync({
