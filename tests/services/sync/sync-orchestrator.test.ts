@@ -247,6 +247,164 @@ describe("runWalletSync", () => {
     );
   });
 
+  it("aggregates a very large ingest warning set without throwing a RangeError", async () => {
+    const runStore = createRunStore();
+    const cursorStore = {
+      getCursor: vi.fn(async () => null),
+      upsertCursor: vi.fn(async () => undefined),
+    };
+    const warningCount = 200_000;
+    const largeWarnings = Array.from(
+      { length: warningCount },
+      (_, index) => `skip-stake:0x${index.toString(16)}:unsupported-initiator`,
+    );
+    const ingest = vi.fn(async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => ({
+      rawLogCount: 0,
+      latestBlockHash: "0xnew",
+      logs: [],
+      fromBlock,
+      toBlock,
+      warnings: largeWarnings,
+    }));
+    const normalize = vi.fn(async () => []);
+    const persistLedger = vi.fn(async () => ({
+      actionGroupCount: 0,
+      entryCount: 0,
+    }));
+
+    const result = await runWalletSync({
+      wallet: {
+        id: "wallet_1",
+        chainId: 369,
+        address: "0x1111111111111111111111111111111111111111",
+      },
+      sourceFamilies: ["STAKING"],
+      startBlock: 10n,
+      endBlock: 20n,
+      policyLabel: "large-warning-set",
+      dependencies: {
+        runStore,
+        cursorStore,
+        ingestSourceFamily: ingest,
+        normalizeSourceFamily: normalize,
+        persistLedger,
+      },
+    });
+
+    expect(result.warningCount).toBe(warningCount);
+    expect(runStore.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "run_1",
+        status: "COMPLETED",
+        warningCount,
+      }),
+    );
+  });
+
+  it("preserves the underlying error message in the failure diagnostics", async () => {
+    const runStore = createRunStore();
+    const cursorStore = {
+      getCursor: vi.fn(async () => null),
+      upsertCursor: vi.fn(async () => undefined),
+    };
+    const ingest = vi.fn(async () => ({
+      rawLogCount: 1,
+      latestBlockHash: "0xhash",
+      logs: [{ txHash: "0xtx", logIndex: 1 }],
+      fromBlock: 10n,
+      toBlock: 20n,
+      warnings: [],
+    }));
+    const normalize = vi.fn(async () => {
+      throw new Error("Invalid array length while building ledger draft");
+    });
+
+    await expect(
+      runWalletSync({
+        wallet: {
+          id: "wallet_1",
+          chainId: 369,
+          address: "0x1111111111111111111111111111111111111111",
+        },
+        sourceFamilies: ["STAKING"],
+        startBlock: 10n,
+        endBlock: 20n,
+        policyLabel: "diagnostic-window",
+        dependencies: {
+          runStore,
+          cursorStore,
+          ingestSourceFamily: ingest,
+          normalizeSourceFamily: normalize,
+          persistLedger: vi.fn(),
+        },
+      }),
+    ).rejects.toThrow("Invalid array length while building ledger draft");
+
+    expect(runStore.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "run_1",
+        status: "FAILED",
+        stage: "NORMALIZING_LEDGER",
+        errorMessage: expect.stringContaining(
+          "Invalid array length while building ledger draft",
+        ),
+      }),
+    );
+  });
+
+  it("redacts provider URLs and connection strings from the persisted failure detail", async () => {
+    const runStore = createRunStore();
+    const cursorStore = {
+      getCursor: vi.fn(async () => null),
+      upsertCursor: vi.fn(async () => undefined),
+    };
+    const secretRpcUrl = "https://rpc.example.com/v1/SUPER_SECRET_KEY_123";
+    const secretDbUrl = "postgresql://admin:hunter2@db.internal:5432/coinpulse";
+    const ingest = vi.fn(async () => ({
+      rawLogCount: 1,
+      latestBlockHash: "0xhash",
+      logs: [{ txHash: "0xtx", logIndex: 1 }],
+      fromBlock: 10n,
+      toBlock: 20n,
+      warnings: [],
+    }));
+    const normalize = vi.fn(async () => {
+      throw new Error(`HTTP request failed: ${secretRpcUrl} against ${secretDbUrl}`);
+    });
+
+    await expect(
+      runWalletSync({
+        wallet: {
+          id: "wallet_1",
+          chainId: 369,
+          address: "0x1111111111111111111111111111111111111111",
+        },
+        sourceFamilies: ["STAKING"],
+        startBlock: 10n,
+        endBlock: 20n,
+        policyLabel: "redaction-window",
+        dependencies: {
+          runStore,
+          cursorStore,
+          ingestSourceFamily: ingest,
+          normalizeSourceFamily: normalize,
+          persistLedger: vi.fn(),
+        },
+      }),
+    ).rejects.toThrow();
+
+    const lastUpdate = runStore.updates.at(-1) as { errorMessage: string };
+    // Still diagnosable: stage + range + error class remain.
+    expect(lastUpdate.errorMessage).toContain("NORMALIZING_LEDGER");
+    expect(lastUpdate.errorMessage).toContain("STAKING 10-20");
+    // Secrets are redacted, not persisted / exposed via the debug API.
+    expect(lastUpdate.errorMessage).toContain("[redacted-url]");
+    expect(lastUpdate.errorMessage).not.toContain("SUPER_SECRET_KEY_123");
+    expect(lastUpdate.errorMessage).not.toContain("rpc.example.com");
+    expect(lastUpdate.errorMessage).not.toContain("hunter2");
+    expect(lastUpdate.errorMessage).not.toContain("db.internal");
+  });
+
   it("fails fast when the concrete sync path is asked to run unsupported source families", async () => {
     await expect(
       runWalletSync({

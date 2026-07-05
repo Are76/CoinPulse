@@ -182,7 +182,14 @@ export async function runWalletSync<TLog = unknown>(args: {
 
       counts.rawLogs += ingestResult.rawLogCount;
       warningCount += ingestResult.warnings.length;
-      warningDetails.push(...ingestResult.warnings);
+      // Append one-by-one instead of `push(...ingestResult.warnings)`: a single
+      // window can emit hundreds of thousands of warnings (e.g. STAKING over a
+      // heavily-traded pHEX range), and spreading that many arguments exceeds
+      // V8's call-argument limit and throws `RangeError: Maximum call stack size
+      // exceeded`.
+      for (const warning of ingestResult.warnings) {
+        warningDetails.push(warning);
+      }
       latestSafeBlock = ingestResult.toBlock;
       currentRange = {
         sourceFamily: plan.sourceFamily,
@@ -265,6 +272,18 @@ export async function runWalletSync<TLog = unknown>(args: {
       latestSafeBlock: latestSafeBlock ?? args.endBlock,
     };
   } catch (error) {
+    // Log the full error (with stack) independently of the DB write, so the
+    // real failure is visible in server logs even if persisting the SyncRun
+    // itself fails.
+    console.error("Wallet sync failed", {
+      runId: run.id,
+      stage: currentStage,
+      sourceFamily: currentRange?.sourceFamily,
+      fromBlock: currentRange?.fromBlock?.toString(),
+      toBlock: currentRange?.toBlock?.toString(),
+      error,
+    });
+
     await runStore.updateRun({
       runId: run.id,
       status: "FAILED",
@@ -340,8 +359,39 @@ function buildSyncFailureMessage(args: {
       : "unknown-range";
   const errorName = args.error instanceof Error ? args.error.name : typeof args.error;
   const errorCategory = classifySyncError(args.error);
+  // Preserve the underlying message so failures are diagnosable. `errorName`
+  // + category alone (e.g. "RangeError/unexpected_error") is a label, not a
+  // diagnosis — the real V8 message ("Invalid array length", etc.) is what
+  // pinpoints the throw site. This string is persisted to SyncRun.errorMessage
+  // and surfaced verbatim by /api/debug/status, so it is sanitized first;
+  // full, unredacted detail is available in server logs via console.error.
+  const errorDetail =
+    args.error instanceof Error && args.error.message
+      ? `: ${sanitizeFailureDetail(args.error.message)}`
+      : "";
 
-  return `[${args.stage}] ${range}: ${errorName}/${errorCategory}`;
+  return `[${args.stage}] ${range}: ${errorName}/${errorCategory}${errorDetail}`;
+}
+
+const MAX_PERSISTED_FAILURE_DETAIL_LENGTH = 300;
+
+/**
+ * Strip secrets from an error message before it is persisted to
+ * SyncRun.errorMessage / returned by the debug API. viem and Prisma errors can
+ * embed provider RPC URLs (often with API keys in the path/query) or database
+ * connection strings (`postgresql://user:pass@host`). Redact any `scheme://…`
+ * authority-form URI and bound the length. Public identifiers (tx hashes,
+ * addresses, `chain:369:…` asset ids) contain no `//` authority and are kept.
+ */
+function sanitizeFailureDetail(message: string): string {
+  const redacted = message
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[redacted-url]")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return redacted.length > MAX_PERSISTED_FAILURE_DETAIL_LENGTH
+    ? `${redacted.slice(0, MAX_PERSISTED_FAILURE_DETAIL_LENGTH)}…`
+    : redacted;
 }
 
 
