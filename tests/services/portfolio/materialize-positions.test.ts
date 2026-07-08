@@ -402,6 +402,46 @@ describe("materializeCurrentPortfolioPositions", () => {
       .toMatchObject({ balanceQuantity: "11703847304700000000000", decimals: 18 });
   });
 
+  it("preserves fractional digits for large Prisma.Decimal quantities (>= 1e21)", async () => {
+    const stores = createMemoryDb();
+    seedTokens(stores.tokens);
+
+    // toFixed() must expand exponential magnitudes AND keep the fractional part;
+    // this value serializes as "1.5000000000000000000005e+21" via toString().
+    const largeFractional = new Prisma.Decimal("1500000000000000000000.5");
+    expect(largeFractional.toString()).toContain("e+");
+
+    vi.spyOn(stores.db.ledgerEntry, "findMany").mockResolvedValue([
+      {
+        id: "entry_big_frac",
+        chainId: CHAIN_ID,
+        walletId: WALLET_ID,
+        actionGroupId: "group_big_frac",
+        tokenId: null,
+        txHash: "0xbigfrac",
+        entryType: "RECEIVE",
+        assetId: "chain:369:erc20:0xtokenb",
+        quantity: largeFractional,
+        valueUsd: null,
+        direction: "IN",
+        normalizerVersion: "v1",
+        occurredAt: new Date("2026-05-08T10:00:00.000Z"),
+        sourceLogIndex: 0,
+        sourceLogKey: "log:0xbigfrac:receive",
+        dedupeKey: "big-frac-dedupe",
+      },
+    ] as never);
+
+    const report = await materializeCurrentPortfolioPositions({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      db: stores.db as never,
+    });
+
+    expect(report.tokenBalancesWritten).toBe(1);
+    expect(stores.portfolioTokenBalances.get(`${WALLET_ID}:${CHAIN_ID}:chain:369:erc20:0xtokenb`))
+      .toMatchObject({ balanceQuantity: "1500000000000000000000.5", decimals: 18 });
+  });
+
   it("materializes LP position state", async () => {
     const stores = createMemoryDb();
     seedTokens(stores.tokens);
