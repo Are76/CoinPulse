@@ -476,7 +476,18 @@ function parseAssetAddress(assetId: string) {
 }
 
 function toQuantityString(quantity: string | { toString(): string }) {
-  return typeof quantity === "string" ? quantity : quantity.toString();
+  if (typeof quantity === "string") {
+    return quantity;
+  }
+  // Prisma.Decimal.toString() switches to exponential notation for magnitudes
+  // >= 1e21 (e.g. "1.17038473047e+22"), which breaks the digit-only canonical
+  // integer parsing below. toFixed() always yields fixed-point, digit-only
+  // output for the same value, preserving bigint/string safety for large raw
+  // blockchain quantities.
+  const candidate = quantity as { toFixed?: () => string };
+  return typeof candidate.toFixed === "function"
+    ? candidate.toFixed()
+    : quantity.toString();
 }
 
 function decimalToScaledBigInt(value: string) {
