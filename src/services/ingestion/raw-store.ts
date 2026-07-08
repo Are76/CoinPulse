@@ -902,42 +902,46 @@ export async function readWalletRawStakeActions(
     tokenAddress: record.tokenAddress as string,
     assetIdSnapshot: record.assetIdSnapshot as string,
     decimalsSnapshot: record.decimalsSnapshot as number,
+    // Decimal(78, 0) columns: serialize with toFixed() rather than toString().
+    // Prisma.Decimal.toString() emits exponential notation for magnitudes >= 1e21
+    // (e.g. "1.17038473047e+22"), which fails the /^\d+$/ canonical quantity guard
+    // downstream. toFixed() always yields fixed-point, digit-only output.
     principalLockedRaw:
       record.principalLockedRaw == null
         ? null
         : typeof record.principalLockedRaw === "string"
           ? record.principalLockedRaw
-          : (record.principalLockedRaw as { toString(): string }).toString(),
+          : (record.principalLockedRaw as { toFixed(): string }).toFixed(),
     totalReturnedRaw:
       record.totalReturnedRaw == null
         ? null
         : typeof record.totalReturnedRaw === "string"
           ? record.totalReturnedRaw
-          : (record.totalReturnedRaw as { toString(): string }).toString(),
+          : (record.totalReturnedRaw as { toFixed(): string }).toFixed(),
     principalReturnedRaw:
       record.principalReturnedRaw == null
         ? null
         : typeof record.principalReturnedRaw === "string"
           ? record.principalReturnedRaw
-          : (record.principalReturnedRaw as { toString(): string }).toString(),
+          : (record.principalReturnedRaw as { toFixed(): string }).toFixed(),
     yieldRaw:
       record.yieldRaw == null
         ? null
         : typeof record.yieldRaw === "string"
           ? record.yieldRaw
-          : (record.yieldRaw as { toString(): string }).toString(),
+          : (record.yieldRaw as { toFixed(): string }).toFixed(),
     penaltyRaw:
       record.penaltyRaw == null
         ? null
         : typeof record.penaltyRaw === "string"
           ? record.penaltyRaw
-          : (record.penaltyRaw as { toString(): string }).toString(),
+          : (record.penaltyRaw as { toFixed(): string }).toFixed(),
     feeAssetIdSnapshot: record.feeAssetIdSnapshot as string,
     feeDecimalsSnapshot: record.feeDecimalsSnapshot as number,
     feeAmountRaw:
       typeof record.feeAmountRaw === "string"
         ? record.feeAmountRaw
-        : (record.feeAmountRaw as { toString(): string }).toString(),
+        : (record.feeAmountRaw as { toFixed(): string }).toFixed(),
   }));
 }
 
