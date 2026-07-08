@@ -771,23 +771,27 @@ export async function readWalletDexSwapSnapshots(
     soldTokenAddress: record.soldTokenAddress as string,
     soldAssetIdSnapshot: record.soldAssetIdSnapshot as string,
     soldDecimalsSnapshot: record.soldDecimalsSnapshot as number,
+    // Decimal(78, 0) columns: serialize with toFixed() rather than toString().
+    // Prisma.Decimal.toString() emits exponential notation for magnitudes >= 1e21,
+    // which corrupts the digit-only raw string contract relied on downstream.
+    // toFixed() always yields fixed-point, digit-only output.
     soldAmountRaw:
       typeof record.soldAmountRaw === "string"
         ? record.soldAmountRaw
-        : (record.soldAmountRaw as { toString(): string }).toString(),
+        : (record.soldAmountRaw as { toFixed(): string }).toFixed(),
     boughtTokenAddress: record.boughtTokenAddress as string,
     boughtAssetIdSnapshot: record.boughtAssetIdSnapshot as string,
     boughtDecimalsSnapshot: record.boughtDecimalsSnapshot as number,
     boughtAmountRaw:
       typeof record.boughtAmountRaw === "string"
         ? record.boughtAmountRaw
-        : (record.boughtAmountRaw as { toString(): string }).toString(),
+        : (record.boughtAmountRaw as { toFixed(): string }).toFixed(),
     feeAssetIdSnapshot: record.feeAssetIdSnapshot as string,
     feeDecimalsSnapshot: record.feeDecimalsSnapshot as number,
     feeAmountRaw:
       typeof record.feeAmountRaw === "string"
         ? record.feeAmountRaw
-        : (record.feeAmountRaw as { toString(): string }).toString(),
+        : (record.feeAmountRaw as { toFixed(): string }).toFixed(),
   }));
 }
 
@@ -831,30 +835,34 @@ export async function readWalletRawLpActions(
     token0Address: record.token0Address as string,
     token0AssetIdSnapshot: record.token0AssetIdSnapshot as string,
     token0DecimalsSnapshot: record.token0DecimalsSnapshot as number,
+    // Decimal(78, 0) columns: serialize with toFixed() rather than toString().
+    // Prisma.Decimal.toString() emits exponential notation for magnitudes >= 1e21,
+    // which corrupts the digit-only raw string contract relied on downstream.
+    // toFixed() always yields fixed-point, digit-only output.
     token0AmountRaw:
       typeof record.token0AmountRaw === "string"
         ? record.token0AmountRaw
-        : (record.token0AmountRaw as { toString(): string }).toString(),
+        : (record.token0AmountRaw as { toFixed(): string }).toFixed(),
     token1Address: record.token1Address as string,
     token1AssetIdSnapshot: record.token1AssetIdSnapshot as string,
     token1DecimalsSnapshot: record.token1DecimalsSnapshot as number,
     token1AmountRaw:
       typeof record.token1AmountRaw === "string"
         ? record.token1AmountRaw
-        : (record.token1AmountRaw as { toString(): string }).toString(),
+        : (record.token1AmountRaw as { toFixed(): string }).toFixed(),
     lpTokenAddress: record.lpTokenAddress as string,
     lpAssetIdSnapshot: record.lpAssetIdSnapshot as string,
     lpDecimalsSnapshot: record.lpDecimalsSnapshot as number,
     lpAmountRaw:
       typeof record.lpAmountRaw === "string"
         ? record.lpAmountRaw
-        : (record.lpAmountRaw as { toString(): string }).toString(),
+        : (record.lpAmountRaw as { toFixed(): string }).toFixed(),
     feeAssetIdSnapshot: record.feeAssetIdSnapshot as string,
     feeDecimalsSnapshot: record.feeDecimalsSnapshot as number,
     feeAmountRaw:
       typeof record.feeAmountRaw === "string"
         ? record.feeAmountRaw
-        : (record.feeAmountRaw as { toString(): string }).toString(),
+        : (record.feeAmountRaw as { toFixed(): string }).toFixed(),
   }));
 }
 
