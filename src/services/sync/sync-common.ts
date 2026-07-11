@@ -163,6 +163,74 @@ export function buildNativeTransactionScanWindows(args: {
   });
 }
 
+type EthGetLogsRawLog = {
+  address: string;
+  blockHash: string | null;
+  blockNumber: `0x${string}` | null;
+  data: string;
+  logIndex: `0x${string}` | null;
+  transactionHash: string | null;
+  topics: readonly string[];
+};
+
+type EthGetLogsRequestClient = {
+  request(args: {
+    method: "eth_getLogs";
+    params: [
+      {
+        fromBlock: `0x${string}`;
+        toBlock: `0x${string}`;
+        address?: string | readonly string[];
+        topics?: readonly (string | readonly string[] | null)[];
+      },
+    ];
+  }): Promise<readonly EthGetLogsRawLog[]>;
+};
+
+/**
+ * viem's `getLogs` action does not accept a raw `topics` filter — it only
+ * derives topics from `event`/`events`/`args` and silently drops an unknown
+ * `topics` field, so the node receives an UNFILTERED eth_getLogs request and
+ * returns every log in the window. The sync ingestion path passes raw topics
+ * (LogFetcherClient), so the default production client must translate getLogs
+ * calls into raw eth_getLogs requests that preserve the filter exactly.
+ */
+export function withRawEthGetLogs<T extends object>(client: T): T & LogFetcherClient {
+  const requestClient = client as unknown as EthGetLogsRequestClient;
+  const getLogs: LogFetcherClient["getLogs"] = async (args) => {
+    const filter: Parameters<EthGetLogsRequestClient["request"]>[0]["params"][0] = {
+      fromBlock: `0x${args.fromBlock.toString(16)}`,
+      toBlock: `0x${args.toBlock.toString(16)}`,
+    };
+
+    if (args.address !== undefined) {
+      filter.address = args.address;
+    }
+    if (args.topics !== undefined) {
+      filter.topics = args.topics;
+    }
+
+    const logs = await requestClient.request({
+      method: "eth_getLogs",
+      params: [filter],
+    });
+
+    return logs.map((log) => ({
+      address: log.address,
+      blockHash: log.blockHash,
+      blockNumber: log.blockNumber === null ? null : BigInt(log.blockNumber),
+      data: log.data,
+      logIndex: log.logIndex === null ? null : Number(BigInt(log.logIndex)),
+      transactionHash: log.transactionHash,
+      topics: log.topics,
+    }));
+  };
+
+  return Object.assign(Object.create(Object.getPrototypeOf(client)), client, {
+    getLogs,
+  }) as T & LogFetcherClient;
+}
+
 export function createDefaultSyncClients(args?: {
   db?: SyncDbClient;
   publicClient?: SyncPublicClient;
@@ -171,7 +239,7 @@ export function createDefaultSyncClients(args?: {
     db: args?.db ?? (getDb() as unknown as SyncDbClient),
     publicClient:
       args?.publicClient ??
-      (createPublicClientForChain() as unknown as SyncPublicClient),
+      (withRawEthGetLogs(createPublicClientForChain()) as unknown as SyncPublicClient),
   };
 }
 
@@ -202,7 +270,24 @@ export async function ingestWalletTransferArtifacts(args: {
       topics: [TRANSFER_EVENT_TOPIC0, walletTopic, null],
     }),
   ]);
-  const dedupedLogs = dedupeRpcLogs([...incoming.logs, ...outgoing.logs]);
+  const fetchedLogs = dedupeRpcLogs([...incoming.logs, ...outgoing.logs]);
+  // Only genuine ERC-20 Transfer logs may enter the transfer evidence path.
+  // The window queries above already filter on the Transfer topic, but a
+  // provider (or transport) that ignores the topics filter can return
+  // arbitrary events, and decoding a non-Transfer event as a transfer
+  // fabricates evidence — e.g. HEX StakeStart aliases the staker into `from`
+  // and packs data0 into the amount, which then breaks the stake candidate
+  // transfer-shape checks.
+  const dedupedLogs = fetchedLogs.filter((log) => {
+    if (log.topics[0]?.toLowerCase() === TRANSFER_EVENT_TOPIC0) {
+      return true;
+    }
+
+    warnings.push(
+      `skipped non-transfer log at ${log.blockNumber}:${log.logIndex} for ${log.address}`,
+    );
+    return false;
+  });
   const walletAddress = args.wallet.address.toLowerCase();
   const nativeScanWindows = buildNativeTransactionScanWindows({
     fromBlock: args.fromBlock,
