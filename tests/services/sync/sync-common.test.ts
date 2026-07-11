@@ -4,7 +4,107 @@ import {
   buildDeterministicTokenId,
   buildNativeTransactionScanWindows,
   resolveTokenMetadata,
+  TRANSFER_EVENT_TOPIC0,
+  withRawEthGetLogs,
 } from "@/services/sync/sync-common";
+
+describe("withRawEthGetLogs", () => {
+  const walletTopic =
+    "0x0000000000000000000000001111111111111111111111111111111111111111";
+
+  function createRequestClient() {
+    return {
+      request: vi.fn(async () => [
+        {
+          address: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+          blockHash: "0xblockhash",
+          blockNumber: "0x8c" as `0x${string}`,
+          data: "0x01",
+          logIndex: "0x2" as `0x${string}`,
+          transactionHash: "0xtxhash",
+          topics: [TRANSFER_EVENT_TOPIC0, walletTopic],
+        },
+      ]),
+      getBlock: vi.fn(),
+    };
+  }
+
+  it("sends the raw topics filter through eth_getLogs with hex block bounds", async () => {
+    const client = createRequestClient();
+    const wrapped = withRawEthGetLogs(client);
+
+    await wrapped.getLogs({
+      topics: [TRANSFER_EVENT_TOPIC0, walletTopic, null],
+      fromBlock: 140n,
+      toBlock: 141n,
+    });
+
+    expect(client.request).toHaveBeenCalledWith({
+      method: "eth_getLogs",
+      params: [
+        {
+          fromBlock: "0x8c",
+          toBlock: "0x8d",
+          topics: [TRANSFER_EVENT_TOPIC0, walletTopic, null],
+        },
+      ],
+    });
+  });
+
+  it("passes an address filter through when provided", async () => {
+    const client = createRequestClient();
+    const wrapped = withRawEthGetLogs(client);
+
+    await wrapped.getLogs({
+      address: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+      topics: [TRANSFER_EVENT_TOPIC0],
+      fromBlock: 1n,
+      toBlock: 1n,
+    });
+
+    expect(client.request).toHaveBeenCalledWith({
+      method: "eth_getLogs",
+      params: [
+        {
+          fromBlock: "0x1",
+          toBlock: "0x1",
+          address: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+          topics: [TRANSFER_EVENT_TOPIC0],
+        },
+      ],
+    });
+  });
+
+  it("maps raw hex log fields into the RpcLog shape", async () => {
+    const wrapped = withRawEthGetLogs(createRequestClient());
+
+    const logs = await wrapped.getLogs({
+      topics: [TRANSFER_EVENT_TOPIC0],
+      fromBlock: 140n,
+      toBlock: 140n,
+    });
+
+    expect(logs).toEqual([
+      {
+        address: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+        blockHash: "0xblockhash",
+        blockNumber: 140n,
+        data: "0x01",
+        logIndex: 2,
+        transactionHash: "0xtxhash",
+        topics: [TRANSFER_EVENT_TOPIC0, walletTopic],
+      },
+    ]);
+  });
+
+  it("preserves the other client methods", async () => {
+    const client = createRequestClient();
+    const wrapped = withRawEthGetLogs(client);
+
+    expect(wrapped.getBlock).toBe(client.getBlock);
+    expect(wrapped.request).toBe(client.request);
+  });
+});
 
 describe("buildNativeTransactionScanWindows", () => {
   it("splits large ranges predictably by the configured max window size", () => {

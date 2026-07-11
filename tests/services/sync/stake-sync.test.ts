@@ -402,6 +402,7 @@ function createMemoryStores() {
     db,
     rawStakeActions,
     rawTransactions,
+    rawTokenTransfers,
     ledgerEntries,
     tokens,
   };
@@ -415,6 +416,97 @@ function createStakeStartPublicClient(walletAddress: string) {
       const outgoing = args.topics?.[1] === walletTopic;
       return outgoing
         ? [
+            {
+              address: PHEX_ADDRESS_LOWER,
+              blockHash: "0xblock140",
+              blockNumber: 140n,
+              data: "0x0000000000000000000000000000000000000000000000000000000005f5e100",
+              logIndex: 2,
+              transactionHash: "0xstakestart",
+              topics: [
+                TRANSFER_EVENT_TOPIC0,
+                walletTopic,
+                "0x0000000000000000000000002b591e99afe9f32eaa6214f7b7629768c40eeb39",
+              ],
+            },
+          ]
+        : [];
+    }),
+    getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+      number: blockNumber,
+      hash: "0xblock140",
+      parentHash: "0xblock139",
+      timestamp: 1_700_000_500n,
+    })),
+    readContract: vi.fn(async ({ functionName, blockNumber }: { functionName: string; blockNumber?: bigint }) => {
+      expect(blockNumber).toBe(140n);
+      if (functionName === "stakeCount") {
+        return 4n;
+      }
+      if (functionName === "stakeLists") {
+        return [42n, 100000000n, 777n, 1, 365, 0, false];
+      }
+      throw new Error(`unexpected function ${functionName}`);
+    }),
+    getTransaction: vi.fn(async () => ({
+      hash: "0xstakestart",
+      blockHash: "0xblock140",
+      blockNumber: 140n,
+      transactionIndex: 3,
+      from: walletAddress,
+      to: PHEX_ADDRESS_LOWER,
+      value: 0n,
+      gasPrice: 2_000_000_000n,
+      input: encodeFunctionData({
+        abi: PHEX_STAKE_ABI,
+        functionName: "stakeStart",
+        args: [100000000n, 365n],
+      }),
+    })),
+    getTransactionReceipt: vi.fn(async () => ({
+      transactionHash: "0xstakestart",
+      blockHash: "0xblock140",
+      blockNumber: 140n,
+      gasUsed: 150_000n,
+      effectiveGasPrice: 2_000_000_000n,
+      logs: [],
+    })),
+  };
+}
+
+// keccak256("StakeStart(uint256,address,uint40)") — emitted by the native HEX
+// contract in the same transaction as the stake's burn Transfer.
+const STAKE_START_EVENT_TOPIC0 =
+  "0x14872dc760f33532684e68e1b6d5fd3f71ba7b07dee76bdb2b084f28b74233ef";
+
+function createUnfilteredLogsStakeStartPublicClient(walletAddress: string) {
+  const walletTopic = "0x0000000000000000000000001111111111111111111111111111111111111111";
+  // StakeStart data0: stakedDays<<184 | stakeShares<<112 | stakedHearts<<40 | timestamp.
+  // A single 32-byte word, so a topic0-blind transfer decode "succeeds" and
+  // fabricates an outbound wallet transfer with the packed word as the amount.
+  const stakeStartData0 =
+    (365n << 184n) | (777n << 112n) | (100000000n << 40n) | 1_700_000_500n;
+
+  return {
+    getLogs: vi.fn(async (args: { topics?: readonly (string | readonly string[] | null)[] }) => {
+      const outgoing = args.topics?.[1] === walletTopic;
+      return outgoing
+        ? [
+            // A provider that ignores the topics filter returns the StakeStart
+            // event alongside the genuine burn Transfer of the same transaction.
+            {
+              address: PHEX_ADDRESS_LOWER,
+              blockHash: "0xblock140",
+              blockNumber: 140n,
+              data: `0x${stakeStartData0.toString(16).padStart(64, "0")}`,
+              logIndex: 1,
+              transactionHash: "0xstakestart",
+              topics: [
+                STAKE_START_EVENT_TOPIC0,
+                walletTopic,
+                "0x000000000000000000000000000000000000000000000000000000000000002a",
+              ],
+            },
             {
               address: PHEX_ADDRESS_LOWER,
               blockHash: "0xblock140",
@@ -649,6 +741,44 @@ describe("stake sync flow", () => {
     });
     expect(stores.rawTransactions.size).toBe(1);
     expect(stores.rawStakeActions.size).toBe(1);
+  });
+
+  it("persists a genuine stake start even when the provider returns non-Transfer logs", async () => {
+    const stores = createMemoryStores();
+    const walletAddress = "0x1111111111111111111111111111111111111111";
+    const dependencies = createSyncDependencies({
+      db: stores.db as never,
+      publicClient: createUnfilteredLogsStakeStartPublicClient(walletAddress) as never,
+    });
+
+    const result = await runWalletSync({
+      wallet: { id: "wallet_1", chainId: 369, address: walletAddress },
+      sourceFamilies: ["STAKING"],
+      startBlock: 140n,
+      endBlock: 140n,
+      policyLabel: "stake-start-unfiltered-logs",
+      dependencies,
+    });
+
+    // The StakeStart event log must be excluded from the transfer evidence
+    // path instead of being decoded into a fabricated outbound transfer that
+    // breaks the 1-outbound/0-inbound stake-start shape check.
+    expect(result.counts).toEqual({
+      rawLogs: 1,
+      actionGroups: 1,
+      ledgerEntries: 3,
+    });
+    expect(result.warningCount).toBe(1);
+    expect(stores.rawTokenTransfers.size).toBe(1);
+    expect(stores.rawStakeActions.size).toBe(1);
+    const stakeAction = [...stores.rawStakeActions.values()][0];
+    expect(stakeAction).toMatchObject({
+      actionKind: "START",
+      stakeId: 42n,
+      stakeIndex: 3,
+      stakedDays: 365,
+      principalLockedRaw: "100000000",
+    });
   });
 
   it("normalizes end-stake entries from persisted raw stake snapshots", async () => {
