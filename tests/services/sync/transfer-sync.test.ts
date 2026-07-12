@@ -1238,6 +1238,13 @@ describe("transfer sync flow", () => {
 });
 
 describe("createSyncDependencies production client wiring", () => {
+  // Deliberately does not mock createPublicClientForChain()/createDefaultSyncClients():
+  // doing so would bypass the exact wiring bug this test guards against (the
+  // production zero-arg path silently skipping withRawEthGetLogs). The only
+  // external dependency is PULSECHAIN_RPC_URL, which tests/setup.ts always
+  // sets via Vitest's setupFiles before this file is imported — so the real
+  // client construction never needs a live network call, only the stubbed
+  // fetch below.
   it("honors the raw eth_getLogs topics filter when no publicClient is injected", async () => {
     const stores = createMemoryStores();
     const walletAddress = "0x1111111111111111111111111111111111111111";
