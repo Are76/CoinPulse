@@ -2,6 +2,7 @@
 import { encodeFunctionData, parseAbi } from "viem";
 
 import { PHEX_ADDRESS } from "@/config/assets";
+import { repairFabricatedTokenTransfers } from "@/services/ingestion/fabricated-transfer-repair";
 import { readWalletRawStakeActions } from "@/services/ingestion/raw-store";
 import { runWalletSync } from "@/services/sync/sync-orchestrator";
 import { createSyncDependencies, TRANSFER_EVENT_TOPIC0 } from "@/services/sync/transfer-sync";
@@ -400,11 +401,13 @@ function createMemoryStores() {
 
   return {
     db,
+    rawLogs,
     rawStakeActions,
     rawTransactions,
     rawTokenTransfers,
     ledgerEntries,
     tokens,
+    runs,
   };
 }
 
@@ -1073,6 +1076,184 @@ describe("stake sync flow", () => {
     expect(result.warningCount).toBe(1);
     expect(stores.rawStakeActions.size).toBe(0);
     expect(stores.ledgerEntries.size).toBe(0);
+  });
+
+  it("unblocks genuine stake-start evidence once a fabricated legacy transfer row is invalidated", async () => {
+    const stores = createMemoryStores();
+    const walletAddress = "0x1111111111111111111111111111111111111111";
+    const walletTopic =
+      "0x0000000000000000000000001111111111111111111111111111111111111111";
+
+    // Legacy pre-PR-#326 poisoned state: the HEX StakeStart event of the same
+    // stake transaction was mis-decoded as an outbound wallet transfer (the
+    // stakeId packed into `toAddress`, the packed data word as the amount).
+    // Its backing RawLog is persisted with the StakeStart topic0 — exactly the
+    // shape that blocked stakeId 942660 at block 26154634.
+    const fabricatedIdentity = "369:0xstakestart:1:0xblock140";
+    stores.rawTokenTransfers.set(fabricatedIdentity, {
+      chainId: 369,
+      txHash: "0xstakestart",
+      blockNumber: 140n,
+      blockHash: "0xblock140",
+      logIndex: 1,
+      fromAddress: walletAddress,
+      toAddress: "0x000000000000000000000000000000000000002a",
+      tokenId: "token_phex",
+      tokenAddress: PHEX_ADDRESS_LOWER,
+      assetIdSnapshot: `chain:369:erc20:${PHEX_ADDRESS_LOWER}`,
+      decimalsSnapshot: 8,
+      amountRaw: "13620820367221310374848487290948873865081649229393590",
+      status: "ACTIVE",
+    } as unknown as Parameters<typeof stores.rawTokenTransfers.set>[1]);
+    stores.rawLogs.set(fabricatedIdentity, {
+      chainId: 369,
+      txHash: "0xstakestart",
+      blockNumber: 140n,
+      blockHash: "0xblock140",
+      logIndex: 1,
+      address: PHEX_ADDRESS_LOWER,
+      topic0: STAKE_START_EVENT_TOPIC0,
+      topic1: walletTopic,
+      topic2:
+        "0x000000000000000000000000000000000000000000000000000000000000002a",
+      topic3: null,
+      data: "0x00",
+      status: "ACTIVE",
+    } as unknown as Parameters<typeof stores.rawLogs.set>[1]);
+
+    const dependencies = createSyncDependencies({
+      db: stores.db as never,
+      publicClient: createStakeStartPublicClient(walletAddress) as never,
+    });
+
+    // Run 1: the poisoned ACTIVE row makes the transaction look like it has
+    // two outbound transfers, so the stake-start shape check must skip it.
+    const blocked = await runWalletSync({
+      wallet: { id: "wallet_1", chainId: 369, address: walletAddress },
+      sourceFamilies: ["STAKING"],
+      startBlock: 140n,
+      endBlock: 140n,
+      policyLabel: "stake-start-poisoned-legacy-row",
+      dependencies,
+    });
+
+    expect(blocked.warningCount).toBe(1);
+    // Pin the block to the shape-check skip itself (persisted through the
+    // SyncRun record) so this test cannot pass on an unrelated warning.
+    const blockedWarnings = stores.runs.flatMap((run) => {
+      const details = (run as { warningDetails?: unknown }).warningDetails;
+      return Array.isArray(details) ? (details as string[]) : [];
+    });
+    expect(blockedWarnings).toContain(
+      "skip-stake:0xstakestart:ambiguous-start-transfer-shape:2:0",
+    );
+    expect(stores.rawStakeActions.size).toBe(0);
+
+    // Operator repair over the same persisted state, via an adapter that
+    // exposes the memory stores through the repair service's client shape.
+    const repairClient = {
+      rawTokenTransfer: {
+        findMany: async (argsUnknown: unknown) => {
+          const args = argsUnknown as {
+            where: { status?: string; chainId?: number; id?: { gt: string } };
+            take?: number;
+          };
+          let rows = [...stores.rawTokenTransfers.entries()]
+            .filter(
+              ([key, record]) =>
+                (args.where.status === undefined ||
+                  (record as unknown as { status: string }).status ===
+                    args.where.status) &&
+                (args.where.chainId === undefined ||
+                  record.chainId === args.where.chainId) &&
+                (args.where.id?.gt === undefined || key > args.where.id.gt),
+            )
+            .sort(([left], [right]) => (left < right ? -1 : 1))
+            .map(([key, record]) => ({
+              id: key,
+              chainId: record.chainId,
+              txHash: record.txHash,
+              logIndex: record.logIndex,
+              blockHash: record.blockHash,
+              status: (record as unknown as { status: string }).status,
+            }));
+          if (args.take !== undefined) {
+            rows = rows.slice(0, args.take);
+          }
+          return rows as unknown as Array<Record<string, unknown>>;
+        },
+        updateMany: async (argsUnknown: unknown) => {
+          const args = argsUnknown as {
+            where: { id: { in: string[] }; status: string };
+            data: { status: string };
+          };
+          let count = 0;
+          for (const id of args.where.id.in) {
+            const record = stores.rawTokenTransfers.get(id) as unknown as
+              | { status: string }
+              | undefined;
+            if (record && record.status === args.where.status) {
+              record.status = args.data.status;
+              count += 1;
+            }
+          }
+          return { count };
+        },
+      },
+      rawLog: {
+        findMany: async (argsUnknown: unknown) => {
+          const args = argsUnknown as { where: { txHash: { in: string[] } } };
+          return [...stores.rawLogs.entries()]
+            .filter(([, record]) => args.where.txHash.in.includes(record.txHash))
+            .map(([key, record]) => ({
+              id: key,
+              chainId: record.chainId,
+              txHash: record.txHash,
+              logIndex: record.logIndex,
+              blockHash: record.blockHash,
+              topic0:
+                (record as unknown as { topic0?: string | null }).topic0 ?? null,
+              status: (record as unknown as { status: string }).status,
+            })) as unknown as Array<Record<string, unknown>>;
+        },
+      },
+    };
+
+    const repairReport = await repairFabricatedTokenTransfers(
+      { apply: true, chainId: 369 },
+      repairClient,
+    );
+
+    // The genuine burn transfer persisted by run 1 stays untouched; only the
+    // StakeStart mis-decode is proven fabricated and invalidated.
+    expect(repairReport.genuineTransfers).toBe(1);
+    expect(repairReport.provenFabricatedTransfers).toBe(1);
+    expect(repairReport.changedTransfers).toBe(1);
+    expect(repairReport.fabricated[0]).toMatchObject({
+      transferId: fabricatedIdentity,
+      txHash: "0xstakestart",
+      logIndex: 1,
+    });
+
+    // Run 2: with the fabricated row invalidated, the stake-start shape is
+    // 1-outbound/0-inbound again and the genuine evidence lands.
+    await runWalletSync({
+      wallet: { id: "wallet_1", chainId: 369, address: walletAddress },
+      sourceFamilies: ["STAKING"],
+      startBlock: 140n,
+      endBlock: 140n,
+      policyLabel: "stake-start-after-repair",
+      dependencies,
+    });
+
+    expect(stores.rawStakeActions.size).toBe(1);
+    expect([...stores.rawStakeActions.values()][0]).toMatchObject({
+      actionKind: "START",
+      stakeId: 42n,
+      stakeIndex: 3,
+      stakedDays: 365,
+      principalLockedRaw: "100000000",
+    });
   });
 
   it.each([
