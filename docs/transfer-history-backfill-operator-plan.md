@@ -138,17 +138,23 @@ as transfer coverage — the cursor range is the only trustworthy "no gaps" clai
 transaction/transfer, provided `FIRST_ACTIVITY_BLOCK < CURSOR_FROM` (expected, given the negative
 balances). Determine `FIRST_ACTIVITY_BLOCK` from the PulseChain explorer
 (`scan.pulsechain.com` address page, "first seen") or by RPC bisection if the explorer is
-unavailable. Cross-check: the earliest ledger entry that *spends* an asset flagged
-`negative-token-balance` must sit above `FIRST_ACTIVITY_BLOCK`:
+unavailable. Cross-check: the earliest ledger entry that *spends* (direction `OUT`) an asset
+flagged `negative-token-balance` must sit at a block above `FIRST_ACTIVITY_BLOCK`. Block height
+lives on `LedgerActionGroup.blockNumber` (`LedgerEntry` carries only `occurredAt`), so join:
 
 ```sql
--- I2: earliest ledger activity per negative-balance asset
-SELECT "assetId", min("occurredAt"), count(*)
-FROM "LedgerEntry"
-WHERE "walletId" = :walletId AND "chainId" = 369
-  AND "assetId" IN (:negativeAssetIds)  -- from PortfolioMaterializationState warnings
-GROUP BY "assetId" ORDER BY min("occurredAt");
+-- I2: earliest OUT (spend) block per negative-balance asset
+SELECT e."assetId", min(g."blockNumber") AS earliest_out_block, count(*)
+FROM "LedgerEntry" e
+JOIN "LedgerActionGroup" g ON g.id = e."actionGroupId"
+WHERE e."walletId" = :walletId AND e."chainId" = 369
+  AND e.direction = 'OUT'
+  AND e."assetId" IN (:negativeAssetIds)  -- from PortfolioMaterializationState warnings
+GROUP BY e."assetId" ORDER BY min(g."blockNumber");
 ```
+
+Each `earliest_out_block` must be `> FIRST_ACTIVITY_BLOCK`; inbound rows must not be used to
+bound earliest activity.
 
 ### Q3 — Does previous transfer ingestion exist? **[OPERATOR INPUT — expected: yes, partial]**
 
@@ -168,7 +174,7 @@ first activity. If NO TRANSFERS cursor exists at all, the sequence switches to C
 
 ### Q4 — How many transfer windows are expected? **[OPERATOR INPUT — formula fixed]**
 
-```
+```text
 GAP = CURSOR_FROM − FIRST_ACTIVITY_BLOCK          (Case A)
 W   = ceil(GAP / 1000)
 ```
@@ -186,8 +192,16 @@ operational choice.
 - The remaining ~11,528 still-ACTIVE fabricated rows: **can interfere if and only if** a row falls
   inside a backfill window's block range AND matches the wallet address. Fabricated rows decoded
   from HEX `StakeStart` events alias the staker into `fromAddress`, so wallet-relevant hits are
-  plausible in ranges around historical stake operations. Detection query (run per window, §7
-  check V8):
+  plausible in ranges around historical stake operations.
+
+  **Timing is critical: this check is a PRE-SUBMIT hard gate, not a post-completion check.**
+  The window run re-reads ALL ACTIVE rows in the range and persists ledger entries from them
+  *before* the run reaches `COMPLETED` (fact 8) — a contamination check run only after completion
+  would fire after the contaminated entries are already in the canonical ledger. Run the query
+  below over `[startBlock_k, endBlock_k]` **before** every `POST /api/sync/manual`.
+
+  Detection query (`RawLog` stores scalar `topic0..topic3` columns; `topic0` is nullable, and a
+  NULL `topic0` cannot be a genuine ERC-20 Transfer, so treat NULL as a hit):
 
 ```sql
 -- I5/V8: ACTIVE RawTokenTransfer rows in range whose backing RawLog is not a real ERC-20 Transfer
@@ -199,14 +213,22 @@ JOIN "RawLog" l
 WHERE t."chainId" = 369 AND t.status = 'ACTIVE'
   AND t."blockNumber" BETWEEN :startBlock AND :endBlock
   AND (lower(t."fromAddress") = :wallet OR lower(t."toAddress") = :wallet)
-  AND l.topics[1] <> '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+  AND (l."topic0" IS NULL
+       OR lower(l."topic0") <> '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef');
 ```
 
-If this returns rows for a window: **STOP. Do not normalize around it, do not run a chain-wide
+If this returns rows for a window: **STOP — do not submit the window, do not run a chain-wide
 repair.** Report the exact identities to the product owner; the existing identity-targeted repair
 (`scripts/repair-fabricated-token-transfers.ts`, exact `chainId + txHash + logIndex + blockHash`
 targeting) is the approved bounded remedy, but invoking it for new rows is a product-owner
 decision, not part of this plan.
+
+**Remediation if contamination is discovered only after a window ran** (pre-gate skipped or
+missed): STOP the campaign; obtain product-owner approval for the identity-targeted repair of the
+specific rows (marks them `REORGED`); then run one `POST /api/rebuild` over the affected window's
+range with `sourceFamilies: ["TRANSFERS"]` — rebuild deletes the scoped `TRANSFER` ledger entries
+for that range and re-normalizes from ACTIVE-only raw (facts 8, 11), which purges the contaminated
+entries deterministically and re-materializes. Resume the window sequence afterwards.
 
 ### Q6 — Rebuild after every window, after groups, or once at the end? **Answered from code: grouped checkpoints + once at the end.**
 
@@ -236,9 +258,12 @@ the span cap, deterministic no-op for the ledger, full materialization refresh):
   "sourceFamilies": ["TRANSFERS"] }
 ```
 
-Record the full warning list from each checkpoint; the negative-balance set must shrink
-monotonically (in count of assets or magnitude per asset). If a checkpoint shows a magnitude
-*growing*, STOP and investigate before the next window.
+Record the full warning list from each checkpoint. Treat the negative-balance trend as a
+**heuristic**, not a gate: it is expected to shrink over the campaign, but a single checkpoint can
+legitimately show a magnitude *growing* — a descending window can ingest a historical outflow
+before the even-earlier inflow that funds it has been reached. Do not stop on trend alone.
+Progression gates are: cursor continuity (V10), no unexpected warning classes (V2), no fabricated
+contamination (V8), and the final reconciliation in §9.
 
 ---
 
@@ -258,10 +283,13 @@ Hard-stop if any check fails:
    Must return 0 rows. A stale row (PENDING > 15 min / RUNNING > 60 min, fact 4) must be
    investigated and manually marked `FAILED` before proceeding — it will otherwise 409 every
    window.
-5. `SYNC_MAX_WINDOW_SIZE` is set for the RPC tier per `docs/operator-environments.md` and the
-   comment at `src/services/sync/transfer-sync.ts:81-83` (public RPC → 2, private → 500+,
-   local → 2000). Confirm which RPC endpoint is authoritative (no hardcoded default exists since
-   PR #249).
+5. `SYNC_MAX_WINDOW_SIZE` is set **explicitly** for the RPC tier per
+   `docs/operator-environments.md` and the comment at `src/services/sync/transfer-sync.ts:81-86`
+   (public RPC → 2, private → 500+, local → 2000). If unset, the code falls back to a hardcoded
+   default of `2` — the slowest, public-RPC profile — so an unset variable silently maximizes
+   campaign wall-clock time (risk R1). Separately, confirm which RPC **endpoint URL** is
+   authoritative: the endpoint has NO hardcoded default since PR #249 and must be
+   operator-supplied.
 6. Investigation queries I1–I3 executed and `CURSOR_FROM`, `CURSOR_TO`, `FIRST_ACTIVITY_BLOCK`,
    `W` recorded in this document (§10 table).
 
@@ -285,7 +313,7 @@ recorded (fact 5) and gap accounting breaks.
 
 ### Case A window formula
 
-```
+```text
 Window k (k = 1..W):
   startBlock_k = max(CURSOR_FROM − 1000·k,        FIRST_ACTIVITY_BLOCK)
   endBlock_k   =     CURSOR_FROM − 1000·(k−1) − 1
@@ -298,7 +326,7 @@ Window k (k = 1..W):
 | 1 | `CURSOR_FROM − 1000` | `CURSOR_FROM − 1` | First backfill slice adjacent to existing coverage | Unknown until run; record `rawLogCount`, RawTokenTransfer/RawTransaction deltas as the baseline | Full §7 checklist; cursor `fromBlock` == `startBlock_1` |
 | 2 | `CURSOR_FROM − 2000` | `CURSOR_FROM − 1001` | Continue descending | Compare against Window 1 baseline | Full §7 checklist; cursor `fromBlock` == `startBlock_2` |
 | … | … | … | … | … | … |
-| every 25th | — | — | Checkpoint rebuild (§3 Q6) | n/a | Negative-balance set shrank vs previous checkpoint |
+| every 25th | — | — | Checkpoint rebuild (§3 Q6) | n/a | Negative-balance trend recorded (heuristic — see §3 Q6; not a stop gate by itself) |
 | W (last) | `FIRST_ACTIVITY_BLOCK` | `CURSOR_FROM − 1000·(W−1) − 1` | Reach first wallet activity | Should contain the wallet's earliest inflows — the missing evidence behind the negative balances | Full §7 checklist + final rebuild + §9 success criteria |
 
 Per-window "expected transfer activity" cannot be honestly pre-filled from this planning
@@ -310,7 +338,10 @@ spikes (possible provider topic-filter misbehavior, fact 8) for manual review be
 ### Window execution procedure (every window)
 
 1. Preflight steps 2–4 (§4) still hold.
-2. Submit:
+2. **Pre-submit hard gate:** run the §3 Q5 contamination query over
+   `[startBlock_k, endBlock_k]` — must return 0 rows (see §7 V8). Also record the V7 baseline
+   count and submission time `T_k`. On contamination hits: STOP, do not submit.
+3. Submit:
    ```json
    POST /api/sync/manual
    { "walletAddress": "0x75f808367720951e789d47e9e9db51148d9aa765", "chainId": 369,
@@ -319,13 +350,13 @@ spikes (possible provider topic-filter misbehavior, fact 8) for manual review be
      "policyLabel": "transfer-history-backfill-window-<k>" }
    ```
    The `policyLabel` numbering makes the SyncRun history a self-documenting audit trail.
-3. Poll `GET /api/debug/status` (or the SyncRun row) until status leaves
+4. Poll `GET /api/debug/status` (or the SyncRun row) until status leaves
    `PENDING`/`RUNNING`. Never submit the next window while any run is active — the 409 lock
    enforces this, but do not rely on 409s as a pacing mechanism.
-4. Run the §7 verification checklist. A window is DONE only when every item passes.
-5. On `FAILED`: read `errorMessage`, `failedSourceFamily`, `failedFromBlock`/`failedToBlock`;
+5. Run the §7 verification checklist. A window is DONE only when every item passes.
+6. On `FAILED`: read `errorMessage`, `failedSourceFamily`, `failedFromBlock`/`failedToBlock`;
    fix the cause (usually RPC); re-submit the SAME window (idempotent, fact 7). Never skip ahead.
-6. Every 25 windows: checkpoint rebuild + trend check (§3 Q6).
+7. Every 25 windows: checkpoint rebuild + trend check (§3 Q6).
 
 ---
 
@@ -351,8 +382,8 @@ A window is NOT successful merely because the SyncRun completed (V1). All of:
 | V4 | failedSourceFamily | same | `NULL` (also `failedFromBlock`/`failedToBlock` NULL) |
 | V5 | RawTransaction count | `SELECT count(*) FROM "RawTransaction" WHERE "chainId"=369 AND "blockNumber" BETWEEN :start AND :end AND (lower("fromAddress")=:wallet OR lower("toAddress")=:wallet);` | Recorded; consistent with window trend |
 | V6 | RawTokenTransfer count | same shape against `"RawTokenTransfer"` with `status='ACTIVE'` | Recorded; consistent with window trend |
-| V7 | Wallet relevance | `SELECT count(*) FROM "RawTokenTransfer" WHERE "chainId"=369 AND status='ACTIVE' AND "blockNumber" BETWEEN :start AND :end AND NOT (lower("fromAddress")=:wallet OR lower("toAddress")=:wallet);` | `0` new rows (pre-existing rows from other ingestion paths are allowed but must be explained) |
-| V8 | Fabricated contamination | Query from §3 Q5 over the window range | `0` rows; otherwise STOP + report identities (do NOT repair unilaterally) |
+| V7 | Wallet relevance (baseline-and-delta) | **Before** submitting the window, record `BASELINE_k` = `SELECT count(*) FROM "RawTokenTransfer" WHERE "chainId"=369 AND status='ACTIVE' AND "blockNumber" BETWEEN :start AND :end AND NOT (lower("fromAddress")=:wallet OR lower("toAddress")=:wallet);` and the window submission time `T_k`. **After** completion, re-run the same query and also list new rows via `… AND "createdAt" >= :T_k` (RawTokenTransfer has `createdAt`). | Post-count − `BASELINE_k` = `0` and the `createdAt`-filtered list is empty. Pre-existing non-wallet rows (already counted in `BASELINE_k`) do not fail the window but must be noted; any NEW non-wallet row → STOP and report (provider topic-filter misbehavior, R6). |
+| V8 | Fabricated contamination | **Pre-submit hard gate** (§5 step 2): §3 Q5 query over the window range BEFORE `POST /api/sync/manual` — normalization sweeps ACTIVE rows in-range during the run, so a post-completion check alone is too late. Re-run the same query after completion as confirmation. | Pre-gate `0` rows (else STOP, do not submit, report identities — do NOT repair unilaterally); post-run re-check `0` rows (else apply the §3 Q5 post-hoc remediation path) |
 | V9 | Duplicate detection | `SELECT "txHash","logIndex","blockHash",count(*) FROM "RawTokenTransfer" WHERE "chainId"=369 AND "blockNumber" BETWEEN :start AND :end GROUP BY 1,2,3 HAVING count(*)>1;` and the analogous `dedupeKey` group-by on `"LedgerEntry"` | 0 rows both (schema unique indexes + deterministic IDs should make this impossible, fact 7 — the check is evidence, not hope) |
 | V10 | Cursor extended | `SELECT "fromBlock","toBlock" FROM "SyncCursor" WHERE "walletId"=:walletId AND "chainId"=369 AND "sourceFamily"='TRANSFERS';` | Case A: `fromBlock = startBlock_k` and `toBlock` unchanged; Case B: `toBlock = endBlock_k` |
 | V11 | Prisma health | `GET /api/debug/health` | healthy |
@@ -366,7 +397,7 @@ A window is NOT successful merely because the SyncRun completed (V1). All of:
 |---|---|---|---|
 | R1 | **RPC volume / wall-clock.** ≥1,000 `getBlock(includeTransactions)` calls per window regardless of tuning, plus receipts and getLogs sub-windows (fact 6). At `SYNC_MAX_WINDOW_SIZE=2` a window adds ~1,000 getLogs calls on top. Thousands of windows ⇒ millions of RPC calls, potentially days of runtime. | Code design | Tune `SYNC_MAX_WINDOW_SIZE` to the RPC tier before Window 1; use a private/local RPC endpoint; treat the backfill as a long-running operator campaign, not a single session. No code changes in this task's scope. |
 | R2 | **Omitted `startBlock`.** One malformed request without `startBlock` on a cursor-less family scans from block 0 unbounded (fact 2). | Orchestrator default `0n` | Window template always includes both bounds; verify request JSON before submitting. |
-| R3 | **Disconnected window silently uncounted.** A typo'd start block that doesn't touch the cursor range ingests fine but never registers in the cursor (fact 5), corrupting progress accounting. | Cursor merge contiguity | V10 catches it immediately: cursor `fromBlock` must equal the window's `startBlock`. If V10 fails, re-run the *correct* adjacent window (idempotent) — do not continue. |
+| R3 | **Disconnected window silently uncounted.** A typo'd start block that doesn't touch the cursor range ingests fine but never registers in the cursor (fact 5), corrupting progress accounting. The mistaken window's raw + ledger writes happen anyway, and checkpoint materialization is full-wallet (fact 10), so out-of-order entries can shift balances/warnings before the cursor actually covers that range. | Cursor merge contiguity | V10 catches it immediately: cursor `fromBlock` must equal the window's `startBlock`. If V10 fails, re-run the *correct* adjacent window (idempotent) — do not continue past it. The mistaken window's data needs no quarantine: if its pre-submit V8 gate was run, the entries are genuine chain evidence that later adjacent windows will legitimately cover (idempotent, fact 7). Until the cursor has caught up through the mistaken range, **suppress checkpoint trend conclusions** (§3 Q6 heuristic is void over that span). If the mistaken window was submitted WITHOUT its V8 pre-gate, run the V8 query over its range now and, on hits, apply the §3 Q5 post-hoc remediation path. |
 | R4 | **Still-ACTIVE fabricated rows swept into normalization** in windows overlapping historical stake activity (§3 Q5). | ACTIVE-only read-back (fact 8) | V8 every window; STOP on hits; product-owner decision on identity-targeted repair. Explicitly NOT fixed unilaterally under this plan. |
 | R5 | **Crashed run wedges the lock.** The pipeline runs in `after()`; a server restart mid-window leaves the SyncRun `RUNNING` forever, 409-ing all future windows (facts 3, 4). | Async execution | V12 + §4 step 4: manually mark the wedged run `FAILED`, verify cursor state (it only advances after persistence, so no gap), re-run the window. |
 | R6 | **Provider topic-filter misbehavior** floods warnings (skipped unrelated logs) and, pre-#326, fabricated evidence. | Fact 8 | Filter now drops these at fetch time with warnings; V2 triages warning classes; count-only gating avoids the 200-detail truncation trap. |
