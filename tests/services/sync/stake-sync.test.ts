@@ -407,6 +407,7 @@ function createMemoryStores() {
     rawTokenTransfers,
     ledgerEntries,
     tokens,
+    runs,
   };
 }
 
@@ -1137,6 +1138,15 @@ describe("stake sync flow", () => {
     });
 
     expect(blocked.warningCount).toBe(1);
+    // Pin the block to the shape-check skip itself (persisted through the
+    // SyncRun record) so this test cannot pass on an unrelated warning.
+    const blockedWarnings = stores.runs.flatMap((run) => {
+      const details = (run as { warningDetails?: unknown }).warningDetails;
+      return Array.isArray(details) ? (details as string[]) : [];
+    });
+    expect(blockedWarnings).toContain(
+      "skip-stake:0xstakestart:ambiguous-start-transfer-shape:2:0",
+    );
     expect(stores.rawStakeActions.size).toBe(0);
 
     // Operator repair over the same persisted state, via an adapter that
