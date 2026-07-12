@@ -4,8 +4,6 @@ import type { SourceFamily } from "@prisma/client";
 
 import { PHEX_ADDRESS } from "@/config/assets";
 import { SUPPORTED_SYNC_SOURCE_FAMILIES } from "@/services/sync/source-families";
-import { getDb } from "@/lib/db";
-import { createPublicClientForChain } from "@/services/chains/public-client";
 import {
   normalizeNativeTransaction,
   normalizeTransfer,
@@ -76,10 +74,8 @@ export function createSyncDependencies(args?: {
   maxWindowSize?: bigint;
 }) {
   const { db, publicClient } = createDefaultSyncClients({
-    db: args?.db ?? (getDb() as unknown as SyncDbClient),
-    publicClient:
-      args?.publicClient ??
-      (createPublicClientForChain() as unknown as SyncPublicClient),
+    db: args?.db,
+    publicClient: args?.publicClient,
   });
   const normalizerVersion = args?.normalizerVersion ?? "v1";
   // SYNC_MAX_WINDOW_SIZE env var allows per-deployment tuning:

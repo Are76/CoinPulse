@@ -565,6 +565,85 @@ function createUnfilteredLogsStakeStartPublicClient(walletAddress: string) {
   };
 }
 
+function createUnrelatedWalletNoiseStakeStartPublicClient(walletAddress: string) {
+  const walletTopic = "0x0000000000000000000000001111111111111111111111111111111111111111";
+  // A provider that does not scope eth_getLogs to the tracked wallet returns
+  // another holder's genuine pHEX transfer from the same block alongside
+  // this wallet's real stake-start burn transfer. Neither indexed address on
+  // the noise log is the tracked wallet.
+  const unrelatedWalletTransferLog = {
+    address: PHEX_ADDRESS_LOWER,
+    blockHash: "0xblock140",
+    blockNumber: 140n,
+    data: "0x00000000000000000000000000000000000000000000000000000000000003e8",
+    logIndex: 0,
+    transactionHash: "0xunrelatedtransfer",
+    topics: [
+      TRANSFER_EVENT_TOPIC0,
+      "0x000000000000000000000000cccccccccccccccccccccccccccccccccccccccc",
+      "0x000000000000000000000000dddddddddddddddddddddddddddddddddddddddd",
+    ],
+  };
+  const genuineBurnLog = {
+    address: PHEX_ADDRESS_LOWER,
+    blockHash: "0xblock140",
+    blockNumber: 140n,
+    data: "0x0000000000000000000000000000000000000000000000000000000005f5e100",
+    logIndex: 2,
+    transactionHash: "0xstakestart",
+    topics: [
+      TRANSFER_EVENT_TOPIC0,
+      walletTopic,
+      "0x0000000000000000000000002b591e99afe9f32eaa6214f7b7629768c40eeb39",
+    ],
+  };
+
+  return {
+    // Ignores the requested topics filter entirely and always returns both
+    // logs — the strongest form of "provider does not honor the filter".
+    getLogs: vi.fn(async () => [unrelatedWalletTransferLog, genuineBurnLog]),
+    getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+      number: blockNumber,
+      hash: "0xblock140",
+      parentHash: "0xblock139",
+      timestamp: 1_700_000_500n,
+    })),
+    readContract: vi.fn(async ({ functionName, blockNumber }: { functionName: string; blockNumber?: bigint }) => {
+      expect(blockNumber).toBe(140n);
+      if (functionName === "stakeCount") {
+        return 4n;
+      }
+      if (functionName === "stakeLists") {
+        return [42n, 100000000n, 777n, 1, 365, 0, false];
+      }
+      throw new Error(`unexpected function ${functionName}`);
+    }),
+    getTransaction: vi.fn(async () => ({
+      hash: "0xstakestart",
+      blockHash: "0xblock140",
+      blockNumber: 140n,
+      transactionIndex: 3,
+      from: walletAddress,
+      to: PHEX_ADDRESS_LOWER,
+      value: 0n,
+      gasPrice: 2_000_000_000n,
+      input: encodeFunctionData({
+        abi: PHEX_STAKE_ABI,
+        functionName: "stakeStart",
+        args: [100000000n, 365n],
+      }),
+    })),
+    getTransactionReceipt: vi.fn(async () => ({
+      transactionHash: "0xstakestart",
+      blockHash: "0xblock140",
+      blockNumber: 140n,
+      gasUsed: 150_000n,
+      effectiveGasPrice: 2_000_000_000n,
+      logs: [],
+    })),
+  };
+}
+
 function createStakeEndPublicClient(walletAddress: string) {
   const walletTopic = "0x0000000000000000000000001111111111111111111111111111111111111111";
 
@@ -773,6 +852,43 @@ describe("stake sync flow", () => {
     expect(stores.rawStakeActions.size).toBe(1);
     const stakeAction = [...stores.rawStakeActions.values()][0];
     expect(stakeAction).toMatchObject({
+      actionKind: "START",
+      stakeId: 42n,
+      stakeIndex: 3,
+      stakedDays: 365,
+      principalLockedRaw: "100000000",
+    });
+  });
+
+  it("still produces the expected RawStakeAction when unrelated-wallet Transfer noise is mixed into the same block", async () => {
+    const stores = createMemoryStores();
+    const walletAddress = "0x1111111111111111111111111111111111111111";
+    const dependencies = createSyncDependencies({
+      db: stores.db as never,
+      publicClient: createUnrelatedWalletNoiseStakeStartPublicClient(walletAddress) as never,
+    });
+
+    const result = await runWalletSync({
+      wallet: { id: "wallet_1", chainId: 369, address: walletAddress },
+      sourceFamilies: ["STAKING"],
+      startBlock: 140n,
+      endBlock: 140n,
+      policyLabel: "stake-start-unrelated-wallet-noise",
+      dependencies,
+    });
+
+    // Only the genuine burn transfer is wallet-relevant; the unrelated
+    // holder's transfer must never reach RawLog/RawTokenTransfer persistence,
+    // and the genuine stake-start shape check must still pass.
+    expect(result.counts).toEqual({
+      rawLogs: 1,
+      actionGroups: 1,
+      ledgerEntries: 3,
+    });
+    expect(stores.rawTokenTransfers.size).toBe(1);
+    expect(stores.rawStakeActions.size).toBe(1);
+    const noiseStakeAction = [...stores.rawStakeActions.values()][0];
+    expect(noiseStakeAction).toMatchObject({
       actionKind: "START",
       stakeId: 42n,
       stakeIndex: 3,

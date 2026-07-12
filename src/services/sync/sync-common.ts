@@ -271,22 +271,35 @@ export async function ingestWalletTransferArtifacts(args: {
     }),
   ]);
   const fetchedLogs = dedupeRpcLogs([...incoming.logs, ...outgoing.logs]);
-  // Only genuine ERC-20 Transfer logs may enter the transfer evidence path.
-  // The window queries above already filter on the Transfer topic, but a
-  // provider (or transport) that ignores the topics filter can return
-  // arbitrary events, and decoding a non-Transfer event as a transfer
-  // fabricates evidence — e.g. HEX StakeStart aliases the staker into `from`
-  // and packs data0 into the amount, which then breaks the stake candidate
-  // transfer-shape checks.
+  // Only genuine ERC-20 Transfer logs that actually involve the tracked
+  // wallet may enter the transfer evidence path. The window queries above
+  // already request the Transfer topic scoped to the wallet, but a provider
+  // (or transport) that ignores the topics filter can return arbitrary
+  // events — including Transfer logs for unrelated wallets/tokens, or
+  // non-Transfer events. Decoding either fabricates evidence: a non-Transfer
+  // event (e.g. HEX StakeStart aliases the staker into `from` and packs
+  // data0 into the amount) breaks the stake candidate transfer-shape checks,
+  // and an unrelated-wallet Transfer pollutes raw evidence and triggers
+  // needless token metadata RPC calls for tokens the wallet never touched.
   const dedupedLogs = fetchedLogs.filter((log) => {
-    if (log.topics[0]?.toLowerCase() === TRANSFER_EVENT_TOPIC0) {
-      return true;
+    if (log.topics[0]?.toLowerCase() !== TRANSFER_EVENT_TOPIC0) {
+      warnings.push(
+        `skipped non-transfer log at ${log.blockNumber}:${log.logIndex} for ${log.address}`,
+      );
+      return false;
     }
 
-    warnings.push(
-      `skipped non-transfer log at ${log.blockNumber}:${log.logIndex} for ${log.address}`,
-    );
-    return false;
+    const fromTopic = log.topics[1]?.toLowerCase() ?? null;
+    const toTopic = log.topics[2]?.toLowerCase() ?? null;
+
+    if (fromTopic !== walletTopic && toTopic !== walletTopic) {
+      warnings.push(
+        `skipped unrelated-wallet transfer log at ${log.blockNumber}:${log.logIndex} for ${log.address}`,
+      );
+      return false;
+    }
+
+    return true;
   });
   const walletAddress = args.wallet.address.toLowerCase();
   const nativeScanWindows = buildNativeTransactionScanWindows({

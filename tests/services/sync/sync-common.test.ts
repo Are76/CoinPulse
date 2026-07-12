@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildDeterministicTokenId,
   buildNativeTransactionScanWindows,
+  ingestWalletTransferArtifacts,
   resolveTokenMetadata,
+  toTopicAddress,
   TRANSFER_EVENT_TOPIC0,
   withRawEthGetLogs,
 } from "@/services/sync/sync-common";
@@ -342,5 +344,317 @@ describe("resolveTokenMetadata token identity contracts", () => {
 
     expect(second).toEqual(first);
     expect(harness.publicClient.readContract).not.toHaveBeenCalled();
+  });
+});
+
+describe("ingestWalletTransferArtifacts wallet-relevance filtering", () => {
+  const WALLET_ADDRESS = "0x1111111111111111111111111111111111111111";
+  const WALLET_TOPIC = toTopicAddress(WALLET_ADDRESS);
+  // Pre-seeded so retained-log tests never need to hit readContract for
+  // token metadata; the address only used by the rejected-only log is
+  // deliberately left unseeded so a stray readContract call is observable.
+  const TRACKED_TOKEN_ADDRESS = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const REJECTED_ONLY_TOKEN_ADDRESS = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+  function createIngestionHarness() {
+    const rawLogs = new Map<string, Record<string, unknown>>();
+    const rawBlocks = new Map<string, Record<string, unknown>>();
+    const rawTransactions = new Map<string, Record<string, unknown>>();
+    const rawTokenTransfers = new Map<string, Record<string, unknown>>();
+    const tokens = new Map<string, Record<string, unknown>>([
+      [
+        `369:${TRACKED_TOKEN_ADDRESS}`,
+        {
+          id: "token_tracked",
+          addressLower: TRACKED_TOKEN_ADDRESS,
+          assetId: `chain:369:erc20:${TRACKED_TOKEN_ADDRESS}`,
+          decimals: 18,
+        },
+      ],
+    ]);
+
+    const db = {
+      rawLog: {
+        async createMany(args: {
+          data: Array<{ chainId: number; txHash: string; blockHash: string; logIndex: number }>;
+        }) {
+          let count = 0;
+          for (const item of args.data) {
+            const key = `${item.chainId}:${item.txHash}:${item.logIndex}:${item.blockHash}`;
+            if (!rawLogs.has(key)) {
+              rawLogs.set(key, item);
+              count += 1;
+            }
+          }
+          return { count };
+        },
+      },
+      rawBlock: {
+        async createMany(args: {
+          data: Array<{
+            chainId: number;
+            blockNumber: bigint;
+            blockHash: string;
+            parentHash: string;
+            timestamp: Date;
+          }>;
+        }) {
+          let count = 0;
+          for (const item of args.data) {
+            const key = `${item.chainId}:${item.blockNumber}:${item.blockHash}`;
+            if (!rawBlocks.has(key)) {
+              rawBlocks.set(key, item);
+              count += 1;
+            }
+          }
+          return { count };
+        },
+        async findMany(args: { where: { chainId: number; blockNumber: { gte: bigint; lte: bigint } } }) {
+          return Array.from(rawBlocks.values()).filter(
+            (item) =>
+              (item.chainId as number) === args.where.chainId &&
+              (item.blockNumber as bigint) >= args.where.blockNumber.gte &&
+              (item.blockNumber as bigint) <= args.where.blockNumber.lte,
+          );
+        },
+      },
+      rawTransaction: {
+        async createMany(args: { data: Array<{ chainId: number; txHash: string; blockHash: string }> }) {
+          let count = 0;
+          for (const item of args.data) {
+            const key = `${item.chainId}:${item.txHash}:${item.blockHash}`;
+            if (!rawTransactions.has(key)) {
+              rawTransactions.set(key, item);
+              count += 1;
+            }
+          }
+          return { count };
+        },
+        async findMany() {
+          return [];
+        },
+      },
+      rawTokenTransfer: {
+        async createMany(args: {
+          data: Array<{
+            chainId: number;
+            txHash: string;
+            blockHash: string;
+            logIndex: number;
+            fromAddress: string;
+            toAddress: string;
+          }>;
+        }) {
+          let count = 0;
+          for (const item of args.data) {
+            const key = `${item.chainId}:${item.txHash}:${item.logIndex}:${item.blockHash}`;
+            if (!rawTokenTransfers.has(key)) {
+              rawTokenTransfers.set(key, item);
+              count += 1;
+            }
+          }
+          return { count };
+        },
+        async findMany(args: {
+          where: {
+            chainId: number;
+            blockNumber: { gte: bigint; lte: bigint };
+            OR: Array<{ fromAddress?: string; toAddress?: string }>;
+          };
+        }) {
+          const fromAddress = args.where.OR[0]?.fromAddress;
+          const toAddress = args.where.OR[1]?.toAddress;
+          return Array.from(rawTokenTransfers.values()).filter(
+            (item) =>
+              (item.chainId as number) === args.where.chainId &&
+              (item.blockNumber as bigint) >= args.where.blockNumber.gte &&
+              (item.blockNumber as bigint) <= args.where.blockNumber.lte &&
+              (item.fromAddress === fromAddress || item.toAddress === toAddress),
+          );
+        },
+      },
+      token: {
+        async findUnique(args: {
+          where: { chainId_addressLower: { chainId: number; addressLower: string } };
+        }) {
+          return (
+            tokens.get(
+              `${args.where.chainId_addressLower.chainId}:${args.where.chainId_addressLower.addressLower}`,
+            ) ?? null
+          );
+        },
+        async upsert(args: {
+          where: { chainId_addressLower: { chainId: number; addressLower: string } };
+          create: Record<string, unknown>;
+          update: Record<string, unknown>;
+        }) {
+          const key = `${args.where.chainId_addressLower.chainId}:${args.where.chainId_addressLower.addressLower}`;
+          const existing = tokens.get(key);
+          const next = existing ? { ...existing, ...args.update } : args.create;
+          tokens.set(key, next);
+          return next;
+        },
+      },
+      tokenMetadataSource: {
+        async upsert() {
+          return undefined;
+        },
+      },
+    };
+
+    return { db, rawLogs, rawBlocks, rawTransactions, rawTokenTransfers, tokens };
+  }
+
+  function createIngestionPublicClient(logs: unknown[]) {
+    return {
+      // A provider that does not honor the topics filter — the exact scenario
+      // this defense-in-depth check must survive — returns the same log set
+      // regardless of the requested topics.
+      getLogs: vi.fn(async () => logs),
+      getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+        number: blockNumber,
+        hash: "0xblock10",
+        parentHash: "0xblock9",
+        timestamp: 1_700_000_000n,
+        transactions: [],
+      })),
+      readContract: vi.fn(async ({ functionName }: { address: string; functionName: string }) => {
+        if (functionName === "decimals") return 18;
+        if (functionName === "symbol") return "TOK";
+        return "Token";
+      }),
+      getTransaction: vi.fn(),
+      getTransactionReceipt: vi.fn(),
+    };
+  }
+
+  const unrelatedLog = {
+    address: REJECTED_ONLY_TOKEN_ADDRESS,
+    blockHash: "0xblock10",
+    blockNumber: 10n,
+    data: "0x0000000000000000000000000000000000000000000000000000000000000064",
+    logIndex: 0,
+    transactionHash: "0xtxunrelated",
+    topics: [
+      TRANSFER_EVENT_TOPIC0,
+      "0x000000000000000000000000cccccccccccccccccccccccccccccccccccccccc",
+      "0x000000000000000000000000dddddddddddddddddddddddddddddddddddddddd",
+    ],
+  };
+
+  const inboundLog = {
+    address: TRACKED_TOKEN_ADDRESS,
+    blockHash: "0xblock10",
+    blockNumber: 10n,
+    data: "0x00000000000000000000000000000000000000000000000000000000000003e8",
+    logIndex: 1,
+    transactionHash: "0xtxinbound",
+    topics: [
+      TRANSFER_EVENT_TOPIC0,
+      "0x000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      WALLET_TOPIC,
+    ],
+  };
+
+  const outboundLog = {
+    address: TRACKED_TOKEN_ADDRESS,
+    blockHash: "0xblock10",
+    blockNumber: 10n,
+    data: "0x00000000000000000000000000000000000000000000000000000000000001f4",
+    logIndex: 2,
+    transactionHash: "0xtxoutbound",
+    topics: [
+      TRANSFER_EVENT_TOPIC0,
+      WALLET_TOPIC,
+      "0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff",
+    ],
+  };
+
+  const nonTransferLog = {
+    address: TRACKED_TOKEN_ADDRESS,
+    blockHash: "0xblock10",
+    blockNumber: 10n,
+    data: "0x00",
+    logIndex: 3,
+    transactionHash: "0xtxnontransfer",
+    topics: [
+      "0x0000000000000000000000000000000000000000000000000000000000000001",
+      WALLET_TOPIC,
+      "0x000000000000000000000000ffffffffffffffffffffffffffffffffffffffff",
+    ],
+  };
+
+  function runIngestion(logs: unknown[]) {
+    const harness = createIngestionHarness();
+    const publicClient = createIngestionPublicClient(logs);
+
+    return ingestWalletTransferArtifacts({
+      db: harness.db as never,
+      publicClient: publicClient as never,
+      maxWindowSize: 2n,
+      wallet: { chainId: 369, address: WALLET_ADDRESS },
+      fromBlock: 10n,
+      toBlock: 10n,
+    }).then((artifacts) => ({ artifacts, harness, publicClient }));
+  }
+
+  it("rejects a Transfer log whose topics do not reference the tracked wallet", async () => {
+    const { artifacts, harness } = await runIngestion([unrelatedLog]);
+
+    expect(artifacts.rawTransfers).toHaveLength(0);
+    expect(artifacts.warnings.some((warning) => warning.includes("unrelated-wallet"))).toBe(true);
+    expect(harness.rawLogs.size).toBe(0);
+  });
+
+  it("retains a genuine inbound wallet transfer (topic2 matches wallet)", async () => {
+    const { artifacts } = await runIngestion([inboundLog]);
+
+    expect(artifacts.rawTransfers).toHaveLength(1);
+    expect(artifacts.rawTransfers[0]).toMatchObject({
+      txHash: "0xtxinbound",
+      toAddress: WALLET_ADDRESS.toLowerCase(),
+    });
+  });
+
+  it("retains a genuine outbound wallet transfer (topic1 matches wallet)", async () => {
+    const { artifacts } = await runIngestion([outboundLog]);
+
+    expect(artifacts.rawTransfers).toHaveLength(1);
+    expect(artifacts.rawTransfers[0]).toMatchObject({
+      txHash: "0xtxoutbound",
+      fromAddress: WALLET_ADDRESS.toLowerCase(),
+    });
+  });
+
+  it("rejects a non-Transfer topic0 log", async () => {
+    const { artifacts, harness } = await runIngestion([nonTransferLog]);
+
+    expect(artifacts.rawTransfers).toHaveLength(0);
+    expect(artifacts.warnings.some((warning) => warning.includes("non-transfer"))).toBe(true);
+    expect(harness.rawLogs.size).toBe(0);
+  });
+
+  it("rejects unrelated-wallet logs before RawLog persistence and before token metadata resolution", async () => {
+    const { artifacts, harness, publicClient } = await runIngestion([
+      unrelatedLog,
+      inboundLog,
+      outboundLog,
+      nonTransferLog,
+    ]);
+
+    expect(artifacts.rawTransfers.map((transfer) => transfer.txHash).sort()).toEqual([
+      "0xtxinbound",
+      "0xtxoutbound",
+    ]);
+    // Only the two wallet-relevant logs ever reach persistRawLogs.
+    expect(harness.rawLogs.size).toBe(2);
+    expect(
+      Array.from(harness.rawLogs.values()).map((log) => (log as { txHash: string }).txHash).sort(),
+    ).toEqual(["0xtxinbound", "0xtxoutbound"]);
+    // Token metadata resolution/readContract must never run for a token
+    // contract that appears only in a rejected log.
+    for (const call of publicClient.readContract.mock.calls) {
+      expect(call[0].address).not.toBe(REJECTED_ONLY_TOKEN_ADDRESS);
+    }
   });
 });

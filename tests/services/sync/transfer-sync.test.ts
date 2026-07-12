@@ -1236,3 +1236,85 @@ describe("transfer sync flow", () => {
     ).toEqual([30n, 31n, 32n, 33n, 34n]);
   });
 });
+
+describe("createSyncDependencies production client wiring", () => {
+  // Deliberately does not mock createPublicClientForChain()/createDefaultSyncClients():
+  // doing so would bypass the exact wiring bug this test guards against (the
+  // production zero-arg path silently skipping withRawEthGetLogs). The only
+  // external dependency is PULSECHAIN_RPC_URL, which tests/setup.ts always
+  // sets via Vitest's setupFiles before this file is imported — so the real
+  // client construction never needs a live network call, only the stubbed
+  // fetch below.
+  it("honors the raw eth_getLogs topics filter when no publicClient is injected", async () => {
+    const stores = createMemoryStores();
+    const walletAddress = "0x1111111111111111111111111111111111111111";
+    const walletTopic =
+      "0x0000000000000000000000001111111111111111111111111111111111111111";
+    const capturedGetLogsTopics: unknown[] = [];
+
+    const fetchMock = vi.fn(async (_url: unknown, init: RequestInit) => {
+      const body = JSON.parse(init.body as string) as {
+        id: number;
+        method: string;
+        params: unknown[];
+      };
+
+      if (body.method === "eth_getLogs") {
+        const filter = body.params[0] as { topics?: unknown };
+        capturedGetLogsTopics.push(filter.topics);
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (body.method === "eth_getBlockByNumber") {
+        const [blockNumberHex] = body.params as [string, boolean];
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: {
+              number: blockNumberHex,
+              hash: "0xblock10",
+              parentHash: "0xblock9",
+              timestamp: "0x652b2c00",
+              transactions: [],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+
+      throw new Error(`unexpected JSON-RPC method in test: ${body.method}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      // Zero-argument production path: mirrors sync-orchestrator's
+      // createSyncDependencies() call with no injected publicClient. Only the
+      // db is stubbed here; the publicClient must come from the real
+      // createDefaultSyncClients() fallback (withRawEthGetLogs(createPublicClientForChain())).
+      const dependencies = createSyncDependencies({ db: stores.db as never });
+
+      await runWalletSync({
+        wallet: {
+          id: "wallet_1",
+          chainId: 369,
+          address: walletAddress,
+        },
+        sourceFamilies: ["TRANSFERS"],
+        startBlock: 10n,
+        endBlock: 10n,
+        policyLabel: "zero-arg-production-path",
+        dependencies,
+      });
+
+      expect(capturedGetLogsTopics).toContainEqual([TRANSFER_EVENT_TOPIC0, null, walletTopic]);
+      expect(capturedGetLogsTopics).toContainEqual([TRANSFER_EVENT_TOPIC0, walletTopic, null]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
