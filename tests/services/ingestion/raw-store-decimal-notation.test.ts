@@ -5,6 +5,7 @@ import {
   readWalletDexSwapSnapshots,
   readWalletRawLpActions,
   readWalletRawStakeActions,
+  readWalletRawTransactions,
   readWalletTransferRawTokenTransfers,
 } from "@/services/ingestion/raw-store";
 import { toCanonicalQuantity } from "@/services/normalization/types";
@@ -185,6 +186,166 @@ describe("readWalletTransferRawTokenTransfers large Decimal serialization", () =
     expect(toCanonicalQuantity({ amountRaw, decimals: 18 })).toBe(
       "28000.00000000000000014",
     );
+  });
+});
+
+// Same failure mode as the transfer reader fixed in PR #330: the RawTransaction
+// valueRaw/gasPriceRaw/gasUsedRaw Decimal(78, 0) columns must serialize as
+// fixed-point, digit-only strings. valueRaw feeds the downstream /^\d+$/
+// canonical quantity guard (toCanonicalQuantity), and gasPriceRaw/gasUsedRaw
+// feed BigInt(...) fee arithmetic in normalizeNativeTransaction — both reject
+// exponential notation. A native transfer >= 1,000 PLS (1e21 wei) triggers it.
+describe("readWalletRawTransactions large Decimal serialization", () => {
+  function transactionRecord(overrides: Record<string, unknown>) {
+    return {
+      chainId: 369,
+      txHash: "0xnative",
+      blockNumber: 50n,
+      blockHash: "0xblock50",
+      transactionIndex: 0,
+      fromAddress: WALLET,
+      toAddress: "0x2222222222222222222222222222222222222222",
+      valueRaw: new Prisma.Decimal("0"),
+      gasPriceRaw: null,
+      gasUsedRaw: null,
+      ...overrides,
+    };
+  }
+
+  async function readTransaction(overrides: Record<string, unknown>) {
+    const [record] = await readWalletRawTransactions(
+      {
+        chainId: 369,
+        walletAddress: WALLET,
+        fromBlock: 0n,
+        toBlock: 100n,
+      },
+      {
+        rawTransaction: {
+          findMany: async () => [transactionRecord(overrides)],
+        },
+      },
+    );
+    return record;
+  }
+
+  const digitOnly = /^\d+$/;
+
+  describe("valueRaw", () => {
+    it("passes through a normal small integer value unchanged", async () => {
+      const record = await readTransaction({
+        valueRaw: new Prisma.Decimal("123456789"),
+      });
+      expect(record.valueRaw).toBe("123456789");
+      expect(record.valueRaw).toMatch(digitOnly);
+    });
+
+    it("emits a digit-only string at the 1e21 exponential-notation threshold (1,000 PLS)", async () => {
+      const value = new Prisma.Decimal("1000000000000000000000"); // exactly 1e21
+      // Guard: confirm the raw toString() shape is actually exponential, i.e. we
+      // are reproducing the failure condition rather than a benign value.
+      expect(value.toString()).toContain("e+");
+
+      const record = await readTransaction({ valueRaw: value });
+      expect(record.valueRaw).toBe("1000000000000000000000");
+      expect(record.valueRaw).toMatch(digitOnly);
+      expect(record.valueRaw).not.toContain("e");
+      expect(record.valueRaw).not.toContain("E");
+    });
+
+    it("preserves an above-threshold native value exactly", async () => {
+      const value = new Prisma.Decimal("1234567890123456789012"); // ~1.23e21
+      expect(value.toString()).toContain("e+");
+
+      const record = await readTransaction({ valueRaw: value });
+      expect(record.valueRaw).toBe("1234567890123456789012");
+      expect(record.valueRaw).toMatch(digitOnly);
+      expect(record.valueRaw).not.toContain("e");
+      expect(record.valueRaw).not.toContain("E");
+    });
+
+    it("preserves a full-width Decimal(78, 0) magnitude exactly", async () => {
+      const seventyEightDigits = "9".repeat(78);
+      const value = new Prisma.Decimal(seventyEightDigits);
+      expect(value.toString()).toContain("e+");
+
+      const record = await readTransaction({ valueRaw: value });
+      expect(record.valueRaw).toBe(seventyEightDigits);
+      expect(record.valueRaw).toMatch(digitOnly);
+    });
+
+    it("produces output accepted by the downstream canonical quantity guard", async () => {
+      const record = await readTransaction({
+        valueRaw: new Prisma.Decimal("1234567890123456789012"),
+      });
+      // toCanonicalQuantity throws "amountRaw must be an unsigned integer string"
+      // on exponential notation — the exact Window 1 failure class.
+      expect(
+        toCanonicalQuantity({ amountRaw: record.valueRaw, decimals: 18 }),
+      ).toBe("1234.567890123456789012");
+    });
+  });
+
+  describe("gasPriceRaw", () => {
+    it("preserves null", async () => {
+      const record = await readTransaction({ gasPriceRaw: null });
+      expect(record.gasPriceRaw).toBeNull();
+    });
+
+    it("passes through a normal small value unchanged", async () => {
+      const record = await readTransaction({
+        gasPriceRaw: new Prisma.Decimal("2500000000000"),
+      });
+      expect(record.gasPriceRaw).toBe("2500000000000");
+      expect(record.gasPriceRaw).toMatch(digitOnly);
+    });
+
+    it("emits a digit-only string at or above the exponential-notation threshold", async () => {
+      const gasPrice = new Prisma.Decimal("1500000000000000000000"); // 1.5e21
+      expect(gasPrice.toString()).toContain("e+");
+
+      const record = await readTransaction({ gasPriceRaw: gasPrice });
+      expect(record.gasPriceRaw).toBe("1500000000000000000000");
+      expect(record.gasPriceRaw).toMatch(digitOnly);
+      expect(record.gasPriceRaw).not.toContain("e");
+      expect(record.gasPriceRaw).not.toContain("E");
+      // Downstream fee arithmetic does BigInt(gasPriceRaw) — BigInt throws a
+      // SyntaxError on exponential notation, so this must parse cleanly.
+      expect(BigInt(record.gasPriceRaw as string).toString()).toBe(
+        "1500000000000000000000",
+      );
+    });
+  });
+
+  describe("gasUsedRaw", () => {
+    it("preserves null", async () => {
+      const record = await readTransaction({ gasUsedRaw: null });
+      expect(record.gasUsedRaw).toBeNull();
+    });
+
+    it("passes through a normal small value unchanged", async () => {
+      const record = await readTransaction({
+        gasUsedRaw: new Prisma.Decimal("21000"),
+      });
+      expect(record.gasUsedRaw).toBe("21000");
+      expect(record.gasUsedRaw).toMatch(digitOnly);
+    });
+
+    it("emits a digit-only string at or above the exponential-notation threshold", async () => {
+      const gasUsed = new Prisma.Decimal("1000000000000000000000"); // 1e21
+      expect(gasUsed.toString()).toContain("e+");
+
+      const record = await readTransaction({ gasUsedRaw: gasUsed });
+      expect(record.gasUsedRaw).toBe("1000000000000000000000");
+      expect(record.gasUsedRaw).toMatch(digitOnly);
+      expect(record.gasUsedRaw).not.toContain("e");
+      expect(record.gasUsedRaw).not.toContain("E");
+      // Downstream fee arithmetic does BigInt(gasUsedRaw) — BigInt throws a
+      // SyntaxError on exponential notation, so this must parse cleanly.
+      expect(BigInt(record.gasUsedRaw as string).toString()).toBe(
+        "1000000000000000000000",
+      );
+    });
   });
 });
 

@@ -658,22 +658,26 @@ export async function readWalletRawTransactions(
     fromAddress: record.fromAddress as string,
     toAddress:
       typeof record.toAddress === "string" ? record.toAddress : null,
+    // Decimal(78, 0) columns: serialize with toFixed() rather than toString().
+    // Prisma.Decimal.toString() emits exponential notation for magnitudes >= 1e21,
+    // which corrupts the digit-only raw string contract relied on downstream.
+    // toFixed() always yields fixed-point, digit-only output.
     valueRaw:
       typeof record.valueRaw === "string"
         ? record.valueRaw
-        : (record.valueRaw as { toString(): string }).toString(),
+        : (record.valueRaw as { toFixed(): string }).toFixed(),
     gasPriceRaw:
       record.gasPriceRaw == null
         ? null
         : typeof record.gasPriceRaw === "string"
           ? record.gasPriceRaw
-          : (record.gasPriceRaw as { toString(): string }).toString(),
+          : (record.gasPriceRaw as { toFixed(): string }).toFixed(),
     gasUsedRaw:
       record.gasUsedRaw == null
         ? null
         : typeof record.gasUsedRaw === "string"
           ? record.gasUsedRaw
-          : (record.gasUsedRaw as { toString(): string }).toString(),
+          : (record.gasUsedRaw as { toFixed(): string }).toFixed(),
   }));
 }
 
