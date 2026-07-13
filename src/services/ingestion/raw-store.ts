@@ -615,10 +615,14 @@ export async function readWalletTransferRawTokenTransfers(
     logIndex: record.logIndex as number,
     fromAddress: record.fromAddress as string,
     toAddress: record.toAddress as string,
+    // Decimal(78, 0) column: serialize with toFixed() rather than toString().
+    // Prisma.Decimal.toString() emits exponential notation for magnitudes >= 1e21,
+    // which corrupts the digit-only raw string contract relied on downstream.
+    // toFixed() always yields fixed-point, digit-only output.
     amountRaw:
       typeof record.amountRaw === "string"
         ? record.amountRaw
-        : (record.amountRaw as { toString(): string }).toString(),
+        : (record.amountRaw as { toFixed(): string }).toFixed(),
   }));
 }
 

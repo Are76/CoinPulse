@@ -5,7 +5,9 @@ import {
   readWalletDexSwapSnapshots,
   readWalletRawLpActions,
   readWalletRawStakeActions,
+  readWalletTransferRawTokenTransfers,
 } from "@/services/ingestion/raw-store";
+import { toCanonicalQuantity } from "@/services/normalization/types";
 
 const WALLET = "0x1111111111111111111111111111111111111111";
 
@@ -90,6 +92,99 @@ describe("readWalletRawStakeActions large Decimal serialization", () => {
     expect(record.yieldRaw).toMatch(digitOnly);
     expect(record.penaltyRaw).toBe("1500000000000000000000");
     expect(record.penaltyRaw).toMatch(digitOnly);
+  });
+});
+
+// Same failure mode as the stake reader: the RawTokenTransfer amountRaw
+// Decimal(78, 0) column must serialize as a fixed-point, digit-only string so
+// the downstream /^\d+$/ canonical quantity guard accepts it, rather than
+// exponential notation. TRANSFERS backfill Window 1 (blocks 26696999-26697998)
+// failed at NORMALIZING_LEDGER on a 2.8e22 DAI amount via this exact path.
+describe("readWalletTransferRawTokenTransfers large Decimal serialization", () => {
+  function transferRecord(amountRaw: unknown) {
+    return {
+      chainId: 369,
+      tokenId: "token-1",
+      tokenAddress: "0x6b175474e89094c44da98b954eedeac495271d0f",
+      assetIdSnapshot:
+        "chain:369:erc20:0x6b175474e89094c44da98b954eedeac495271d0f",
+      decimalsSnapshot: 18,
+      txHash: "0xtransfer",
+      blockNumber: 50n,
+      blockHash: "0xblock50",
+      logIndex: 0,
+      fromAddress: WALLET,
+      toAddress: "0x2222222222222222222222222222222222222222",
+      amountRaw,
+    };
+  }
+
+  async function readAmountRaw(amountRaw: unknown) {
+    const [record] = await readWalletTransferRawTokenTransfers(
+      {
+        chainId: 369,
+        walletAddress: WALLET,
+        fromBlock: 0n,
+        toBlock: 100n,
+      },
+      {
+        rawTokenTransfer: {
+          findMany: async () => [transferRecord(amountRaw)],
+        },
+      },
+    );
+    return record.amountRaw;
+  }
+
+  const digitOnly = /^\d+$/;
+
+  it("passes through a normal small integer amount unchanged", async () => {
+    const amountRaw = await readAmountRaw(new Prisma.Decimal("123456789"));
+    expect(amountRaw).toBe("123456789");
+    expect(amountRaw).toMatch(digitOnly);
+  });
+
+  it("emits a digit-only string at the 1e21 exponential-notation threshold", async () => {
+    const amount = new Prisma.Decimal("1000000000000000000000"); // exactly 1e21
+    // Guard: confirm the raw toString() shape is actually exponential, i.e. we
+    // are reproducing the failure condition rather than a benign value.
+    expect(amount.toString()).toContain("e+");
+
+    const amountRaw = await readAmountRaw(amount);
+    expect(amountRaw).toBe("1000000000000000000000");
+    expect(amountRaw).toMatch(digitOnly);
+  });
+
+  it("emits a digit-only string for the observed Window 1 DAI amount class", async () => {
+    const amount = new Prisma.Decimal("28000000000000000000140"); // ~2.8e22
+    expect(amount.toString()).toContain("e+");
+
+    const amountRaw = await readAmountRaw(amount);
+    expect(amountRaw).toBe("28000000000000000000140");
+    expect(amountRaw).toMatch(digitOnly);
+    expect(amountRaw).not.toContain("e");
+    expect(amountRaw).not.toContain("E");
+  });
+
+  it("preserves a full-width Decimal(78, 0) magnitude exactly", async () => {
+    const seventyEightDigits = "9".repeat(78);
+    const amount = new Prisma.Decimal(seventyEightDigits);
+    expect(amount.toString()).toContain("e+");
+
+    const amountRaw = await readAmountRaw(amount);
+    expect(amountRaw).toBe(seventyEightDigits);
+    expect(amountRaw).toMatch(digitOnly);
+  });
+
+  it("produces output accepted by the downstream canonical quantity guard", async () => {
+    const amountRaw = await readAmountRaw(
+      new Prisma.Decimal("28000000000000000000140"),
+    );
+    // toCanonicalQuantity throws "amountRaw must be an unsigned integer string"
+    // on exponential notation — the exact Window 1 failure.
+    expect(toCanonicalQuantity({ amountRaw, decimals: 18 })).toBe(
+      "28000.00000000000000014",
+    );
   });
 });
 
