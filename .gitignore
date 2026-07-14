@@ -54,3 +54,6 @@ next-env.d.ts
 
 # Git worktrees
 .worktrees/
+
+# Operator runner evidence output (machine-readable, not campaign truth)
+/operator-evidence/
