@@ -118,6 +118,8 @@ export type PersistRawStakeActionInput = {
   stakeId?: bigint | null;
   stakeIndex?: number | null;
   stakedDays?: number | null;
+  lockedDay?: number | null;
+  stakeShares?: string | null;
   tokenAddress: string;
   assetIdSnapshot: string;
   decimalsSnapshot: number;
@@ -292,6 +294,8 @@ type RawStakeActionStoreClient = {
         stakeId: bigint | null;
         stakeIndex: number | null;
         stakedDays: number | null;
+        lockedDay: number | null;
+        stakeShares: string | null;
         tokenAddress: string;
         assetIdSnapshot: string;
         decimalsSnapshot: number;
@@ -537,6 +541,8 @@ export async function persistRawStakeActions(
       stakeId: action.stakeId ?? null,
       stakeIndex: action.stakeIndex ?? null,
       stakedDays: action.stakedDays ?? null,
+      lockedDay: action.lockedDay ?? null,
+      stakeShares: action.stakeShares ?? null,
       tokenAddress: action.tokenAddress.toLowerCase(),
       assetIdSnapshot: action.assetIdSnapshot,
       decimalsSnapshot: action.decimalsSnapshot,
@@ -915,6 +921,16 @@ export async function readWalletRawStakeActions(
           : BigInt(record.stakeId as string),
     stakeIndex: typeof record.stakeIndex === "number" ? record.stakeIndex : null,
     stakedDays: typeof record.stakedDays === "number" ? record.stakedDays : null,
+    lockedDay: typeof record.lockedDay === "number" ? record.lockedDay : null,
+    // Decimal(78, 0): serialize with toFixed() rather than toString() to avoid
+    // exponential notation for magnitudes >= 1e21 (stakeShares is uint72, up to
+    // ~4.7e21), which would fail the /^\d+$/ canonical quantity guard downstream.
+    stakeShares:
+      record.stakeShares == null
+        ? null
+        : typeof record.stakeShares === "string"
+          ? record.stakeShares
+          : (record.stakeShares as { toFixed(): string }).toFixed(),
     tokenAddress: record.tokenAddress as string,
     assetIdSnapshot: record.assetIdSnapshot as string,
     decimalsSnapshot: record.decimalsSnapshot as number,

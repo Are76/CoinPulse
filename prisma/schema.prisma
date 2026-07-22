@@ -431,6 +431,8 @@ model RawStakeAction {
   stakeId               BigInt?
   stakeIndex            Int?
   stakedDays            Int?
+  lockedDay             Int?
+  stakeShares           Decimal?        @db.Decimal(78, 0)
   tokenAddress          String
   assetIdSnapshot       String
   decimalsSnapshot      Int

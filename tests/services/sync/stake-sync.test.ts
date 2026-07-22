@@ -79,6 +79,8 @@ type RawStakeActionRecord = {
   stakeId: bigint | null;
   stakeIndex: number | null;
   stakedDays: number | null;
+  lockedDay: number | null;
+  stakeShares: string | null;
   tokenAddress: string;
   assetIdSnapshot: string;
   decimalsSnapshot: number;
@@ -860,6 +862,10 @@ describe("stake sync flow", () => {
       stakeIndex: 3,
       stakedDays: 365,
       principalLockedRaw: "100000000",
+      // stakeShares (stake[2]) and lockedDay (stake[3]) are forwarded from the
+      // stakeLists tuple already read during START ingestion — not discarded.
+      stakeShares: "777",
+      lockedDay: 1,
     });
   });
 
@@ -917,6 +923,8 @@ describe("stake sync flow", () => {
       stakeId: 42n,
       stakeIndex: 3,
       stakedDays: 365,
+      lockedDay: null,
+      stakeShares: null,
       tokenAddress: PHEX_ADDRESS_LOWER,
       assetIdSnapshot: `chain:369:erc20:${PHEX_ADDRESS_LOWER}`,
       decimalsSnapshot: 8,

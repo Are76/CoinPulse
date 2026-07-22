@@ -176,6 +176,8 @@ export async function ingestStakeActions(args: {
 
       const stakeId = BigInt(stake[0]);
       const stakedHearts = BigInt(stake[1]);
+      const stakeShares = BigInt(stake[2]);
+      const lockedDay = Number(stake[3]);
       const stakedDays = Number(stake[4]);
 
       if (stakedHearts.toString() !== decodedCall.principalRaw) {
@@ -200,6 +202,12 @@ export async function ingestStakeActions(args: {
             stakeId,
             stakeIndex,
             stakedDays,
+            // stakeShares (stake[2]) and lockedDay (stake[3]) are already read
+            // from stakeLists above; persist them so future ended-stake
+            // discovery can recover them from the START snapshot. stakeShares is
+            // stored as a digit-only decimal string for the Decimal(78, 0) column.
+            lockedDay,
+            stakeShares: stakeShares.toString(),
             tokenAddress: PHEX_ADDRESS_LOWER,
             assetIdSnapshot: CORE_ASSETS.phex.assetId,
             decimalsSnapshot: PHEX_DECIMALS,
