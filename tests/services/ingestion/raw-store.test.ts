@@ -462,6 +462,8 @@ describe("raw stake audit helpers", () => {
           stakeId: 42n,
           stakeIndex: 3,
           stakedDays: 365,
+          lockedDay: 1234,
+          stakeShares: "4611686018427387903",
           tokenAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
           assetIdSnapshot:
             "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
@@ -488,6 +490,9 @@ describe("raw stake audit helpers", () => {
       actionKind: "START",
       txHash: "0xstake",
       stakeId: 42n,
+      stakedDays: 365,
+      lockedDay: 1234,
+      stakeShares: "4611686018427387903",
       principalLockedRaw: "100000000",
       assetIdSnapshot:
         "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
@@ -517,6 +522,8 @@ describe("raw stake audit helpers", () => {
               stakeId: 42n,
               stakeIndex: 3,
               stakedDays: 365,
+              lockedDay: 1234,
+              stakeShares: "4611686018427387903",
               tokenAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
               assetIdSnapshot:
                 "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
@@ -540,9 +547,119 @@ describe("raw stake audit helpers", () => {
         txHash: "0xstake",
         actionKind: "START",
         stakeId: 42n,
+        lockedDay: 1234,
+        stakeShares: "4611686018427387903",
         principalLockedRaw: "100000000",
         feeAmountRaw: "200000000000000",
       }),
     ]);
+  });
+
+  it("returns large uint72 stakeShares as a full decimal string, never exponential notation", async () => {
+    // Prisma returns Decimal(78, 0) columns as Prisma.Decimal-like objects whose
+    // .toString() emits exponential notation for magnitudes >= 1e21. The reader
+    // must use .toFixed() so the digit-only quantity guard downstream still holds.
+    // Max uint72 = 2^72 - 1 = 4722366482869645213695 (~4.7e21).
+    const maxUint72 = "4722366482869645213695";
+    const decimalLike = {
+      toFixed: () => maxUint72,
+      // A .toString() that would break the guard if it were used by mistake.
+      toString: () => "4.722366482869645213695e+21",
+    };
+
+    const [mapped] = await readWalletRawStakeActions(
+      {
+        chainId: 369,
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        fromBlock: 120n,
+        toBlock: 140n,
+      },
+      {
+        rawStakeAction: {
+          findMany: async () => [
+            {
+              chainId: 369,
+              protocolSlug: "hex",
+              actionKind: "START",
+              txHash: "0xbigshares",
+              blockNumber: 130n,
+              blockHash: "0xblock130",
+              actionIndex: 0,
+              contractAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+              initiatorAddress: "0x1111111111111111111111111111111111111111",
+              stakeId: 43n,
+              stakeIndex: 4,
+              stakedDays: 5555,
+              lockedDay: 2310,
+              stakeShares: decimalLike,
+              tokenAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+              assetIdSnapshot:
+                "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+              decimalsSnapshot: 8,
+              principalLockedRaw: "100000000",
+              totalReturnedRaw: null,
+              principalReturnedRaw: null,
+              yieldRaw: null,
+              penaltyRaw: null,
+              feeAssetIdSnapshot: "chain:369:native:PLS",
+              feeDecimalsSnapshot: 18,
+              feeAmountRaw: "200000000000000",
+            },
+          ],
+        },
+      },
+    );
+
+    expect(mapped.stakeShares).toBe(maxUint72);
+    expect(mapped.stakeShares).not.toContain("e");
+    expect(mapped.lockedDay).toBe(2310);
+  });
+
+  it("maps lockedDay and stakeShares to null for rows that omit start-time evidence", async () => {
+    const [mapped] = await readWalletRawStakeActions(
+      {
+        chainId: 369,
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        fromBlock: 140n,
+        toBlock: 142n,
+      },
+      {
+        rawStakeAction: {
+          findMany: async () => [
+            {
+              chainId: 369,
+              protocolSlug: "hex",
+              actionKind: "END",
+              txHash: "0xstakeend",
+              blockNumber: 141n,
+              blockHash: "0xblock141",
+              actionIndex: 0,
+              contractAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+              initiatorAddress: "0x1111111111111111111111111111111111111111",
+              stakeId: 42n,
+              stakeIndex: 3,
+              stakedDays: null,
+              lockedDay: null,
+              stakeShares: null,
+              tokenAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+              assetIdSnapshot:
+                "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+              decimalsSnapshot: 8,
+              principalLockedRaw: null,
+              totalReturnedRaw: "105000000",
+              principalReturnedRaw: "100000000",
+              yieldRaw: "5000000",
+              penaltyRaw: null,
+              feeAssetIdSnapshot: "chain:369:native:PLS",
+              feeDecimalsSnapshot: 18,
+              feeAmountRaw: "200000000000000",
+            },
+          ],
+        },
+      },
+    );
+
+    expect(mapped.lockedDay).toBeNull();
+    expect(mapped.stakeShares).toBeNull();
   });
 });
