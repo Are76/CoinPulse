@@ -7,9 +7,9 @@
 //   3. Cross-references matching startStake record to fill principalHex,
 //      stakedDays, stakeIndex, startTxHash, and startBlockNumber.
 //   4. Falls back to endStake record fields when no startStake is found.
-//   5. Always sets lockedDay=null, stakeShares=null, isComplete=false,
-//      and includes the lockedDay warning regardless of whether a startStake
-//      was found.
+//   5. Consumes persisted START-time lockedDay/stakeShares: marks the
+//      observation complete (no incomplete-evidence warning) only when both
+//      are present; otherwise preserves nulls and the incomplete warning.
 //   6. Counts persisted vs. skipped (already-existing rows) correctly.
 //   7. discoveryMethod is always "raw_stake_action".
 //
@@ -36,6 +36,8 @@ type MockAction = {
   stakeId: bigint | null;
   stakeIndex: number | null;
   stakedDays: number | null;
+  lockedDay: number | null;
+  stakeShares: string | null;
   tokenAddress: string;
   assetIdSnapshot: string;
   decimalsSnapshot: number;
@@ -63,6 +65,10 @@ function makeAction(overrides: Partial<MockAction> = {}): MockAction {
     stakeId: 942663n,
     stakeIndex: 0,
     stakedDays: 5555,
+    // START-time evidence defaults to null; complete-evidence tests override
+    // these on the START snapshot. END records never carry them.
+    lockedDay: null,
+    stakeShares: null,
     tokenAddress: "0xhextoken",
     assetIdSnapshot: "chain:369:erc20:0xhextoken",
     decimalsSnapshot: 8,
@@ -380,9 +386,17 @@ describe("discoverEndedHexStakes", () => {
     expect(result.warnings.some((w) => w.includes("hexmining-ended-stake-lockedday-unknown"))).toBe(true);
   });
 
-  it("always sets lockedDay and stakeShares to null", async () => {
-    const action = makeAction();
-    const rawClient = makeRawClient([action], new Map([[942663n, makeAction({ actionKind: "START" })]]));
+  // ── Start-evidence consumption (PR: complete-ended-stake-observations) ──────
+
+  // Captures the observation persisted for a single END action, given a START
+  // snapshot that carries the supplied evidence fields.
+  async function captureWithStart(startOverrides: Partial<MockAction> | null) {
+    const action = makeAction({ stakeId: 555n });
+    const start =
+      startOverrides == null
+        ? null
+        : makeAction({ actionKind: "START", stakeId: 555n, ...startOverrides });
+    const rawClient = makeRawClient([action], new Map([[555n, start]]));
 
     const captured: PersistEndedHexStakeObservationInput[] = [];
     const obsClient = {
@@ -396,12 +410,143 @@ describe("discoverEndedHexStakes", () => {
       },
     };
 
-    await discoverEndedHexStakes(BASE_ARGS, {
+    const result = await discoverEndedHexStakes(BASE_ARGS, {
       rawClient,
       observationClient: obsClient as never,
     });
 
-    expect(captured[0].lockedDay).toBeNull();
-    expect(captured[0].stakeShares).toBeNull();
+    return { obs: captured[0], result };
+  }
+
+  it("A. completes the observation when both lockedDay and stakeShares are present", async () => {
+    const { obs, result } = await captureWithStart({
+      lockedDay: 1234,
+      stakeShares: "123456789012345678901",
+    });
+
+    expect(obs.lockedDay).toBe(1234);
+    expect(obs.stakeShares).toBe("123456789012345678901");
+    expect(obs.isComplete).toBe(true);
+    expect(obs.warnings).not.toContain("hexmining-ended-stake-lockedday-unknown");
+    expect(obs.warnings).toEqual([]);
+    // The result-level warnings array must not carry the incomplete warning.
+    expect(
+      result.warnings.some((w) => w.includes("hexmining-ended-stake-lockedday-unknown")),
+    ).toBe(false);
+  });
+
+  it("B. stays incomplete when lockedDay is missing, preserving the present stakeShares", async () => {
+    const { obs, result } = await captureWithStart({
+      lockedDay: null,
+      stakeShares: "987654321",
+    });
+
+    expect(obs.lockedDay).toBeNull();
+    expect(obs.stakeShares).toBe("987654321"); // preserved, not zeroed
+    expect(obs.isComplete).toBe(false);
+    expect(obs.warnings).toContain("hexmining-ended-stake-lockedday-unknown");
+    expect(
+      result.warnings.some((w) => w.includes("hexmining-ended-stake-lockedday-unknown")),
+    ).toBe(true);
+  });
+
+  it("C. stays incomplete when stakeShares is missing, preserving the present lockedDay", async () => {
+    const { obs } = await captureWithStart({
+      lockedDay: 4200,
+      stakeShares: null,
+    });
+
+    expect(obs.lockedDay).toBe(4200); // preserved, not zeroed
+    expect(obs.stakeShares).toBeNull();
+    expect(obs.isComplete).toBe(false);
+    expect(obs.warnings).toContain("hexmining-ended-stake-lockedday-unknown");
+  });
+
+  it("D. stays incomplete with both null when the START snapshot carries neither field", async () => {
+    const { obs } = await captureWithStart({ lockedDay: null, stakeShares: null });
+
+    expect(obs.lockedDay).toBeNull();
+    expect(obs.stakeShares).toBeNull();
+    expect(obs.isComplete).toBe(false);
+    expect(obs.warnings).toContain("hexmining-ended-stake-lockedday-unknown");
+  });
+
+  it("D2. stays incomplete when no START snapshot exists at all", async () => {
+    const { obs } = await captureWithStart(null);
+
+    expect(obs.lockedDay).toBeNull();
+    expect(obs.stakeShares).toBeNull();
+    expect(obs.isComplete).toBe(false);
+    expect(obs.warnings).toContain("hexmining-ended-stake-lockedday-unknown");
+  });
+
+  it("E. preserves a large uint72 stakeShares as an exact decimal string with no exponent", async () => {
+    // uint72 max = 2^72 - 1 = 4722366482869645213695 (22 digits, >= 1e21).
+    const uint72Max = "4722366482869645213695";
+    const { obs } = await captureWithStart({ lockedDay: 55, stakeShares: uint72Max });
+
+    expect(obs.stakeShares).toBe(uint72Max);
+    expect(obs.stakeShares).not.toMatch(/[eE]/); // no exponential notation
+    expect(obs.stakeShares).toMatch(/^\d+$/); // canonical digit-only string
+    // Round-tripping through BigInt (never Number) must be lossless.
+    expect(BigInt(obs.stakeShares as string).toString()).toBe(uint72Max);
+    expect(obs.isComplete).toBe(true);
+  });
+
+  it("F. is idempotent for complete evidence and preserves provenance/accounting fields", async () => {
+    const action = makeAction({ stakeId: 777n, blockNumber: 23000000n, txHash: "0xend777" });
+    const start = makeAction({
+      actionKind: "START",
+      stakeId: 777n,
+      txHash: "0xstart777",
+      blockNumber: 19000000n,
+      stakedDays: 3650,
+      principalLockedRaw: "5000000000000",
+      lockedDay: 100,
+      stakeShares: "1000000000000000000000",
+    });
+    const rawClient = makeRawClient([action], new Map([[777n, start]]));
+
+    const captured: PersistEndedHexStakeObservationInput[] = [];
+    let existing = false;
+    const obsClient = {
+      rawEndedHexStakeObservation: {
+        findFirst: async () => (existing ? { id: "existing-obs" } : null),
+        create: async (args: { data: PersistEndedHexStakeObservationInput & { id?: string } }) => {
+          captured.push(args.data);
+          existing = true;
+          return { id: "obs-1" };
+        },
+        findMany: async () => [],
+      },
+    };
+
+    const first = await discoverEndedHexStakes(BASE_ARGS, {
+      rawClient,
+      observationClient: obsClient as never,
+    });
+    const second = await discoverEndedHexStakes(BASE_ARGS, {
+      rawClient,
+      observationClient: obsClient as never,
+    });
+
+    expect(first.persisted).toBe(1);
+    expect(second.persisted).toBe(0);
+    expect(second.skipped).toBe(1);
+    // Only one create call — no duplicate row.
+    expect(captured).toHaveLength(1);
+
+    const obs = captured[0];
+    expect(obs.discoveryMethod).toBe("raw_stake_action");
+    expect(obs.startTxHash).toBe("0xstart777");
+    expect(obs.startBlockNumber).toBe(19000000n);
+    expect(obs.endTxHash).toBe("0xend777");
+    expect(obs.endBlockNumber).toBe(23000000n);
+    expect(obs.stakedDays).toBe(3650);
+    expect(obs.principalHex).toBe("5000000000000");
+    expect(obs.lockedDay).toBe(100);
+    expect(obs.stakeShares).toBe("1000000000000000000000");
+    expect(obs.isComplete).toBe(true);
+    expect(obs.observedAt).toBeInstanceOf(Date);
   });
 });
