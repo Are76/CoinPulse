@@ -917,13 +917,33 @@ export async function runTransferBackfillRunner(
   let windowsCompleted = 0;
   let lastWindowNumber: number | null = null;
 
+  // Internal live-cursor expectation. Seeded from the operator's
+  // --expected-cursor-from (validated against the real live cursor before the
+  // first submission, exactly as before) and advanced to the verified
+  // postcondition value only after a window passes every post-run gate. Once
+  // set, unexpected live-cursor movement between windows stops the batch
+  // before the next submission — even when the operator omitted the flag.
+  let expectedCursorFromBlock = options.expectedCursorFromBlock;
+
+  // Dry-run only: in-memory simulated cursor so --max-windows N previews N
+  // distinct sequential windows. Never consulted in execute mode — execute
+  // planning always uses the live persisted cursor as the sole truth.
+  let simulatedCursorFromBlock: bigint | null = null;
+
   for (let iteration = 0; iteration < options.maxWindows; iteration += 1) {
     const cursor = await getLiveTransfersCursor(deps.db, wallet.id);
     if (!cursor) {
       return stop(deps, "no_transfers_cursor", "TRANSFERS SyncCursor does not exist for this wallet; Case B (ascending) is out of scope for this runner", windowsCompleted, lastWindowNumber);
     }
 
-    const plan = computeWindowPlan({ liveCursorFromBlock: cursor.fromBlock });
+    const cursorSource: "live" | "simulated" =
+      !options.execute && simulatedCursorFromBlock !== null ? "simulated" : "live";
+    const planningFromBlock =
+      cursorSource === "simulated" && simulatedCursorFromBlock !== null
+        ? simulatedCursorFromBlock
+        : cursor.fromBlock;
+
+    const plan = computeWindowPlan({ liveCursorFromBlock: planningFromBlock });
     if (plan.status === "campaign_complete") {
       return stop(deps, "campaign_complete", undefined, windowsCompleted, lastWindowNumber);
     }
@@ -931,10 +951,16 @@ export async function runTransferBackfillRunner(
       return stop(deps, "misaligned_cursor", plan.detail, windowsCompleted, lastWindowNumber);
     }
 
-    const cursorGate = validateExpectedCursor({ liveCursorFromBlock: cursor.fromBlock, expectedCursorFromBlock: options.expectedCursorFromBlock });
+    // Always validated against the REAL live cursor (never the simulation):
+    // detects operator-expectation mismatch on the first iteration and
+    // unexpected live-cursor movement on every later one.
+    const cursorGate = validateExpectedCursor({ liveCursorFromBlock: cursor.fromBlock, expectedCursorFromBlock });
     if (!cursorGate.ok) return stop(deps, "cursor_expectation_mismatch", cursorGate.reason, windowsCompleted, lastWindowNumber);
+    if (expectedCursorFromBlock === undefined) {
+      expectedCursorFromBlock = cursor.fromBlock;
+    }
 
-    const adjacencyGate = validateAdjacency({ liveCursorFromBlock: cursor.fromBlock, proposedEndBlock: plan.endBlock });
+    const adjacencyGate = validateAdjacency({ liveCursorFromBlock: planningFromBlock, proposedEndBlock: plan.endBlock });
     if (!adjacencyGate.ok) return stop(deps, "adjacency_violation", adjacencyGate.reason, windowsCompleted, lastWindowNumber);
 
     const rangeGate = validateRangeSize({ startBlock: plan.startBlock, endBlock: plan.endBlock, isFinalWindow: plan.isFinalWindow });
@@ -970,8 +996,18 @@ export async function runTransferBackfillRunner(
         policyLabel: plan.policyLabel,
         expectedRange: { startBlock: plan.startBlock.toString(), endBlock: plan.endBlock.toString() },
         cursorBefore: { fromBlock: cursor.fromBlock.toString(), toBlock: cursor.toBlock.toString() },
+        // Additive fields only: cursorSource distinguishes a preview planned
+        // from the real live cursor from one planned from the in-memory
+        // simulation; simulatedCursorFromBlock is present only when simulated.
+        cursorSource,
+        ...(cursorSource === "simulated"
+          ? { simulatedCursorFromBlock: planningFromBlock.toString() }
+          : {}),
       });
       lastWindowNumber = plan.windowNumber;
+      // Advance the in-memory simulation so the next dry-run iteration
+      // previews the next sequential window. No database state changes.
+      simulatedCursorFromBlock = plan.startBlock;
       continue;
     }
 
@@ -1086,6 +1122,11 @@ export async function runTransferBackfillRunner(
 
     windowsCompleted += 1;
     lastWindowNumber = plan.windowNumber;
+    // Only reached when every post-run gate passed (terminal state, cursor
+    // postcondition, contamination, duplicates, active operations): the
+    // verified live cursor now sits at plan.startBlock, so that becomes the
+    // expectation the next iteration's live read must match.
+    expectedCursorFromBlock = plan.startBlock;
 
     // ── Checkpoint / final rebuild gate ──
     const checkpointDue = isCheckpointDue(plan.windowNumber);

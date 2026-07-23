@@ -755,6 +755,270 @@ describe("dry-run performs no POST or rebuild", () => {
   });
 });
 
+// ─── 14b. Multi-window batches (Issue #339) ────────────────────────────────────
+//
+// Execute mode: --expected-cursor-from is an initial preflight assertion only;
+// the runner's internal expectation advances to the verified postcondition
+// value after each fully verified window, so a static CLI value no longer
+// false-stops the second window. The live cursor stays the sole planning
+// truth, and unexpected live-cursor movement stops the batch before the next
+// submission. Dry-run mode: an in-memory simulated cursor makes --max-windows
+// N preview N distinct sequential windows without any POST or DB mutation.
+
+/** Execute-mode fake where the live cursor advances only when a run completes. */
+function makeMultiWindowExecuteFixture(args: {
+  initialCursorFromBlock: bigint;
+  /** Optional override of the live cursor value per read index (1-based). */
+  cursorReadOverride?: (readIndex: number, current: bigint) => bigint;
+  /** Terminal run returned for the Nth submitted window (1-based). */
+  runForSubmission?: (submission: number, run: RunnerSyncRunRecord) => RunnerSyncRunRecord;
+}) {
+  let cursorFromBlock = args.initialCursorFromBlock;
+  let cursorReads = 0;
+  let lastSubmitted: { startBlock: bigint; endBlock: bigint } | null = null;
+  const httpPostCalls: Array<{ url: string; body: unknown }> = [];
+
+  const db: RunnerDbClient = {
+    syncCursor: {
+      findUnique: async () => {
+        cursorReads += 1;
+        const fromBlock = args.cursorReadOverride
+          ? args.cursorReadOverride(cursorReads, cursorFromBlock)
+          : cursorFromBlock;
+        return { fromBlock, toBlock: 26_698_010n, blockHash: "0xhash" };
+      },
+    },
+    syncRun: {
+      findMany: async () => [],
+      findUnique: async () => {
+        const run = completedManualRun({
+          startBlock: lastSubmitted?.startBlock ?? null,
+          endBlock: lastSubmitted?.endBlock ?? null,
+          latestSafeBlock: lastSubmitted?.endBlock ?? null,
+        });
+        return args.runForSubmission ? args.runForSubmission(httpPostCalls.length, run) : run;
+      },
+      count: async () => 0,
+    },
+    $queryRaw: (async () => []) as RunnerDbClient["$queryRaw"],
+  };
+
+  const httpPost: RunnerDeps["httpPost"] = async (url, body) => {
+    httpPostCalls.push({ url, body });
+    const parsed = body as { startBlock: string; endBlock: string };
+    lastSubmitted = { startBlock: BigInt(parsed.startBlock), endBlock: BigInt(parsed.endBlock) };
+    // Mirrors the real pipeline: a completed window moves the live cursor
+    // lower edge down to the just-run window's startBlock.
+    cursorFromBlock = lastSubmitted.startBlock;
+    return { status: 202, body: { data: { runId: "run-1" } } };
+  };
+
+  return { db, httpPost, httpPostCalls };
+}
+
+describe("execute-mode multi-window batches with a static --expected-cursor-from", () => {
+  it("executes 3 sequential windows without a false cursor_expectation_mismatch after Window 1", async () => {
+    const fixture = makeMultiWindowExecuteFixture({ initialCursorFromBlock: 26_679_999n });
+    const { deps } = makeFakeDeps({ db: fixture.db, httpPost: fixture.httpPost });
+
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: true, maxWindows: 3, expectedCursorFromBlock: 26_679_999n }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("max_windows_reached");
+    expect(summary.windowsCompleted).toBe(3);
+    expect(fixture.httpPostCalls).toHaveLength(3);
+
+    const ranges = fixture.httpPostCalls.map((c) => {
+      const body = c.body as { startBlock: string; endBlock: string; policyLabel: string };
+      return { start: BigInt(body.startBlock), end: BigInt(body.endBlock), policyLabel: body.policyLabel };
+    });
+    // Windows 19, 20, 21: distinct labels, descending, adjacent, no gap/overlap.
+    expect(ranges.map((r) => r.policyLabel)).toEqual([
+      "transfer-history-backfill-window-19",
+      "transfer-history-backfill-window-20",
+      "transfer-history-backfill-window-21",
+    ]);
+    for (let i = 1; i < ranges.length; i += 1) {
+      expect(ranges[i].end + 1n).toBe(ranges[i - 1].start);
+    }
+    for (const r of ranges) {
+      expect(r.end - r.start + 1n).toBe(FULL_WINDOW_BLOCKS);
+    }
+  });
+
+  it("still stops before any POST when the initial live cursor mismatches the operator expectation", async () => {
+    const fixture = makeMultiWindowExecuteFixture({ initialCursorFromBlock: 26_679_999n });
+    const { deps } = makeFakeDeps({ db: fixture.db, httpPost: fixture.httpPost });
+
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: true, maxWindows: 3, expectedCursorFromBlock: 26_680_999n }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("cursor_expectation_mismatch");
+    expect(fixture.httpPostCalls).toHaveLength(0);
+  });
+});
+
+describe("unexpected live cursor movement between windows stops the batch", () => {
+  // Per-iteration live reads: read 1 = planning window N, read 2 =
+  // postcondition window N, read 3 = planning window N+1 (tampered here).
+  const TAMPERED = 26_669_999n; // grid-aligned, so the expectation gate (not misalignment) must catch it
+
+  it("with --expected-cursor-from: stops before submitting Window N+1", async () => {
+    const fixture = makeMultiWindowExecuteFixture({
+      initialCursorFromBlock: 26_679_999n,
+      cursorReadOverride: (readIndex, current) => (readIndex === 3 ? TAMPERED : current),
+    });
+    const { deps } = makeFakeDeps({ db: fixture.db, httpPost: fixture.httpPost });
+
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: true, maxWindows: 3, expectedCursorFromBlock: 26_679_999n }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("cursor_expectation_mismatch");
+    expect(summary.windowsCompleted).toBe(1);
+    expect(fixture.httpPostCalls).toHaveLength(1);
+    expect(summary.detail).toContain(TAMPERED.toString());
+  });
+
+  it("without --expected-cursor-from: internal expectation is still active after Window 1", async () => {
+    const fixture = makeMultiWindowExecuteFixture({
+      initialCursorFromBlock: 26_679_999n,
+      cursorReadOverride: (readIndex, current) => (readIndex === 3 ? TAMPERED : current),
+    });
+    const { deps } = makeFakeDeps({ db: fixture.db, httpPost: fixture.httpPost });
+
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: true, maxWindows: 3 }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("cursor_expectation_mismatch");
+    expect(summary.windowsCompleted).toBe(1);
+    expect(fixture.httpPostCalls).toHaveLength(1);
+  });
+});
+
+describe("window failure prevents the next window in a batch", () => {
+  it("a FAILED Window N stops the batch; Window N+1 is never submitted", async () => {
+    const fixture = makeMultiWindowExecuteFixture({
+      initialCursorFromBlock: 26_679_999n,
+      runForSubmission: (submission, run) =>
+        submission === 2 ? { ...run, status: "FAILED", errorMessage: "boom" } : run,
+    });
+    const { deps } = makeFakeDeps({ db: fixture.db, httpPost: fixture.httpPost });
+
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: true, maxWindows: 3, expectedCursorFromBlock: 26_679_999n }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("invariant_failed_after_run");
+    expect(summary.windowsCompleted).toBe(1);
+    expect(fixture.httpPostCalls).toHaveLength(2); // window 2 was submitted and failed; window 3 never was
+    expect(summary.lastWindowNumber).toBe(20);
+  });
+
+  it("a run completing with warnings stops the batch before the next submission", async () => {
+    const fixture = makeMultiWindowExecuteFixture({
+      initialCursorFromBlock: 26_679_999n,
+      runForSubmission: (submission, run) =>
+        submission === 1 ? { ...run, warningCount: 1, warningDetails: ["w"] } : run,
+    });
+    const { deps } = makeFakeDeps({ db: fixture.db, httpPost: fixture.httpPost });
+
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: true, maxWindows: 3 }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("invariant_failed_after_run");
+    expect(summary.windowsCompleted).toBe(0);
+    expect(fixture.httpPostCalls).toHaveLength(1);
+  });
+});
+
+describe("dry-run simulates cursor advancement in memory", () => {
+  it("previews 3 distinct sequential windows with zero POSTs", async () => {
+    const db = makeFakeDb({ cursor: { fromBlock: 26_679_999n, toBlock: 26_698_010n } });
+    const { deps, evidence, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: false, maxWindows: 3 }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("max_windows_reached");
+    expect(httpPostCalls).toHaveLength(0);
+
+    const planned = evidence.filter((e) => e.kind === "window" && e.outcome === "dry_run_planned");
+    expect(planned).toHaveLength(3);
+    expect(planned.map((e) => e.windowNumber)).toEqual([19, 20, 21]);
+
+    const ranges = planned.map((e) => {
+      const range = e.expectedRange as { startBlock: string; endBlock: string };
+      return { start: BigInt(range.startBlock), end: BigInt(range.endBlock) };
+    });
+    for (let i = 1; i < ranges.length; i += 1) {
+      expect(ranges[i].end + 1n).toBe(ranges[i - 1].start); // adjacent, no gap, no overlap
+    }
+  });
+
+  it("marks the first preview as live and later previews as simulated (additive evidence only)", async () => {
+    const db = makeFakeDb({ cursor: { fromBlock: 26_679_999n, toBlock: 26_698_010n } });
+    const { deps, evidence } = makeFakeDeps({ db });
+
+    await runTransferBackfillRunner(baseRunnerOptions({ execute: false, maxWindows: 3 }), deps);
+
+    const planned = evidence.filter((e) => e.kind === "window");
+    expect(planned.map((e) => e.cursorSource)).toEqual(["live", "simulated", "simulated"]);
+    // First iteration is grounded in the live cursor and carries no simulated field.
+    expect(planned[0].simulatedCursorFromBlock).toBeUndefined();
+    expect(planned[1].simulatedCursorFromBlock).toBe("26678999");
+    expect(planned[2].simulatedCursorFromBlock).toBe("26677999");
+    // Pre-existing fields keep their exact shape and meaning (live cursor).
+    for (const record of planned) {
+      expect(record.cursorBefore).toEqual({ fromBlock: "26679999", toBlock: "26698010" });
+      expect(record.policyLabel).toMatch(/^transfer-history-backfill-window-\d+$/);
+    }
+  });
+
+  it("validates --expected-cursor-from against the real live cursor before any preview", async () => {
+    const db = makeFakeDb({ cursor: { fromBlock: 26_679_999n, toBlock: 26_698_010n } });
+    const { deps, evidence } = makeFakeDeps({ db });
+
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: false, maxWindows: 3, expectedCursorFromBlock: 26_680_999n }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("cursor_expectation_mismatch");
+    expect(evidence.filter((e) => e.kind === "window")).toHaveLength(0);
+  });
+
+  it("crossing a checkpoint boundary in simulation never submits a rebuild or any POST", async () => {
+    // Next windows previewed: 24, 25 (checkpoint boundary), 26.
+    const liveCursorFromBlock = ORIGINAL_CURSOR_FROM_BLOCK - 23_000n;
+    const db = makeFakeDb({ cursor: { fromBlock: liveCursorFromBlock, toBlock: 26_698_010n } });
+    const { deps, evidence, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: false, maxWindows: 3, allowCheckpointRebuild: true }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("max_windows_reached");
+    expect(httpPostCalls).toHaveLength(0);
+    const planned = evidence.filter((e) => e.kind === "window");
+    expect(planned.map((e) => e.windowNumber)).toEqual([24, 25, 26]);
+    expect(evidence.some((e) => e.kind === "rebuild")).toBe(false);
+  });
+});
+
 // ─── 15. Max-window bound is enforced ──────────────────────────────────────────
 
 describe("max-window bound is enforced", () => {
