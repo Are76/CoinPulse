@@ -45,7 +45,11 @@ type DiscoveryClients = {
 // ─── Warning codes ────────────────────────────────────────────────────────────
 
 const WARN_NO_STAKE_ID = "hexmining-ended-stake-stakeid-unknown";
-const WARN_LOCKED_DAY_UNKNOWN = "hexmining-ended-stake-lockedday-unknown";
+// Signals that the START-time evidence required to complete an ended-stake
+// observation (both lockedDay and stakeShares) is missing. The identifier is a
+// stable contract consumed by route tests and docs, so it is retained verbatim
+// even though completeness now requires both fields rather than lockedDay alone.
+const WARN_INCOMPLETE_START_EVIDENCE = "hexmining-ended-stake-lockedday-unknown";
 
 // ─── Discovery ────────────────────────────────────────────────────────────────
 //
@@ -53,8 +57,17 @@ const WARN_LOCKED_DAY_UNKNOWN = "hexmining-ended-stake-lockedday-unknown";
 // RawEndedHexStakeObservation per ended stake using discoveryMethod
 // "raw_stake_action". Skips any record that lacks a stakeId.
 //
-// lockedDay and stakeShares are not available in RawStakeAction; they are
-// always null and isComplete is false when either is missing.
+// lockedDay and stakeShares are read from the matched START snapshot (persisted
+// on RawStakeAction START rows). When both are present the observation is marked
+// complete; when either is missing the missing value is preserved as null,
+// isComplete stays false, and the incomplete-evidence warning is retained.
+// Missing values are never fabricated, defaulted, zero-coerced, or inferred.
+
+// Completeness requires BOTH start-time evidence fields. stakeShares must be a
+// raw unsigned-integer decimal string (uint72 range); an empty or malformed
+// value is treated as missing, never coerced through Number(). This is a local
+// pattern matching the project convention, not a shared project-wide validator.
+const RAW_UNSIGNED_INTEGER_PATTERN = /^\d+$/;
 
 export async function discoverEndedHexStakes(
   input: DiscoverEndedHexStakesInput,
@@ -96,14 +109,27 @@ export async function discoverEndedHexStakes(
 
     const stakeIdStr = action.stakeId.toString();
 
+    // Consume persisted START-time evidence. These are the mapped nullable
+    // values from the START snapshot; the missing value is preserved as null.
+    const startLockedDay = startRecord?.lockedDay ?? null;
+    const startStakeShares = startRecord?.stakeShares ?? null;
+
+    // Completeness is strictly: both present AND stakeShares is a canonical
+    // unsigned-integer string. Zero is a valid present value (not missing);
+    // empty/malformed stakeShares is treated as missing without coercion.
+    const hasCompleteStartEvidence =
+      startLockedDay != null &&
+      startStakeShares != null &&
+      RAW_UNSIGNED_INTEGER_PATTERN.test(startStakeShares);
+
     const observationInput: PersistEndedHexStakeObservationInput = {
       chainId,
       walletAddress,
       stakeId: stakeIdStr,
       stakeIndex: action.stakeIndex ?? startRecord?.stakeIndex ?? null,
       stakedDays: startRecord?.stakedDays ?? action.stakedDays ?? null,
-      lockedDay: null,
-      stakeShares: null,
+      lockedDay: startLockedDay,
+      stakeShares: startStakeShares,
       principalHex: startRecord?.principalLockedRaw ?? action.principalLockedRaw ?? null,
       yieldHex: action.yieldRaw ?? null,
       penaltyHex: action.penaltyRaw ?? null,
@@ -113,18 +139,26 @@ export async function discoverEndedHexStakes(
       startBlockNumber: startRecord?.blockNumber ?? null,
       discoveryMethod: "raw_stake_action",
       observedAt: new Date(),
-      isComplete: false,
-      warnings: [WARN_LOCKED_DAY_UNKNOWN],
+      isComplete: hasCompleteStartEvidence,
+      warnings: hasCompleteStartEvidence ? [] : [WARN_INCOMPLETE_START_EVIDENCE],
     };
 
-    warnings.push(`${WARN_LOCKED_DAY_UNKNOWN}:stake=${stakeIdStr}`);
+    if (!hasCompleteStartEvidence) {
+      warnings.push(`${WARN_INCOMPLETE_START_EVIDENCE}:stake=${stakeIdStr}`);
+    }
 
     const result = await persistEndedHexStakeObservation(
       observationInput,
       observationClient,
     );
 
-    if (result.created) {
+    // A created row and an in-place upgrade both mutate the canonical store, so
+    // both count as persisted. Only a genuine no-op (row already present and
+    // unchanged) counts as skipped. When complete START evidence is present the
+    // persisted row is now guaranteed complete (created complete, upgraded, or
+    // already complete), so suppressing the incomplete warning above never
+    // disagrees with the canonical row.
+    if (result.created || result.updated) {
       persisted++;
     } else {
       skipped++;

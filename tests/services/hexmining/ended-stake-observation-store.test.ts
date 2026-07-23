@@ -65,7 +65,7 @@ function makeMockDb(initial: StoredRow[] = []) {
           endBlockNumber: bigint;
           discoveryMethod: string;
         };
-        select: { id: true };
+        select: { id: true; isComplete: true };
       }) {
         const match = rows.find(
           (r) =>
@@ -75,7 +75,24 @@ function makeMockDb(initial: StoredRow[] = []) {
             r.endBlockNumber === args.where.endBlockNumber &&
             r.discoveryMethod === args.where.discoveryMethod,
         );
-        return match ? { id: match.id } : null;
+        return match ? { id: match.id, isComplete: match.isComplete } : null;
+      },
+      async update(args: {
+        where: { id: string };
+        data: {
+          lockedDay: number | null;
+          stakeShares: string | null;
+          isComplete: boolean;
+          warnings: string[];
+        };
+      }) {
+        const row = rows.find((r) => r.id === args.where.id);
+        if (!row) throw new Error(`no row ${args.where.id}`);
+        row.lockedDay = args.data.lockedDay;
+        row.stakeShares = args.data.stakeShares;
+        row.isComplete = args.data.isComplete;
+        row.warnings = args.data.warnings;
+        return { id: row.id };
       },
       async create(args: { data: Omit<StoredRow, "id" | "createdAt"> }) {
         const row: StoredRow = {
@@ -233,6 +250,110 @@ describe("persistEndedHexStakeObservation", () => {
     expect(row!.startBlockNumber).toBeNull();
     expect(row!.isComplete).toBe(false);
     expect(row!.warnings).toContain("hexmining-ended-stake-lockedday-unknown");
+  });
+
+  // ── Stale-row reconciliation (PR #335 P2) ──────────────────────────────────
+
+  const INCOMPLETE_INPUT: PersistEndedHexStakeObservationInput = {
+    ...BASE_INPUT,
+    stakeId: "555111",
+    lockedDay: null,
+    stakeShares: null,
+    isComplete: false,
+    warnings: ["hexmining-ended-stake-lockedday-unknown"],
+  };
+
+  it("upgrades a previously incomplete row in place when complete evidence arrives", async () => {
+    const db = makeMockDb();
+
+    const first = await persistEndedHexStakeObservation(INCOMPLETE_INPUT, db);
+    expect(first.created).toBe(true);
+    expect(first.updated).toBe(false);
+
+    const complete: PersistEndedHexStakeObservationInput = {
+      ...INCOMPLETE_INPUT,
+      lockedDay: 2310,
+      stakeShares: "1414291579679",
+      isComplete: true,
+      warnings: [],
+    };
+    const second = await persistEndedHexStakeObservation(complete, db);
+
+    // Same dedupe key: not created, but reconciled in place.
+    expect(second.created).toBe(false);
+    expect(second.updated).toBe(true);
+    expect(second.id).toBe(first.id);
+
+    // Canonical row now reflects the complete evidence.
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: INCOMPLETE_INPUT.walletAddress },
+      db,
+    );
+    const row = rows.find((r) => r.stakeId === "555111")!;
+    expect(row.isComplete).toBe(true);
+    expect(row.lockedDay).toBe(2310);
+    expect(row.stakeShares).toBe("1414291579679");
+    expect(row.warnings).toEqual([]);
+
+    // A third identical complete write is a no-op (idempotent, no re-upgrade).
+    const third = await persistEndedHexStakeObservation(complete, db);
+    expect(third.created).toBe(false);
+    expect(third.updated).toBe(false);
+    expect(third.id).toBe(first.id);
+  });
+
+  it("never downgrades or rewrites a row that is already complete", async () => {
+    const db = makeMockDb();
+
+    const complete: PersistEndedHexStakeObservationInput = {
+      ...INCOMPLETE_INPUT,
+      lockedDay: 4200,
+      stakeShares: "987654321",
+      isComplete: true,
+      warnings: [],
+    };
+    const first = await persistEndedHexStakeObservation(complete, db);
+    expect(first.created).toBe(true);
+
+    // A later incomplete observation for the same key must not clobber the row.
+    const second = await persistEndedHexStakeObservation(
+      { ...complete, lockedDay: null, stakeShares: null, isComplete: false, warnings: ["x"] },
+      db,
+    );
+    expect(second.created).toBe(false);
+    expect(second.updated).toBe(false);
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: complete.walletAddress },
+      db,
+    );
+    const row = rows.find((r) => r.stakeId === "555111")!;
+    expect(row.isComplete).toBe(true);
+    expect(row.lockedDay).toBe(4200);
+    expect(row.stakeShares).toBe("987654321");
+    expect(row.warnings).toEqual([]);
+  });
+
+  it("preserves a large uint72 stakeShares exactly through an in-place upgrade", async () => {
+    const db = makeMockDb();
+    const uint72Max = "4722366482869645213695"; // 2^72 - 1, >= 1e21
+
+    await persistEndedHexStakeObservation(INCOMPLETE_INPUT, db);
+    const upgraded = await persistEndedHexStakeObservation(
+      { ...INCOMPLETE_INPUT, lockedDay: 55, stakeShares: uint72Max, isComplete: true, warnings: [] },
+      db,
+    );
+    expect(upgraded.updated).toBe(true);
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: INCOMPLETE_INPUT.walletAddress },
+      db,
+    );
+    const row = rows.find((r) => r.stakeId === "555111")!;
+    expect(row.stakeShares).toBe(uint72Max);
+    expect(row.stakeShares).not.toMatch(/[eE]/);
+    expect(row.stakeShares).toMatch(/^\d+$/);
+    expect(BigInt(row.stakeShares as string).toString()).toBe(uint72Max);
   });
 });
 
