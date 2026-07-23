@@ -384,6 +384,18 @@ export function classifyRebuildWarningDetails(
 export function verifySyncRunTerminalState(args: {
   run: RunnerSyncRunRecord;
   expectedTrigger: "MANUAL" | "REBUILD";
+  /**
+   * Required context for a REBUILD trigger: only a mid-campaign "checkpoint"
+   * rebuild gets the negative-token-balance warning allowance. A "final"
+   * rebuild (the one submitted after the last window) must meet the strict
+   * campaign-completion criteria in
+   * docs/transfer-history-backfill-operator-plan.md §9 — zero
+   * negative-token-balance warnings, since the whole point of the campaign is
+   * for that warning class to have disappeared by then. Omitted/undefined is
+   * treated as "final" (the strict default) so a caller can never silently
+   * fall into the lenient path.
+   */
+  rebuildKind?: "checkpoint" | "final";
   expectedStartBlock: bigint;
   expectedEndBlock: bigint;
 }): { ok: true } | { ok: false; reasons: string[] } {
@@ -396,15 +408,15 @@ export function verifySyncRunTerminalState(args: {
   if (run.status !== "COMPLETED") {
     reasons.push(`expected status COMPLETED, got ${run.status}`);
   }
-  if (args.expectedTrigger === "MANUAL") {
-    if (run.warningCount !== 0) {
-      reasons.push(`expected warningCount 0, got ${run.warningCount}`);
+  if (args.expectedTrigger === "REBUILD" && args.rebuildKind === "checkpoint") {
+    if (run.warningCount > 0) {
+      const classification = classifyRebuildWarningDetails(run.warningDetails);
+      if (!classification.ok) {
+        reasons.push(classification.reason);
+      }
     }
-  } else if (run.warningCount > 0) {
-    const classification = classifyRebuildWarningDetails(run.warningDetails);
-    if (!classification.ok) {
-      reasons.push(classification.reason);
-    }
+  } else if (run.warningCount !== 0) {
+    reasons.push(`expected warningCount 0, got ${run.warningCount}`);
   }
   if (run.errorMessage !== null) {
     reasons.push(`expected errorMessage null, got ${JSON.stringify(run.errorMessage)}`);
@@ -1140,12 +1152,22 @@ async function runRebuildStep(
   }
   const terminalAt = deps.now().toISOString();
 
+  const rebuildKind: "checkpoint" | "final" = isFinal ? "final" : "checkpoint";
   const terminalVerification = verifySyncRunTerminalState({
     run: polled.run,
     expectedTrigger: "REBUILD",
+    rebuildKind,
     expectedStartBlock: plan.startBlock,
     expectedEndBlock: plan.endBlock,
   });
+
+  // Preserve the exact accepted warningDetails (no reformatting of quantities)
+  // only for a checkpoint rebuild that passed verification with warnings —
+  // the one case where warnings are documented-expected rather than absent.
+  const acceptedWarningDetails =
+    terminalVerification.ok && rebuildKind === "checkpoint" && polled.run.warningCount > 0
+      ? polled.run.warningDetails
+      : null;
 
   await deps.writeEvidence({
     kind: "rebuild",
@@ -1158,6 +1180,7 @@ async function runRebuildStep(
     terminalAt,
     terminalStatus: polled.run.status,
     warningCount: polled.run.warningCount,
+    acceptedWarningDetails,
     errorMessage: polled.run.errorMessage,
     invariantFailures: !terminalVerification.ok ? terminalVerification.reasons : [],
   });

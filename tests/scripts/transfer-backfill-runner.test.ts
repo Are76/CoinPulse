@@ -388,10 +388,11 @@ describe("REBUILD trigger-specific warning validation", () => {
     expect(classifyRebuildWarningDetails([]).ok).toBe(false);
   });
 
-  it("verifySyncRunTerminalState fails a REBUILD run with warningCount > 0 but an empty warningDetails array", () => {
+  it("verifySyncRunTerminalState fails a checkpoint REBUILD run with warningCount > 0 but an empty warningDetails array", () => {
     const result = verifySyncRunTerminalState({
       run: completedRebuildRun({ warningCount: 1, warningDetails: [] }),
       expectedTrigger: "REBUILD",
+      rebuildKind: "checkpoint",
       expectedStartBlock: 26_678_999n,
       expectedEndBlock: 26_679_998n,
     });
@@ -406,7 +407,7 @@ describe("REBUILD trigger-specific warning validation", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("verifySyncRunTerminalState passes a REBUILD run whose warnings are all negative-token-balance", () => {
+  it("verifySyncRunTerminalState passes a checkpoint REBUILD run whose warnings are all negative-token-balance", () => {
     const result = verifySyncRunTerminalState({
       run: completedRebuildRun({
         warningCount: 2,
@@ -416,29 +417,32 @@ describe("REBUILD trigger-specific warning validation", () => {
         ],
       }),
       expectedTrigger: "REBUILD",
+      rebuildKind: "checkpoint",
       expectedStartBlock: 26_678_999n,
       expectedEndBlock: 26_679_998n,
     });
     expect(result.ok).toBe(true);
   });
 
-  it("verifySyncRunTerminalState fails a REBUILD run with an unexpected warning class", () => {
+  it("verifySyncRunTerminalState fails a checkpoint REBUILD run with an unexpected warning class", () => {
     const result = verifySyncRunTerminalState({
       run: completedRebuildRun({
         warningCount: 1,
         warningDetails: ["skipped unrelated-wallet transfer log"],
       }),
       expectedTrigger: "REBUILD",
+      rebuildKind: "checkpoint",
       expectedStartBlock: 26_678_999n,
       expectedEndBlock: 26_679_998n,
     });
     expect(result.ok).toBe(false);
   });
 
-  it("verifySyncRunTerminalState still passes a REBUILD run with zero warnings", () => {
+  it("verifySyncRunTerminalState still passes a checkpoint REBUILD run with zero warnings", () => {
     const result = verifySyncRunTerminalState({
       run: completedRebuildRun({ warningCount: 0, warningDetails: null }),
       expectedTrigger: "REBUILD",
+      rebuildKind: "checkpoint",
       expectedStartBlock: 26_678_999n,
       expectedEndBlock: 26_679_998n,
     });
@@ -466,6 +470,180 @@ describe("REBUILD trigger-specific warning validation", () => {
       expectedEndBlock: 26_679_998n,
     });
     expect(result.ok).toBe(false);
+  });
+});
+
+// ─── 9c. Checkpoint vs final rebuild distinction ───────────────────────────────
+//
+// Only a mid-campaign checkpoint rebuild gets the negative-token-balance
+// warning allowance. The final rebuild (submitted after the last window) must
+// meet the strict campaign-completion criteria in
+// docs/transfer-history-backfill-operator-plan.md §9 — zero warnings — since
+// the whole point of the campaign is for that warning class to have
+// disappeared by then.
+
+describe("checkpoint vs final rebuild distinction", () => {
+  it("a) checkpoint rebuild with only documented negative-token-balance warnings passes", () => {
+    const result = verifySyncRunTerminalState({
+      run: completedRebuildRun({
+        warningCount: 8,
+        warningDetails: Array.from({ length: 8 }, (_, i) => `negative-token-balance:chain:369:erc20:0xabc${i}:1.5`),
+      }),
+      expectedTrigger: "REBUILD",
+      rebuildKind: "checkpoint",
+      expectedStartBlock: 26_678_999n,
+      expectedEndBlock: 26_679_998n,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("b) final rebuild with negative-token-balance warnings does NOT silently pass", () => {
+    const result = verifySyncRunTerminalState({
+      run: completedRebuildRun({
+        warningCount: 2,
+        warningDetails: [
+          "negative-token-balance:chain:369:erc20:0xabc:12.5",
+          "negative-token-balance:chain:369:erc20:0xdef:0.001",
+        ],
+      }),
+      expectedTrigger: "REBUILD",
+      rebuildKind: "final",
+      expectedStartBlock: 26_678_999n,
+      expectedEndBlock: 26_679_998n,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("b2) omitting rebuildKind on a REBUILD trigger defaults to the strict (final) rule, never the lenient one", () => {
+    const result = verifySyncRunTerminalState({
+      run: completedRebuildRun({
+        warningCount: 2,
+        warningDetails: [
+          "negative-token-balance:chain:369:erc20:0xabc:12.5",
+          "negative-token-balance:chain:369:erc20:0xdef:0.001",
+        ],
+      }),
+      expectedTrigger: "REBUILD",
+      expectedStartBlock: 26_678_999n,
+      expectedEndBlock: 26_679_998n,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("c) final rebuild with zero warnings passes", () => {
+    const result = verifySyncRunTerminalState({
+      run: completedRebuildRun({ warningCount: 0, warningDetails: null }),
+      expectedTrigger: "REBUILD",
+      rebuildKind: "final",
+      expectedStartBlock: 26_678_999n,
+      expectedEndBlock: 26_679_998n,
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+// ─── 9d. Accepted rebuild warning details are preserved in evidence ────────────
+
+describe("accepted rebuild warning details are preserved in evidence", () => {
+  it("writes the exact accepted warningDetails into the rebuild evidence record for a completed checkpoint rebuild", async () => {
+    const liveCursorFromBlock = ORIGINAL_CURSOR_FROM_BLOCK - 24_000n; // window 25 -> checkpoint due
+    const acceptedWarningDetails = [
+      "negative-token-balance:chain:369:erc20:0xabc:12.500000000000000001",
+      "negative-token-balance:chain:369:erc20:0xdef:0.001",
+    ];
+
+    const db = makeFakeDb({
+      cursor: { fromBlock: liveCursorFromBlock, toBlock: FIRST_ACTIVITY_BLOCK + 1_000_000n },
+      runsById: {
+        "window-run": completedManualRun({
+          startBlock: liveCursorFromBlock - FULL_WINDOW_BLOCKS,
+          endBlock: liveCursorFromBlock - 1n,
+          latestSafeBlock: liveCursorFromBlock - 1n,
+        }),
+        "rebuild-run": completedRebuildRun({
+          startBlock: liveCursorFromBlock - FULL_WINDOW_BLOCKS,
+          endBlock: liveCursorFromBlock - 1n,
+          warningCount: acceptedWarningDetails.length,
+          warningDetails: acceptedWarningDetails,
+        }),
+      },
+    });
+
+    let cursorCalls = 0;
+    const dbWithAdvancingCursor: RunnerDbClient = {
+      ...db,
+      syncCursor: {
+        findUnique: async () => {
+          cursorCalls += 1;
+          const fromBlock = cursorCalls === 1 ? liveCursorFromBlock : liveCursorFromBlock - FULL_WINDOW_BLOCKS;
+          return { fromBlock, toBlock: FIRST_ACTIVITY_BLOCK + 1_000_000n, blockHash: "0xhash" };
+        },
+      },
+    };
+
+    const httpPost: RunnerDeps["httpPost"] = async (url) => ({
+      status: 202,
+      body: { data: { runId: url.includes("/api/rebuild") ? "rebuild-run" : "window-run" } },
+    });
+
+    const { deps, evidence } = makeFakeDeps({ db: dbWithAdvancingCursor, httpPost });
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: true, allowCheckpointRebuild: true }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).not.toBe("rebuild_invariant_failed");
+    const rebuildEvidence = evidence.find((e) => e.kind === "rebuild");
+    expect(rebuildEvidence?.outcome).toBe("completed");
+    expect(rebuildEvidence?.acceptedWarningDetails).toEqual(acceptedWarningDetails);
+  });
+
+  it("does not populate acceptedWarningDetails for a rebuild that completes with zero warnings", async () => {
+    const liveCursorFromBlock = ORIGINAL_CURSOR_FROM_BLOCK - 24_000n; // window 25 -> checkpoint due
+
+    const db = makeFakeDb({
+      cursor: { fromBlock: liveCursorFromBlock, toBlock: FIRST_ACTIVITY_BLOCK + 1_000_000n },
+      runsById: {
+        "window-run": completedManualRun({
+          startBlock: liveCursorFromBlock - FULL_WINDOW_BLOCKS,
+          endBlock: liveCursorFromBlock - 1n,
+          latestSafeBlock: liveCursorFromBlock - 1n,
+        }),
+        "rebuild-run": completedRebuildRun({
+          startBlock: liveCursorFromBlock - FULL_WINDOW_BLOCKS,
+          endBlock: liveCursorFromBlock - 1n,
+          warningCount: 0,
+          warningDetails: null,
+        }),
+      },
+    });
+
+    let cursorCalls = 0;
+    const dbWithAdvancingCursor: RunnerDbClient = {
+      ...db,
+      syncCursor: {
+        findUnique: async () => {
+          cursorCalls += 1;
+          const fromBlock = cursorCalls === 1 ? liveCursorFromBlock : liveCursorFromBlock - FULL_WINDOW_BLOCKS;
+          return { fromBlock, toBlock: FIRST_ACTIVITY_BLOCK + 1_000_000n, blockHash: "0xhash" };
+        },
+      },
+    };
+
+    const httpPost: RunnerDeps["httpPost"] = async (url) => ({
+      status: 202,
+      body: { data: { runId: url.includes("/api/rebuild") ? "rebuild-run" : "window-run" } },
+    });
+
+    const { deps, evidence } = makeFakeDeps({ db: dbWithAdvancingCursor, httpPost });
+    await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: true, allowCheckpointRebuild: true }),
+      deps,
+    );
+
+    const rebuildEvidence = evidence.find((e) => e.kind === "rebuild");
+    expect(rebuildEvidence?.outcome).toBe("completed");
+    expect(rebuildEvidence?.acceptedWarningDetails).toBeNull();
   });
 });
 
