@@ -927,6 +927,11 @@ export async function runTransferBackfillRunner(
   // before the next submission — even when the operator omitted the flag.
   let expectedCursorFromBlock = options.expectedCursorFromBlock;
 
+  // The descending campaign never moves the cursor's upper edge, so the
+  // toBlock observed on the first validated read must stay identical for the
+  // rest of the invocation; any change is unexpected movement.
+  let expectedCursorToBlock: bigint | undefined;
+
   // Dry-run only: in-memory simulated cursor so --max-windows N previews N
   // distinct sequential windows. Never consulted in execute mode — execute
   // planning always uses the live persisted cursor as the sole truth.
@@ -937,6 +942,26 @@ export async function runTransferBackfillRunner(
     if (!cursor) {
       return stop(deps, "no_transfers_cursor", "TRANSFERS SyncCursor does not exist for this wallet; Case B (ascending) is out of scope for this runner", windowsCompleted, lastWindowNumber);
     }
+
+    // Always validated against the REAL live cursor (never the simulation),
+    // and BEFORE window planning, so unexpected live-cursor movement is
+    // always reported as cursor_expectation_mismatch — even when the moved
+    // cursor happens to land on a misaligned or campaign-complete position.
+    const cursorGate = validateExpectedCursor({ liveCursorFromBlock: cursor.fromBlock, expectedCursorFromBlock });
+    if (!cursorGate.ok) return stop(deps, "cursor_expectation_mismatch", cursorGate.reason, windowsCompleted, lastWindowNumber);
+    if (expectedCursorFromBlock === undefined) {
+      expectedCursorFromBlock = cursor.fromBlock;
+    }
+    if (expectedCursorToBlock !== undefined && cursor.toBlock !== expectedCursorToBlock) {
+      return stop(
+        deps,
+        "cursor_expectation_mismatch",
+        `live TRANSFERS cursor toBlock ${cursor.toBlock} changed from the previously observed ${expectedCursorToBlock}; the descending campaign never moves the upper edge`,
+        windowsCompleted,
+        lastWindowNumber,
+      );
+    }
+    expectedCursorToBlock = cursor.toBlock;
 
     const cursorSource: "live" | "simulated" =
       !options.execute && simulatedCursorFromBlock !== null ? "simulated" : "live";
@@ -951,15 +976,6 @@ export async function runTransferBackfillRunner(
     }
     if (plan.status === "misaligned_cursor") {
       return stop(deps, "misaligned_cursor", plan.detail, windowsCompleted, lastWindowNumber);
-    }
-
-    // Always validated against the REAL live cursor (never the simulation):
-    // detects operator-expectation mismatch on the first iteration and
-    // unexpected live-cursor movement on every later one.
-    const cursorGate = validateExpectedCursor({ liveCursorFromBlock: cursor.fromBlock, expectedCursorFromBlock });
-    if (!cursorGate.ok) return stop(deps, "cursor_expectation_mismatch", cursorGate.reason, windowsCompleted, lastWindowNumber);
-    if (expectedCursorFromBlock === undefined) {
-      expectedCursorFromBlock = cursor.fromBlock;
     }
 
     const adjacencyGate = validateAdjacency({ planningCursorFromBlock: planningFromBlock, proposedEndBlock: plan.endBlock });

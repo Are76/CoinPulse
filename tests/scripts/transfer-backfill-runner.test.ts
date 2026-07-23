@@ -770,6 +770,8 @@ function makeMultiWindowExecuteFixture(args: {
   initialCursorFromBlock: bigint;
   /** Optional override of the live cursor value per read index (1-based). */
   cursorReadOverride?: (readIndex: number, current: bigint) => bigint;
+  /** Optional override of the live cursor upper edge per read index (1-based). */
+  cursorToBlockOverride?: (readIndex: number) => bigint;
   /** Terminal run returned for the Nth submitted window (1-based). */
   runForSubmission?: (submission: number, run: RunnerSyncRunRecord) => RunnerSyncRunRecord;
 }) {
@@ -785,7 +787,10 @@ function makeMultiWindowExecuteFixture(args: {
         const fromBlock = args.cursorReadOverride
           ? args.cursorReadOverride(cursorReads, cursorFromBlock)
           : cursorFromBlock;
-        return { fromBlock, toBlock: 26_698_010n, blockHash: "0xhash" };
+        const toBlock = args.cursorToBlockOverride
+          ? args.cursorToBlockOverride(cursorReads)
+          : 26_698_010n;
+        return { fromBlock, toBlock, blockHash: "0xhash" };
       },
     },
     syncRun: {
@@ -865,7 +870,7 @@ describe("execute-mode multi-window batches with a static --expected-cursor-from
 describe("unexpected live cursor movement between windows stops the batch", () => {
   // Per-iteration live reads: read 1 = planning window N, read 2 =
   // postcondition window N, read 3 = planning window N+1 (tampered here).
-  const TAMPERED = 26_669_999n; // grid-aligned, so the expectation gate (not misalignment) must catch it
+  const TAMPERED = 26_669_999n; // grid-aligned; the expectation gate catches it either way
 
   it("with --expected-cursor-from: stops before submitting Window N+1", async () => {
     const fixture = makeMultiWindowExecuteFixture({
@@ -900,6 +905,43 @@ describe("unexpected live cursor movement between windows stops the batch", () =
     expect(summary.stoppedReason).toBe("cursor_expectation_mismatch");
     expect(summary.windowsCompleted).toBe(1);
     expect(fixture.httpPostCalls).toHaveLength(1);
+  });
+
+  it("a tampered cursor landing on a MISALIGNED position still reports cursor_expectation_mismatch, not misaligned_cursor", async () => {
+    const MISALIGNED_TAMPER = 26_670_499n; // off the 1,000-block campaign grid
+    const fixture = makeMultiWindowExecuteFixture({
+      initialCursorFromBlock: 26_679_999n,
+      cursorReadOverride: (readIndex, current) => (readIndex === 3 ? MISALIGNED_TAMPER : current),
+    });
+    const { deps } = makeFakeDeps({ db: fixture.db, httpPost: fixture.httpPost });
+
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: true, maxWindows: 3, expectedCursorFromBlock: 26_679_999n }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("cursor_expectation_mismatch");
+    expect(summary.windowsCompleted).toBe(1);
+    expect(fixture.httpPostCalls).toHaveLength(1);
+  });
+
+  it("an unexpected toBlock change between windows stops the batch before the next submission", async () => {
+    const fixture = makeMultiWindowExecuteFixture({
+      initialCursorFromBlock: 26_679_999n,
+      // fromBlock advances legitimately; only the upper edge moves on read 3.
+      cursorToBlockOverride: (readIndex) => (readIndex === 3 ? 26_699_010n : 26_698_010n),
+    });
+    const { deps } = makeFakeDeps({ db: fixture.db, httpPost: fixture.httpPost });
+
+    const summary = await runTransferBackfillRunner(
+      baseRunnerOptions({ execute: true, maxWindows: 3, expectedCursorFromBlock: 26_679_999n }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("cursor_expectation_mismatch");
+    expect(summary.windowsCompleted).toBe(1);
+    expect(fixture.httpPostCalls).toHaveLength(1);
+    expect(summary.detail).toContain("toBlock");
   });
 });
 
