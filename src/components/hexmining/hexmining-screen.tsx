@@ -15,8 +15,15 @@ import { SectionCard } from "@/components/ui/section-card";
 import { SurfaceCard } from "@/components/ui/surface-card";
 import { ApiClientError } from "@/lib/api/hexmining-client";
 import { formatHeartsAsHexDisplay } from "@/lib/hex-format";
+import { useHexMiningEndedStakesQuery } from "@/lib/query/use-hexmining-ended-stakes-query";
 import { useHexMiningStakesQuery } from "@/lib/query/use-hexmining-stakes-query";
-import type { HexStakeDto, HexStakeListDto, HexStakeStatus } from "@/services/hexmining/types";
+import type {
+  EndedHexStakeDto,
+  EndedHexStakeListDto,
+  HexStakeDto,
+  HexStakeListDto,
+  HexStakeStatus,
+} from "@/services/hexmining/types";
 
 const PULSECHAIN_CHAIN_ID = 369;
 
@@ -48,6 +55,12 @@ export function HexMiningScreen() {
     enabled: submittedParams !== null,
   });
 
+  const endedStakesQuery = useHexMiningEndedStakesQuery({
+    walletAddress: submittedParams?.walletAddress ?? "",
+    chainId: submittedParams?.chainId ?? PULSECHAIN_CHAIN_ID,
+    enabled: submittedParams !== null,
+  });
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = walletAddress.trim().toLowerCase();
@@ -74,8 +87,10 @@ export function HexMiningScreen() {
           HEX Mining
         </h1>
         <p className="text-sm leading-relaxed max-w-2xl" style={{ color: "#a0a8c0" }}>
-          Native PulseChain pHEX stake monitoring. Phase 2 scope: chainId 369 pHEX stakes only.
-          Backend-estimated yield is shown when backend evidence is available. Pricing, valuation, and PnL remain unsupported.
+          Native PulseChain pHEX stake monitoring for chainId 369. Active and ended native pHEX
+          stakes are shown from backend-provided data. Incomplete or historically recovered
+          evidence may carry warnings. Backend-estimated yield is shown when backend evidence is
+          available. Pricing, valuation, and PnL remain unsupported.
           eHEX (Ethereum) and HSI/HTT stakes are deferred to later phases.
         </p>
         <div className="flex flex-wrap gap-2 mt-1">
@@ -136,7 +151,226 @@ export function HexMiningScreen() {
       {stakesQuery.data !== undefined && errorMessage === null && (
         <StakeResultView list={stakesQuery.data} />
       )}
+
+      {/* Ended stakes */}
+      {submittedParams !== null && validationError === null && (
+        <EndedStakeSection query={endedStakesQuery} />
+      )}
     </PageContainer>
+  );
+}
+
+/* ── Ended stakes section ────────────────────────────────────────────────── */
+
+function EndedStakeSection({
+  query,
+}: {
+  query: ReturnType<typeof useHexMiningEndedStakesQuery>;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: "#586070", letterSpacing: "0.08em" }}>
+        Ended native pHEX stakes{query.data !== undefined ? ` (${query.data.totalCount})` : ""}
+      </span>
+
+      {query.isLoading && <LoadingState blocks={2} className="grid gap-4 md:grid-cols-2" />}
+
+      {query.isError && <ErrorState message={getErrorMessage(query.error)} />}
+
+      {query.data !== undefined && <EndedStakeResultView list={query.data} />}
+    </div>
+  );
+}
+
+function EndedStakeResultView({ list }: { list: EndedHexStakeListDto }) {
+  return (
+    <>
+      {!list.isComplete && (
+        <WarningBanner tone="warn" title="Incomplete ended-stake evidence">
+          One or more ended stakes have incomplete evidence. Values shown may be missing
+          fields that could not be recovered.
+        </WarningBanner>
+      )}
+
+      {list.warnings.length > 0 && (
+        <WarningBanner tone="warn" title="Ended-stake warnings">
+          <WarningList warnings={list.warnings} />
+        </WarningBanner>
+      )}
+
+      {list.stakes.length === 0 ? (
+        <EmptyState
+          title="No ended native pHEX stakes recorded"
+          message="No ended native pHEX stake observations are persisted for this wallet on PulseChain."
+        />
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {list.stakes.map((stake) => (
+            <EndedStakeCard key={stake.id} stake={stake} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ── Ended stake card ────────────────────────────────────────────────────── */
+
+// Display-only hearts formatting via the shared bigint-safe formatter.
+// Null stays "Unavailable"; a value the formatter cannot parse is shown raw.
+function heartsMetricValue(hearts: string | null): string {
+  if (hearts === null) return "Unavailable";
+  const display = formatHeartsAsHexDisplay(hearts);
+  return display !== null ? `${display} HEX` : hearts;
+}
+
+function EndedStakeCard({ stake }: { stake: EndedHexStakeDto }) {
+  const wasRecovered = stake.evidenceRecoveryMethod !== null;
+
+  return (
+    <div
+      className="rounded-xl flex flex-col overflow-hidden"
+      style={{
+        background: "#111520",
+        border: stake.isComplete
+          ? "1px solid rgba(255,255,255,0.065)"
+          : "1px solid rgba(245,158,11,0.3)",
+        boxShadow: "0 2px 12px rgba(0,0,0,0.25)",
+      }}
+    >
+      {/* Header */}
+      <div
+        className="flex items-start justify-between gap-3 px-4 py-3"
+        style={{ borderBottom: "1px solid rgba(255,255,255,0.055)" }}
+      >
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <span className="text-xs" style={{ color: "#586070" }}>
+            {stake.stakeIndex !== null ? `#${stake.stakeIndex} · ` : ""}Stake ID
+          </span>
+          <span className="cp-data text-xs truncate" style={{ color: "#a0a8c0" }} title={stake.stakeId}>
+            {stake.stakeId}
+          </span>
+        </div>
+        <div className="flex flex-wrap justify-end gap-1.5">
+          <ProvenanceChip tone="neutral" size="sm">ended</ProvenanceChip>
+          {!stake.isComplete && (
+            <ProvenanceChip tone="warn" size="sm">incomplete evidence</ProvenanceChip>
+          )}
+        </div>
+      </div>
+
+      {/* Key metrics grid */}
+      <div className="grid grid-cols-2 gap-px" style={{ background: "rgba(255,255,255,0.04)" }}>
+        <MetricCell label="Principal" value={heartsMetricValue(stake.principalHex)} mono />
+        <MetricCell label="Yield" value={heartsMetricValue(stake.yieldHex)} mono />
+        <MetricCell label="Penalty" value={heartsMetricValue(stake.penaltyHex)} mono />
+        <MetricCell label="Stake shares" value={stake.stakeShares ?? "Unavailable"} mono />
+        <MetricCell
+          label="Locked day"
+          value={stake.lockedDay !== null ? String(stake.lockedDay) : "Unavailable"}
+          mono
+        />
+        <MetricCell
+          label="Staked days"
+          value={stake.stakedDays !== null ? String(stake.stakedDays) : "Unavailable"}
+          mono
+        />
+      </div>
+
+      {/* End evidence */}
+      <div
+        className="px-4 py-2.5 flex flex-col gap-1"
+        style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+      >
+        <span className="cp-data text-xs truncate" style={{ color: "#586070" }} title={stake.endTxHash}>
+          end tx: {stake.endTxHash}
+        </span>
+        <span className="cp-data text-xs" style={{ color: "#586070" }}>
+          end block: {stake.endBlockNumber}
+        </span>
+        {stake.startTxHash !== null && (
+          <span className="cp-data text-xs truncate" style={{ color: "#586070" }} title={stake.startTxHash}>
+            start tx: {stake.startTxHash}
+          </span>
+        )}
+        {stake.startBlockNumber !== null && (
+          <span className="cp-data text-xs" style={{ color: "#586070" }}>
+            start block: {stake.startBlockNumber}
+          </span>
+        )}
+        <span className="text-xs" style={{ color: "#586070" }}>
+          observed at: {stake.observedAt}
+        </span>
+      </div>
+
+      {/* Discovery + recovery provenance */}
+      <div
+        className="flex flex-wrap gap-1.5 px-4 py-2.5"
+        style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+      >
+        <ProvenanceChip tone="neutral" size="sm">discovery: {stake.discoveryMethod}</ProvenanceChip>
+        {wasRecovered && (
+          <ProvenanceChip tone="warn" size="sm">historically recovered</ProvenanceChip>
+        )}
+      </div>
+
+      {wasRecovered && (
+        <div
+          className="px-4 py-2.5 flex flex-col gap-1"
+          style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+        >
+          <span className="text-xs font-semibold" style={{ color: "#a0a8c0" }}>
+            Evidence recovery
+          </span>
+          <span className="text-xs" style={{ color: "#586070" }}>
+            recovery method: {stake.evidenceRecoveryMethod}
+          </span>
+          {stake.evidenceRecoveryBlockNumber !== null && (
+            <span className="cp-data text-xs" style={{ color: "#586070" }}>
+              recovery block: {stake.evidenceRecoveryBlockNumber}
+            </span>
+          )}
+          {stake.evidenceRecoverySourceContract !== null && (
+            <span
+              className="cp-data text-xs truncate"
+              style={{ color: "#586070" }}
+              title={stake.evidenceRecoverySourceContract}
+            >
+              recovery source contract: {stake.evidenceRecoverySourceContract}
+            </span>
+          )}
+          {stake.evidenceRecoverySourceFunction !== null && (
+            <span className="cp-data text-xs" style={{ color: "#586070" }}>
+              recovery source function: {stake.evidenceRecoverySourceFunction}
+            </span>
+          )}
+          {stake.evidenceRecoveryReturnedStakeId !== null && (
+            <span className="cp-data text-xs" style={{ color: "#586070" }}>
+              recovery returned stake id: {stake.evidenceRecoveryReturnedStakeId}
+            </span>
+          )}
+          {stake.evidenceRecoveredAt !== null && (
+            <span className="text-xs" style={{ color: "#586070" }}>
+              recovered at: {stake.evidenceRecoveredAt}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Row warnings */}
+      {stake.warnings.length > 0 && (
+        <div
+          className="px-4 py-2.5 flex flex-col gap-1"
+          style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+        >
+          {stake.warnings.map((w, i) => (
+            <span key={`ew-${stake.id}-${i}`} className="text-xs" style={{ color: "#f59e0b" }}>
+              {w}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -167,7 +401,7 @@ function StakeResultView({ list }: { list: HexStakeListDto }) {
       ) : list.stakes.length === 0 ? (
         <EmptyState
           title="No active native pHEX stakes found"
-          message="This wallet has no native pHEX stakes on PulseChain. Stakes closed via endStake are not tracked in Phase 2."
+          message="This wallet has no active native pHEX stakes on PulseChain. Ended stakes, when recorded, are shown in the Ended native pHEX stakes section below."
         />
       ) : (
         <StakeList stakes={list.stakes} observedAt={list.observedAt} />

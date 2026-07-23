@@ -39,6 +39,8 @@ export const queryKeys = {
   hexmining: {
     stakes: (params: { walletAddress: string; chainId: number }) =>
       ["hexmining", "stakes", { walletAddress: params.walletAddress, chainId: params.chainId }] as const,
+    endedStakes: (params: { walletAddress: string; chainId: number }) =>
+      ["hexmining", "ended-stakes", { walletAddress: params.walletAddress, chainId: params.chainId }] as const,
     evidenceMissing: (params: { walletAddress: string; chainId: number }) =>
       ["hexmining", "evidence", "missing", { walletAddress: params.walletAddress, chainId: params.chainId }] as const,
   },

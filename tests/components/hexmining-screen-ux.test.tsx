@@ -12,6 +12,19 @@ vi.mock("@/lib/query/use-hexmining-stakes-query", () => ({
   useHexMiningStakesQuery: vi.fn(),
 }));
 
+// The ended-stakes section is covered by hexmining-ended-stakes-screen.test.tsx.
+// Here it stays idle so active-stake assertions are unaffected.
+vi.mock("@/lib/query/use-hexmining-ended-stakes-query", () => ({
+  useHexMiningEndedStakesQuery: vi.fn(() => ({
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+    isSuccess: false,
+    error: null,
+  })),
+}));
+
 import { useHexMiningStakesQuery } from "@/lib/query/use-hexmining-stakes-query";
 
 function makeIdleQuery() {
@@ -239,7 +252,9 @@ describe("HexMiningScreen — error rendering", () => {
     const input = screen.getByLabelText("Wallet address");
     fireEvent.change(input, { target: { value: VALID_ADDRESS } });
     fireEvent.submit(input.closest("form")!);
-    expect(screen.queryByText(/Native pHEX stakes/i)).not.toBeInTheDocument();
+    // Active results header is "Native pHEX stakes (N)"; anchored so the
+    // independent "Ended native pHEX stakes" section header does not match.
+    expect(screen.queryByText(/^Native pHEX stakes/i)).not.toBeInTheDocument();
   });
 });
 
