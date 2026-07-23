@@ -69,7 +69,7 @@ export type ParsedInput = {
   chainId: number;
   execute: boolean;
   rpcUrl: string | undefined;
-  evidenceDir: string | null;
+  evidenceDir: string;
 };
 
 export type ParseResult = { ok: true; input: ParsedInput } | { ok: false; error: string };
@@ -99,7 +99,7 @@ export function parseInput(
   const wallet = args["wallet"];
   const chainIdRaw = args["chain-id"] ?? String(PULSECHAIN_CHAIN_ID);
   const rpcUrl = args["rpc-url"] ?? env["PULSECHAIN_RPC_URL"];
-  const evidenceDir = args["evidence-dir"] ?? null;
+  const evidenceDir = args["evidence-dir"] ?? DEFAULT_EVIDENCE_DIR;
 
   if (!wallet) return { ok: false, error: "--wallet is required" };
   if (!ADDRESS_RE.test(wallet)) {

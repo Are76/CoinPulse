@@ -17,16 +17,19 @@
 //    10. Missing RPC URL (no --rpc-url, no env var) → ok:false
 //    11. --rpc-url overrides the env default
 //    12. A secret RPC URL value never appears in an error message
+//    13. No --evidence-dir → parsed value equals DEFAULT_EVIDENCE_DIR
+//    14. Explicit --evidence-dir → explicit value is preserved
 //   resultExitCode:
-//    13. ok:false → 2
-//    14. ok:true, totalFailures:0 → 0
-//    15. ok:true, totalFailures>0 → 1
+//    15. ok:false → 2
+//    16. ok:true, totalFailures:0 → 0
+//    17. ok:true, totalFailures>0 → 1
 
 import { describe, expect, it } from "vitest";
 
 import {
   parseInput,
   resultExitCode,
+  DEFAULT_EVIDENCE_DIR,
 } from "../../scripts/hexmining-ended-stake-historical-state-recovery";
 
 const WALLET = "0x1111111111111111111111111111111111111111";
@@ -120,6 +123,21 @@ describe("parseInput", () => {
     });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.input.rpcUrl).toBe("https://override.test");
+  });
+
+  it("defaults evidenceDir to DEFAULT_EVIDENCE_DIR when --evidence-dir is omitted", () => {
+    const result = parseInput(["--wallet", WALLET, "--rpc-url", RPC_URL], {});
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.input.evidenceDir).toBe(DEFAULT_EVIDENCE_DIR);
+  });
+
+  it("preserves an explicitly supplied --evidence-dir", () => {
+    const result = parseInput(
+      ["--wallet", WALLET, "--rpc-url", RPC_URL, "--evidence-dir", "custom/evidence/path"],
+      {},
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.input.evidenceDir).toBe("custom/evidence/path");
   });
 
   it("never leaks an RPC URL value in an error message", () => {
