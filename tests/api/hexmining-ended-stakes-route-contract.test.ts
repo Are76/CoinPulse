@@ -71,6 +71,12 @@ function makeStakeDto(): EndedHexStakeDto {
     observedAt: OBSERVED_AT,
     isComplete: true,
     warnings: [],
+    evidenceRecoveryMethod: null,
+    evidenceRecoveryBlockNumber: null,
+    evidenceRecoverySourceContract: null,
+    evidenceRecoverySourceFunction: null,
+    evidenceRecoveryReturnedStakeId: null,
+    evidenceRecoveredAt: null,
   };
 }
 
@@ -313,6 +319,60 @@ describe("GET /api/hexmining/ended-stakes route contract", () => {
     expect(stake.observedAt).toBe(OBSERVED_AT);
     expect(stake.isComplete).toBe(true);
     expect(Array.isArray(stake.warnings)).toBe(true);
+    expect(stake.evidenceRecoveryMethod).toBeNull();
+    expect(stake.evidenceRecoveryBlockNumber).toBeNull();
+    expect(stake.evidenceRecoverySourceContract).toBeNull();
+    expect(stake.evidenceRecoverySourceFunction).toBeNull();
+    expect(stake.evidenceRecoveryReturnedStakeId).toBeNull();
+    expect(stake.evidenceRecoveredAt).toBeNull();
+  });
+
+  // ── 11. Historical-state-recovered stake exposes provenance, discoveryMethod
+  //        unchanged, bigint fields as exact decimal strings ─────────────────
+
+  it("exposes evidenceRecovery* provenance for a historically-recovered stake without changing discoveryMethod", async () => {
+    const recoveredStake: EndedHexStakeDto = {
+      ...makeStakeDto(),
+      id: "obs-2",
+      warnings: [],
+      evidenceRecoveryMethod: "historical_contract_state",
+      evidenceRecoveryBlockNumber: "15767881",
+      evidenceRecoverySourceContract: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+      evidenceRecoverySourceFunction: "stakeLists",
+      evidenceRecoveryReturnedStakeId: "942663",
+      evidenceRecoveredAt: "2026-07-23T12:00:00.000Z",
+    };
+    const fixture: EndedHexStakeListDto = {
+      ...makeSingleStakeListDto(),
+      stakes: [recoveredStake],
+    };
+    readEndedHexStakes.mockResolvedValue(fixture);
+
+    const { GET } = await import("../../app/api/hexmining/ended-stakes/route");
+    const response = await GET(
+      new Request(makeUrl({ walletAddress: WALLET_ADDRESS, chainId: CHAIN_ID })),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const stake = body.data.stakes[0];
+
+    // Original END-discovery provenance is untouched by recovery.
+    expect(stake.discoveryMethod).toBe("raw_stake_action");
+    expect(stake.isComplete).toBe(true);
+
+    // Recovery provenance surfaced additively, all as strings — never a JSON
+    // number for the block number or stakeId (bigint/string-safe end to end).
+    expect(stake.evidenceRecoveryMethod).toBe("historical_contract_state");
+    expect(typeof stake.evidenceRecoveryBlockNumber).toBe("string");
+    expect(stake.evidenceRecoveryBlockNumber).toBe("15767881");
+    expect(stake.evidenceRecoverySourceContract).toBe(
+      "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+    );
+    expect(stake.evidenceRecoverySourceFunction).toBe("stakeLists");
+    expect(typeof stake.evidenceRecoveryReturnedStakeId).toBe("string");
+    expect(stake.evidenceRecoveryReturnedStakeId).toBe("942663");
+    expect(stake.evidenceRecoveredAt).toBe("2026-07-23T12:00:00.000Z");
   });
 
   // ── 10. Degraded reader DTO propagated unchanged ───────────────────────────

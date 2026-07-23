@@ -65,6 +65,12 @@ const COMPLETE_ROW: PersistedEndedHexStakeObservation = {
   isComplete: true,
   warnings: [],
   createdAt: new Date("2026-06-29T00:00:00Z"),
+  evidenceRecoveryMethod: null,
+  evidenceRecoveryBlockNumber: null,
+  evidenceRecoverySourceContract: null,
+  evidenceRecoverySourceFunction: null,
+  evidenceRecoveryReturnedStakeId: null,
+  evidenceRecoveredAt: null,
 };
 
 const INCOMPLETE_ROW: PersistedEndedHexStakeObservation = {
@@ -163,6 +169,59 @@ describe("readEndedHexStakes", () => {
     expect(stake.yieldHex).toBeNull();
     expect(stake.startTxHash).toBeNull();
     expect(stake.startBlockNumber).toBeNull();
+  });
+
+  it("returns all evidenceRecovery* provenance fields as null for a row with no historical-state recovery", async () => {
+    const client = makeMockClient([COMPLETE_ROW]);
+    const result = await readEndedHexStakes(
+      { chainId: 369, walletAddress: "0xwallet" },
+      client as never,
+    );
+
+    const stake = result.stakes[0];
+    expect(stake.evidenceRecoveryMethod).toBeNull();
+    expect(stake.evidenceRecoveryBlockNumber).toBeNull();
+    expect(stake.evidenceRecoverySourceContract).toBeNull();
+    expect(stake.evidenceRecoverySourceFunction).toBeNull();
+    expect(stake.evidenceRecoveryReturnedStakeId).toBeNull();
+    expect(stake.evidenceRecoveredAt).toBeNull();
+  });
+
+  it("maps a historically-recovered row's evidenceRecovery* fields exactly, discoveryMethod unchanged, block number as an exact string", async () => {
+    const recoveredAt = new Date("2026-07-23T12:00:00.000Z");
+    const recoveredRow: PersistedEndedHexStakeObservation = {
+      ...COMPLETE_ROW,
+      id: "obs-recovered",
+      stakeId: "507128",
+      endBlockNumber: 15767882n,
+      discoveryMethod: "raw_stake_action",
+      warnings: [],
+      evidenceRecoveryMethod: "historical_contract_state",
+      evidenceRecoveryBlockNumber: 15767881n,
+      evidenceRecoverySourceContract: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+      evidenceRecoverySourceFunction: "stakeLists",
+      evidenceRecoveryReturnedStakeId: "507128",
+      evidenceRecoveredAt: recoveredAt,
+    };
+    const client = makeMockClient([recoveredRow]);
+    const result = await readEndedHexStakes(
+      { chainId: 369, walletAddress: "0xwallet" },
+      client as never,
+    );
+
+    const stake = result.stakes[0];
+    expect(stake.discoveryMethod).toBe("raw_stake_action");
+    expect(stake.isComplete).toBe(true);
+    expect(stake.evidenceRecoveryMethod).toBe("historical_contract_state");
+    expect(typeof stake.evidenceRecoveryBlockNumber).toBe("string");
+    expect(stake.evidenceRecoveryBlockNumber).toBe("15767881");
+    expect(stake.evidenceRecoverySourceContract).toBe(
+      "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+    );
+    expect(stake.evidenceRecoverySourceFunction).toBe("stakeLists");
+    expect(typeof stake.evidenceRecoveryReturnedStakeId).toBe("string");
+    expect(stake.evidenceRecoveryReturnedStakeId).toBe("507128");
+    expect(stake.evidenceRecoveredAt).toBe(recoveredAt.toISOString());
   });
 
   it("serializes bigint fields as decimal strings", async () => {
