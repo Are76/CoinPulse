@@ -336,11 +336,50 @@ export type RunnerSyncRunRecord = {
   endBlock: bigint | null;
   latestSafeBlock: bigint | null;
   warningCount: number;
+  warningDetails: unknown;
   errorMessage: string | null;
   failedSourceFamily: string | null;
   failedFromBlock: bigint | null;
   failedToBlock: bigint | null;
 };
+
+// A checkpoint/final REBUILD re-materializes the entire wallet from a still-
+// incomplete descending backfill (docs/transfer-history-backfill-operator-plan.md
+// facts 10-11, §3 Q6): `negative-token-balance:<assetId>:<qty>` warnings are the
+// documented, expected byproduct until the history is contiguous. MANUAL sync
+// windows do not materialize at all, so they have no such expected class and
+// must stay held to warningCount === 0.
+const EXPECTED_REBUILD_WARNING_PREFIX = "negative-token-balance:";
+
+export function isExpectedRebuildWarningDetail(detail: unknown): boolean {
+  return typeof detail === "string" && detail.startsWith(EXPECTED_REBUILD_WARNING_PREFIX);
+}
+
+/**
+ * Classifies a REBUILD run's warningDetails against the one documented
+ * expected class. Fails closed: missing/non-array details, or any detail
+ * outside the expected class (including the truncation marker from
+ * `capWarningDetails` in sync-state-store.ts, which hides unverifiable
+ * entries), is treated as unexpected.
+ */
+export function classifyRebuildWarningDetails(
+  warningDetails: unknown,
+): { ok: true } | { ok: false; reason: string } {
+  if (!Array.isArray(warningDetails)) {
+    return {
+      ok: false,
+      reason: "warningCount > 0 but warningDetails is missing or not an array; cannot verify rebuild warnings are the documented negative-token-balance class",
+    };
+  }
+  const unexpected = warningDetails.filter((detail) => !isExpectedRebuildWarningDetail(detail));
+  if (unexpected.length > 0) {
+    return {
+      ok: false,
+      reason: `rebuild produced ${unexpected.length} unexpected warning(s) outside the documented negative-token-balance class: ${JSON.stringify(unexpected.slice(0, 5))}`,
+    };
+  }
+  return { ok: true };
+}
 
 export function verifySyncRunTerminalState(args: {
   run: RunnerSyncRunRecord;
@@ -357,8 +396,15 @@ export function verifySyncRunTerminalState(args: {
   if (run.status !== "COMPLETED") {
     reasons.push(`expected status COMPLETED, got ${run.status}`);
   }
-  if (run.warningCount !== 0) {
-    reasons.push(`expected warningCount 0, got ${run.warningCount}`);
+  if (args.expectedTrigger === "MANUAL") {
+    if (run.warningCount !== 0) {
+      reasons.push(`expected warningCount 0, got ${run.warningCount}`);
+    }
+  } else if (run.warningCount > 0) {
+    const classification = classifyRebuildWarningDetails(run.warningDetails);
+    if (!classification.ok) {
+      reasons.push(classification.reason);
+    }
   }
   if (run.errorMessage !== null) {
     reasons.push(`expected errorMessage null, got ${JSON.stringify(run.errorMessage)}`);

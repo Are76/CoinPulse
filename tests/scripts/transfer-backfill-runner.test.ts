@@ -16,6 +16,7 @@ import {
   buildManualSyncRequestBody,
   buildRebuildRequestBody,
   checkEnv,
+  classifyRebuildWarningDetails,
   computeTotalWindows,
   computeWindowPlan,
   isCheckpointDue,
@@ -157,6 +158,7 @@ function completedManualRun(overrides: Partial<RunnerSyncRunRecord> = {}): Runne
     endBlock: 26_679_998n,
     latestSafeBlock: 26_679_998n,
     warningCount: 0,
+    warningDetails: null,
     errorMessage: null,
     failedSourceFamily: null,
     failedFromBlock: null,
@@ -344,6 +346,112 @@ describe("refusal on warning or failed terminal state", () => {
     const summary = await runTransferBackfillRunner(baseRunnerOptions({ execute: true }), deps);
     expect(summary.stoppedReason).toBe("invariant_failed_after_run");
     expect(summary.windowsCompleted).toBe(0);
+  });
+});
+
+// ─── 9b. REBUILD trigger-specific warning validation ───────────────────────────
+//
+// Checkpoint/final rebuilds re-materialize the whole wallet mid-backfill and
+// are documented (docs/transfer-history-backfill-operator-plan.md facts 10-11,
+// §3 Q6) to legitimately emit `negative-token-balance:<assetId>:<qty>`
+// warnings until the history is contiguous. MANUAL sync windows never
+// materialize and so keep the strict warningCount === 0 rule unchanged.
+
+function completedRebuildRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
+  return completedManualRun({ trigger: "REBUILD", ...overrides });
+}
+
+describe("REBUILD trigger-specific warning validation", () => {
+  it("classifyRebuildWarningDetails accepts only the documented negative-token-balance class", () => {
+    expect(
+      classifyRebuildWarningDetails([
+        "negative-token-balance:chain:369:erc20:0xabc:12.5",
+        "negative-token-balance:chain:369:erc20:0xdef:0.001",
+      ]).ok,
+    ).toBe(true);
+  });
+
+  it("classifyRebuildWarningDetails rejects any other warning class", () => {
+    const result = classifyRebuildWarningDetails([
+      "negative-token-balance:chain:369:erc20:0xabc:12.5",
+      "skipped unrelated-wallet transfer log",
+    ]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("classifyRebuildWarningDetails fails closed when warningDetails is missing (e.g. truncated)", () => {
+    expect(classifyRebuildWarningDetails(null).ok).toBe(false);
+    expect(classifyRebuildWarningDetails(undefined).ok).toBe(false);
+  });
+
+  it("classifyRebuildWarningDetails fails closed on the capWarningDetails truncation marker", () => {
+    const result = classifyRebuildWarningDetails([
+      "negative-token-balance:chain:369:erc20:0xabc:12.5",
+      "[truncated: 5 additional warnings not stored]",
+    ]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("verifySyncRunTerminalState passes a REBUILD run whose warnings are all negative-token-balance", () => {
+    const result = verifySyncRunTerminalState({
+      run: completedRebuildRun({
+        warningCount: 2,
+        warningDetails: [
+          "negative-token-balance:chain:369:erc20:0xabc:12.5",
+          "negative-token-balance:chain:369:erc20:0xdef:0.001",
+        ],
+      }),
+      expectedTrigger: "REBUILD",
+      expectedStartBlock: 26_678_999n,
+      expectedEndBlock: 26_679_998n,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("verifySyncRunTerminalState fails a REBUILD run with an unexpected warning class", () => {
+    const result = verifySyncRunTerminalState({
+      run: completedRebuildRun({
+        warningCount: 1,
+        warningDetails: ["skipped unrelated-wallet transfer log"],
+      }),
+      expectedTrigger: "REBUILD",
+      expectedStartBlock: 26_678_999n,
+      expectedEndBlock: 26_679_998n,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("verifySyncRunTerminalState still passes a REBUILD run with zero warnings", () => {
+    const result = verifySyncRunTerminalState({
+      run: completedRebuildRun({ warningCount: 0, warningDetails: null }),
+      expectedTrigger: "REBUILD",
+      expectedStartBlock: 26_678_999n,
+      expectedEndBlock: 26_679_998n,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("regression: MANUAL runs are unaffected — zero warnings still passes", () => {
+    const result = verifySyncRunTerminalState({
+      run: completedManualRun({ warningCount: 0, warningDetails: null }),
+      expectedTrigger: "MANUAL",
+      expectedStartBlock: 26_678_999n,
+      expectedEndBlock: 26_679_998n,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("regression: MANUAL runs still fail on any warning, even the negative-token-balance class", () => {
+    const result = verifySyncRunTerminalState({
+      run: completedManualRun({
+        warningCount: 1,
+        warningDetails: ["negative-token-balance:chain:369:erc20:0xabc:12.5"],
+      }),
+      expectedTrigger: "MANUAL",
+      expectedStartBlock: 26_678_999n,
+      expectedEndBlock: 26_679_998n,
+    });
+    expect(result.ok).toBe(false);
   });
 });
 
