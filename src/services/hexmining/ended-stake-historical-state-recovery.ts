@@ -211,7 +211,9 @@ export async function recoverEndedHexStakeHistoricalState(
       endBlockNumber: observation.endBlockNumber,
       lockedDay: attempt.lockedDay,
       stakeShares: attempt.stakeShares,
-      warnings: [],
+      // warnings are no longer supplied here — enrichEndedHexStakeObservation
+      // reads the row's current persisted warnings itself and removes only
+      // the obsolete lockedday-unknown code, preserving every other warning.
       evidenceRecoveryMethod: EVIDENCE_RECOVERY_METHOD,
       evidenceRecoveryBlockNumber: historicalBlock,
       evidenceRecoverySourceContract: PHEX_ADDRESS.toLowerCase(),

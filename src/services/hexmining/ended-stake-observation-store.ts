@@ -324,6 +324,14 @@ export async function readEndedHexStakeObservations(
 //     never touched here — only lockedDay, stakeShares, isComplete, warnings,
 //     and the evidenceRecovery* columns are written.
 
+// The obsolete incomplete-evidence warning discovery attaches to every
+// incomplete row (see WARN_INCOMPLETE_START_EVIDENCE in
+// ended-stake-discovery.ts). Enrichment removes only this exact warning code —
+// every other persisted warning is preserved verbatim, in order. This constant
+// mirrors that one intentionally rather than importing it: the same pattern is
+// already used independently in ended-stake-api-verification-runner.ts.
+const WARN_INCOMPLETE_START_EVIDENCE = "hexmining-ended-stake-lockedday-unknown";
+
 export type EnrichEndedHexStakeObservationInput = {
   id: string;
   chainId: number;
@@ -332,7 +340,6 @@ export type EnrichEndedHexStakeObservationInput = {
   endBlockNumber: bigint;
   lockedDay: number;
   stakeShares: string;
-  warnings: string[];
   evidenceRecoveryMethod: string;
   evidenceRecoveryBlockNumber: bigint;
   evidenceRecoverySourceContract: string;
@@ -348,6 +355,17 @@ export type EnrichEndedHexStakeObservationOutcome =
   | "state_changed"
   | "observation_missing";
 
+type EnrichObservationSnapshot = {
+  chainId: number;
+  walletAddress: string;
+  stakeId: string;
+  endBlockNumber: bigint;
+  isComplete: boolean;
+  lockedDay: number | null;
+  stakeShares: string | null;
+  warnings: string[];
+};
+
 type EnrichStoreClient = {
   rawEndedHexStakeObservation: {
     updateMany(args: {
@@ -358,6 +376,11 @@ type EnrichStoreClient = {
         walletAddress: string;
         stakeId: string;
         endBlockNumber: bigint;
+        // Bound to the exact warnings array just read, so a concurrent write
+        // that changes warnings (adds a new diagnostic, or another process
+        // races the same enrichment) fails this conditional update closed
+        // instead of silently overwriting the newer persisted warnings.
+        warnings: { equals: string[] };
       };
       data: {
         lockedDay: number;
@@ -382,27 +405,71 @@ type EnrichStoreClient = {
         isComplete: true;
         lockedDay: true;
         stakeShares: true;
+        warnings: true;
       };
-    }): Promise<
-      | {
-          chainId: number;
-          walletAddress: string;
-          stakeId: string;
-          endBlockNumber: bigint;
-          isComplete: boolean;
-          lockedDay: number | null;
-          stakeShares: string | null;
-        }
-      | null
-    >;
+    }): Promise<EnrichObservationSnapshot | null>;
   };
 };
+
+function classifyAgainstSnapshot(
+  snapshot: EnrichObservationSnapshot | null,
+  input: EnrichEndedHexStakeObservationInput,
+  walletAddress: string,
+): { outcome: EnrichEndedHexStakeObservationOutcome } | null {
+  if (snapshot == null) {
+    return { outcome: "observation_missing" };
+  }
+
+  const identityMatches =
+    snapshot.chainId === input.chainId &&
+    snapshot.walletAddress === walletAddress &&
+    snapshot.stakeId === input.stakeId &&
+    snapshot.endBlockNumber === input.endBlockNumber;
+
+  if (!identityMatches) {
+    return { outcome: "state_changed" };
+  }
+
+  if (snapshot.isComplete) {
+    const matches =
+      snapshot.lockedDay === input.lockedDay && snapshot.stakeShares === input.stakeShares;
+    return { outcome: matches ? "concurrent_matching_completion" : "concurrent_conflict" };
+  }
+
+  return null;
+}
 
 export async function enrichEndedHexStakeObservation(
   input: EnrichEndedHexStakeObservationInput,
   client: EnrichStoreClient = getDb() as unknown as EnrichStoreClient,
 ): Promise<{ outcome: EnrichEndedHexStakeObservationOutcome }> {
   const walletAddress = input.walletAddress.toLowerCase();
+
+  // Read current identity/state/warnings first. This lets the write preserve
+  // every unrelated warning exactly (filtering only the obsolete
+  // lockedday-unknown code) and binds the write to warnings staying exactly
+  // what was just read — see the updateMany where clause below.
+  const before = await client.rawEndedHexStakeObservation.findUnique({
+    where: { id: input.id },
+    select: {
+      chainId: true,
+      walletAddress: true,
+      stakeId: true,
+      endBlockNumber: true,
+      isComplete: true,
+      lockedDay: true,
+      stakeShares: true,
+      warnings: true,
+    },
+  });
+
+  const preClassified = classifyAgainstSnapshot(before, input, walletAddress);
+  if (preClassified) return preClassified;
+  // before is non-null and still incomplete beyond this point (guaranteed by
+  // classifyAgainstSnapshot returning null only in that case).
+  const current = before!;
+
+  const nextWarnings = current.warnings.filter((w) => w !== WARN_INCOMPLETE_START_EVIDENCE);
 
   const result = await client.rawEndedHexStakeObservation.updateMany({
     where: {
@@ -412,12 +479,13 @@ export async function enrichEndedHexStakeObservation(
       walletAddress,
       stakeId: input.stakeId,
       endBlockNumber: input.endBlockNumber,
+      warnings: { equals: current.warnings },
     },
     data: {
       lockedDay: input.lockedDay,
       stakeShares: input.stakeShares,
       isComplete: true,
-      warnings: input.warnings,
+      warnings: nextWarnings,
       evidenceRecoveryMethod: input.evidenceRecoveryMethod,
       evidenceRecoveryBlockNumber: input.evidenceRecoveryBlockNumber,
       evidenceRecoverySourceContract: input.evidenceRecoverySourceContract,
@@ -439,9 +507,11 @@ export async function enrichEndedHexStakeObservation(
     );
   }
 
-  // count === 0: the conditional update matched nothing. Re-read and classify
-  // why, rather than assuming failure. Never write in any of these branches.
-  const current = await client.rawEndedHexStakeObservation.findUnique({
+  // count === 0: something changed since `before` was read (isComplete
+  // flipped, identity changed, or warnings changed concurrently). Re-read and
+  // classify why, rather than assuming failure. Never write in any of these
+  // branches.
+  const after = await client.rawEndedHexStakeObservation.findUnique({
     where: { id: input.id },
     select: {
       chainId: true,
@@ -451,31 +521,15 @@ export async function enrichEndedHexStakeObservation(
       isComplete: true,
       lockedDay: true,
       stakeShares: true,
+      warnings: true,
     },
   });
 
-  if (current == null) {
-    return { outcome: "observation_missing" };
-  }
-
-  const identityMatches =
-    current.chainId === input.chainId &&
-    current.walletAddress === walletAddress &&
-    current.stakeId === input.stakeId &&
-    current.endBlockNumber === input.endBlockNumber;
-
-  if (!identityMatches) {
-    return { outcome: "state_changed" };
-  }
-
-  if (current.isComplete) {
-    const matches =
-      current.lockedDay === input.lockedDay && current.stakeShares === input.stakeShares;
-    return { outcome: matches ? "concurrent_matching_completion" : "concurrent_conflict" };
-  }
+  const postClassified = classifyAgainstSnapshot(after, input, walletAddress);
+  if (postClassified) return postClassified;
 
   // Identity matches, still incomplete, yet the conditional update matched
-  // zero rows — some other field changed concurrently in a way this function
-  // does not model. Fail closed rather than guess.
+  // zero rows — warnings (or some other unmodeled field) changed concurrently.
+  // Fail closed rather than guess or overwrite.
   return { outcome: "state_changed" };
 }

@@ -109,9 +109,12 @@ function makeMockPersistenceClient(rows: StoredRow[]) {
           walletAddress: string;
           stakeId: string;
           endBlockNumber: bigint;
+          warnings: { equals: string[] };
         };
         data: Record<string, unknown>;
       }) {
+        const arraysEqual = (a: string[], b: string[]) =>
+          a.length === b.length && a.every((v, i) => v === b[i]);
         const matched = rows.filter(
           (r) =>
             r.id === args.where.id &&
@@ -119,7 +122,8 @@ function makeMockPersistenceClient(rows: StoredRow[]) {
             r.chainId === args.where.chainId &&
             r.walletAddress === args.where.walletAddress &&
             r.stakeId === args.where.stakeId &&
-            r.endBlockNumber === args.where.endBlockNumber,
+            r.endBlockNumber === args.where.endBlockNumber &&
+            arraysEqual(r.warnings, args.where.warnings.equals),
         );
         for (const row of matched) Object.assign(row, args.data);
         return { count: matched.length };
@@ -135,6 +139,7 @@ function makeMockPersistenceClient(rows: StoredRow[]) {
           isComplete: row.isComplete,
           lockedDay: row.lockedDay,
           stakeShares: row.stakeShares,
+          warnings: row.warnings,
         };
       },
     },
@@ -487,6 +492,9 @@ describe("recoverEndedHexStakeHistoricalState", () => {
     expect(untouched.isComplete).toBe(false);
     expect(untouched.lockedDay).toBeNull();
     expect(untouched.evidenceRecoveryMethod).toBeNull();
+    // Dry-run never calls the store at all, so the pre-existing warning is
+    // left completely untouched — not filtered, not replaced, not cleared.
+    expect(untouched.warnings).toEqual(["hexmining-ended-stake-lockedday-unknown"]);
   });
 
   it("skips an already-complete row before issuing any RPC read for it", async () => {
@@ -615,6 +623,7 @@ describe("recoverEndedHexStakeHistoricalState", () => {
           isComplete: true,
           lockedDay: 1,
           stakeShares: "1",
+          warnings: [],
         }),
       },
     };

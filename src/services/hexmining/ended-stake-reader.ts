@@ -78,5 +78,13 @@ function mapObservationToDto(row: PersistedEndedHexStakeObservation): EndedHexSt
     observedAt: row.observedAt.toISOString(),
     isComplete: row.isComplete,
     warnings: row.warnings,
+    evidenceRecoveryMethod: row.evidenceRecoveryMethod,
+    evidenceRecoveryBlockNumber:
+      row.evidenceRecoveryBlockNumber == null ? null : row.evidenceRecoveryBlockNumber.toString(),
+    evidenceRecoverySourceContract: row.evidenceRecoverySourceContract,
+    evidenceRecoverySourceFunction: row.evidenceRecoverySourceFunction,
+    evidenceRecoveryReturnedStakeId: row.evidenceRecoveryReturnedStakeId,
+    evidenceRecoveredAt:
+      row.evidenceRecoveredAt == null ? null : row.evidenceRecoveredAt.toISOString(),
   };
 }

@@ -137,6 +137,7 @@ function makeMockDb(initial: StoredRow[] = []) {
           walletAddress: string;
           stakeId: string;
           endBlockNumber: bigint;
+          warnings: { equals: string[] };
         };
         data: {
           lockedDay: number;
@@ -151,6 +152,8 @@ function makeMockDb(initial: StoredRow[] = []) {
           evidenceRecoveredAt: Date;
         };
       }) {
+        const arraysEqual = (a: string[], b: string[]) =>
+          a.length === b.length && a.every((v, i) => v === b[i]);
         const matched = rows.filter(
           (r) =>
             r.id === args.where.id &&
@@ -158,7 +161,8 @@ function makeMockDb(initial: StoredRow[] = []) {
             r.chainId === args.where.chainId &&
             r.walletAddress === args.where.walletAddress &&
             r.stakeId === args.where.stakeId &&
-            r.endBlockNumber === args.where.endBlockNumber,
+            r.endBlockNumber === args.where.endBlockNumber &&
+            arraysEqual(r.warnings, args.where.warnings.equals),
         );
         for (const row of matched) {
           row.lockedDay = args.data.lockedDay;
@@ -185,6 +189,7 @@ function makeMockDb(initial: StoredRow[] = []) {
           isComplete: row.isComplete,
           lockedDay: row.lockedDay,
           stakeShares: row.stakeShares,
+          warnings: row.warnings,
         };
       },
       async findMany(args: {
@@ -664,7 +669,6 @@ function makeEnrichInput(
     endBlockNumber: row.endBlockNumber,
     lockedDay: 683,
     stakeShares: "442200077208",
-    warnings: [],
     evidenceRecoveryMethod: "historical_contract_state",
     evidenceRecoveryBlockNumber: row.endBlockNumber - 1n,
     evidenceRecoverySourceContract: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
@@ -873,5 +877,202 @@ describe("enrichEndedHexStakeObservation", () => {
     expect("endTxHash" in input).toBe(false);
     expect("discoveryMethod" in input).toBe(false);
     expect("observedAt" in input).toBe(false);
+    expect("warnings" in input).toBe(false);
+  });
+});
+
+// ─── enrichEndedHexStakeObservation — warning preservation ────────────────────
+//
+// enrichEndedHexStakeObservation no longer accepts a caller-supplied warnings
+// array. It reads the row's *current* persisted warnings itself, removes only
+// the obsolete "hexmining-ended-stake-lockedday-unknown" code, and preserves
+// every other warning verbatim and in order. The write is additionally bound
+// (via the where clause) to warnings staying exactly what was just read, so a
+// concurrent warning change fails the conditional update closed instead of
+// being silently overwritten.
+
+const OBSOLETE_WARNING = "hexmining-ended-stake-lockedday-unknown";
+
+describe("enrichEndedHexStakeObservation: warning preservation", () => {
+  it("removes the sole lockedday-unknown warning, leaving []", async () => {
+    const row = makeIncompleteRow({ warnings: [OBSOLETE_WARNING] });
+    const db = makeMockDb([row]);
+
+    const result = await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+    expect(result.outcome).toBe("updated");
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    expect(rows.find((r) => r.id === row.id)!.warnings).toEqual([]);
+  });
+
+  it("preserves unrelated warnings alongside the obsolete one", async () => {
+    const row = makeIncompleteRow({
+      warnings: ["hexmining-some-other-diagnostic", OBSOLETE_WARNING, "hexmining-another-note"],
+    });
+    const db = makeMockDb([row]);
+
+    await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    expect(rows.find((r) => r.id === row.id)!.warnings).toEqual([
+      "hexmining-some-other-diagnostic",
+      "hexmining-another-note",
+    ]);
+  });
+
+  it("preserves a row that only has unrelated warnings (no obsolete code present)", async () => {
+    const row = makeIncompleteRow({ warnings: ["hexmining-some-other-diagnostic"] });
+    const db = makeMockDb([row]);
+
+    await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    expect(rows.find((r) => r.id === row.id)!.warnings).toEqual(["hexmining-some-other-diagnostic"]);
+  });
+
+  it("removes every duplicate occurrence of the obsolete warning", async () => {
+    const row = makeIncompleteRow({
+      warnings: [OBSOLETE_WARNING, "hexmining-some-other-diagnostic", OBSOLETE_WARNING, OBSOLETE_WARNING],
+    });
+    const db = makeMockDb([row]);
+
+    await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    expect(rows.find((r) => r.id === row.id)!.warnings).toEqual(["hexmining-some-other-diagnostic"]);
+  });
+
+  it("preserves the relative order of the remaining warnings", async () => {
+    const row = makeIncompleteRow({
+      warnings: ["hexmining-a", OBSOLETE_WARNING, "hexmining-b", "hexmining-c"],
+    });
+    const db = makeMockDb([row]);
+
+    await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    expect(rows.find((r) => r.id === row.id)!.warnings).toEqual([
+      "hexmining-a",
+      "hexmining-b",
+      "hexmining-c",
+    ]);
+  });
+
+  it("does not erase warnings when the row concurrently completed before the write", async () => {
+    // The row completed (with matching evidence) between the pre-read and the
+    // conditional update — simulated here by making it already complete with
+    // matching values and the unrelated warning still attached. No write may
+    // occur, so the unrelated warning must remain exactly as persisted.
+    const row = makeIncompleteRow({
+      isComplete: true,
+      lockedDay: 683,
+      stakeShares: "442200077208",
+      warnings: ["hexmining-some-other-diagnostic"],
+    });
+    const db = makeMockDb([row]);
+
+    const result = await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+    expect(result.outcome).toBe("concurrent_matching_completion");
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    expect(rows.find((r) => r.id === row.id)!.warnings).toEqual([
+      "hexmining-some-other-diagnostic",
+    ]);
+  });
+
+  it("fails closed instead of overwriting when warnings change concurrently between read and write", async () => {
+    // Custom persistence client (not the shared array-backed mock) that
+    // simulates a genuine race: the pre-read (findUnique call #1) returns the
+    // warnings as they existed at read time, but a concurrent process appends
+    // a new diagnostic before the conditional write lands, so updateMany's
+    // where-clause (bound to the pre-read warnings) never matches — the DB
+    // itself is the source of truth for whether the compare-and-swap
+    // succeeds, not anything this function assumes. On the re-read
+    // (findUnique call #2) the row is still incomplete with the new warning
+    // now present, so the outcome is state_changed and nothing is ever
+    // overwritten.
+    const row = makeIncompleteRow({ warnings: ["hexmining-a"] });
+    const trueWarningsAfterRace = ["hexmining-a", "hexmining-concurrently-appended"];
+    let findUniqueCalls = 0;
+
+    const client = {
+      rawEndedHexStakeObservation: {
+        findUnique: async () => {
+          findUniqueCalls += 1;
+          return {
+            chainId: row.chainId,
+            walletAddress: row.walletAddress,
+            stakeId: row.stakeId,
+            endBlockNumber: row.endBlockNumber,
+            isComplete: false,
+            lockedDay: null,
+            stakeShares: null,
+            warnings: findUniqueCalls === 1 ? row.warnings : trueWarningsAfterRace,
+          };
+        },
+        updateMany: async (args: { where: { warnings: { equals: string[] } } }) => {
+          const eq =
+            args.where.warnings.equals.length === trueWarningsAfterRace.length &&
+            args.where.warnings.equals.every((w, i) => w === trueWarningsAfterRace[i]);
+          return { count: eq ? 1 : 0 };
+        },
+      },
+      // No `create` — proves this path never even attempts to construct one.
+    };
+
+    const result = await enrichEndedHexStakeObservation(
+      makeEnrichInput(row),
+      client as unknown as Parameters<typeof enrichEndedHexStakeObservation>[1],
+    );
+
+    expect(result.outcome).toBe("state_changed");
+    expect(findUniqueCalls).toBe(2);
+  });
+
+  it("idempotent rerun after a successful update preserves the remaining warnings (no re-add, no loss)", async () => {
+    const row = makeIncompleteRow({
+      warnings: [OBSOLETE_WARNING, "hexmining-some-other-diagnostic"],
+    });
+    const db = makeMockDb([row]);
+
+    const first = await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+    expect(first.outcome).toBe("updated");
+
+    const afterFirst = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    expect(afterFirst.find((r) => r.id === row.id)!.warnings).toEqual([
+      "hexmining-some-other-diagnostic",
+    ]);
+
+    const second = await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+    expect(second.outcome).toBe("concurrent_matching_completion");
+
+    const afterSecond = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    expect(afterSecond.find((r) => r.id === row.id)!.warnings).toEqual([
+      "hexmining-some-other-diagnostic",
+    ]);
   });
 });

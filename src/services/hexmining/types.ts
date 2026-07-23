@@ -245,6 +245,18 @@ export type EndedHexStakeDto = {
   observedAt: string;          // ISO 8601
   isComplete: boolean;
   warnings: string[];
+  // Historical-state evidence-recovery provenance — populated only when
+  // lockedDay/stakeShares were recovered from a pinned historical contract
+  // state read (stakeLists at endBlockNumber-1) rather than from a matched
+  // RawStakeAction START record. discoveryMethod above is never repurposed to
+  // describe this — it always keeps describing how the END event itself was
+  // discovered. All null when no historical-state recovery has occurred.
+  evidenceRecoveryMethod: string | null;
+  evidenceRecoveryBlockNumber: string | null;  // bigint serialized as decimal string
+  evidenceRecoverySourceContract: string | null;
+  evidenceRecoverySourceFunction: string | null;
+  evidenceRecoveryReturnedStakeId: string | null;
+  evidenceRecoveredAt: string | null;  // ISO 8601
 };
 
 export type EndedHexStakeListDto = {
