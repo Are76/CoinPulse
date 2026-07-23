@@ -549,4 +549,176 @@ describe("discoverEndedHexStakes", () => {
     expect(obs.isComplete).toBe(true);
     expect(obs.observedAt).toBeInstanceOf(Date);
   });
+
+  // ── Stale-row reconciliation invariant (PR #335 P2) ─────────────────────────
+  //
+  // A stateful store that mirrors the real dedupe + upgrade semantics, so we can
+  // assert that the canonical persisted row and the returned warnings agree.
+
+  type StoreRow = {
+    id: string;
+    chainId: number;
+    walletAddress: string;
+    stakeId: string;
+    endBlockNumber: bigint;
+    discoveryMethod: string;
+    lockedDay: number | null;
+    stakeShares: string | null;
+    isComplete: boolean;
+    warnings: string[];
+  };
+
+  function makeStatefulStore(initial: StoreRow[] = []) {
+    const rows: StoreRow[] = [...initial];
+    let seq = 0;
+    const client = {
+      rawEndedHexStakeObservation: {
+        async findFirst(args: {
+          where: {
+            chainId: number;
+            walletAddress: string;
+            stakeId: string;
+            endBlockNumber: bigint;
+            discoveryMethod: string;
+          };
+        }) {
+          const m = rows.find(
+            (r) =>
+              r.chainId === args.where.chainId &&
+              r.walletAddress === args.where.walletAddress &&
+              r.stakeId === args.where.stakeId &&
+              r.endBlockNumber === args.where.endBlockNumber &&
+              r.discoveryMethod === args.where.discoveryMethod,
+          );
+          return m ? { id: m.id, isComplete: m.isComplete } : null;
+        },
+        async update(args: {
+          where: { id: string };
+          data: { lockedDay: number | null; stakeShares: string | null; isComplete: boolean; warnings: string[] };
+        }) {
+          const r = rows.find((row) => row.id === args.where.id)!;
+          r.lockedDay = args.data.lockedDay;
+          r.stakeShares = args.data.stakeShares;
+          r.isComplete = args.data.isComplete;
+          r.warnings = args.data.warnings;
+          return { id: r.id };
+        },
+        async create(args: { data: Omit<StoreRow, "id"> }) {
+          const r: StoreRow = { id: `row-${++seq}`, ...args.data };
+          rows.push(r);
+          return { id: r.id };
+        },
+      },
+    };
+    return { client, rows };
+  }
+
+  it("upgrades a pre-existing incomplete row to complete and reports no incomplete warning", async () => {
+    const seeded: StoreRow = {
+      id: "legacy-1",
+      chainId: 369,
+      walletAddress: "0xwallet",
+      stakeId: "900",
+      endBlockNumber: 21000000n,
+      discoveryMethod: "raw_stake_action",
+      lockedDay: null,
+      stakeShares: null,
+      isComplete: false,
+      warnings: ["hexmining-ended-stake-lockedday-unknown"],
+    };
+    const { client, rows } = makeStatefulStore([seeded]);
+
+    const endAction = makeAction({ stakeId: 900n, blockNumber: 21000000n });
+    const start = makeAction({
+      actionKind: "START",
+      stakeId: 900n,
+      lockedDay: 2310,
+      stakeShares: "1414291579679",
+    });
+    const rawClient = makeRawClient([endAction], new Map([[900n, start]]));
+
+    const result = await discoverEndedHexStakes(BASE_ARGS, {
+      rawClient,
+      observationClient: client as never,
+    });
+
+    // Operator result: the upgrade counts as persisted, and NO incomplete
+    // warning is surfaced for this stake.
+    expect(result.persisted).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(
+      result.warnings.some((w) => w.includes("hexmining-ended-stake-lockedday-unknown")),
+    ).toBe(false);
+
+    // Canonical row and the returned warnings agree: the row is now complete.
+    const row = rows.find((r) => r.stakeId === "900")!;
+    expect(row.id).toBe("legacy-1"); // same row, dedupe identity unchanged
+    expect(row.isComplete).toBe(true);
+    expect(row.lockedDay).toBe(2310);
+    expect(row.stakeShares).toBe("1414291579679");
+    expect(row.warnings).toEqual([]);
+  });
+
+  it("keeps emitting the incomplete warning when the canonical row stays incomplete", async () => {
+    const seeded: StoreRow = {
+      id: "legacy-2",
+      chainId: 369,
+      walletAddress: "0xwallet",
+      stakeId: "901",
+      endBlockNumber: 21000000n,
+      discoveryMethod: "raw_stake_action",
+      lockedDay: null,
+      stakeShares: null,
+      isComplete: false,
+      warnings: ["hexmining-ended-stake-lockedday-unknown"],
+    };
+    const { client, rows } = makeStatefulStore([seeded]);
+
+    // START evidence still missing (no snapshot) → observation stays incomplete.
+    const endAction = makeAction({ stakeId: 901n, blockNumber: 21000000n });
+    const rawClient = makeRawClient([endAction], new Map([[901n, null]]));
+
+    const result = await discoverEndedHexStakes(BASE_ARGS, {
+      rawClient,
+      observationClient: client as never,
+    });
+
+    // Canonical row remains incomplete, and the warning is still surfaced.
+    expect(result.skipped).toBe(1);
+    expect(result.persisted).toBe(0);
+    expect(
+      result.warnings.some((w) => w.includes("hexmining-ended-stake-lockedday-unknown")),
+    ).toBe(true);
+
+    const row = rows.find((r) => r.stakeId === "901")!;
+    expect(row.isComplete).toBe(false);
+    expect(row.lockedDay).toBeNull();
+    expect(row.stakeShares).toBeNull();
+  });
+
+  it("upgrade is idempotent: a second run after completion is a no-op skip", async () => {
+    const { client, rows } = makeStatefulStore();
+
+    const endAction = makeAction({ stakeId: 902n, blockNumber: 21000000n });
+    const start = makeAction({
+      actionKind: "START",
+      stakeId: 902n,
+      lockedDay: 40,
+      stakeShares: "4722366482869645213695", // uint72 max
+    });
+    const rawClient = makeRawClient([endAction], new Map([[902n, start]]));
+
+    const first = await discoverEndedHexStakes(BASE_ARGS, { rawClient, observationClient: client as never });
+    const second = await discoverEndedHexStakes(BASE_ARGS, { rawClient, observationClient: client as never });
+
+    expect(first.persisted).toBe(1); // created complete
+    expect(second.persisted).toBe(0);
+    expect(second.skipped).toBe(1); // already complete → untouched
+    expect(rows).toHaveLength(1); // no duplicate row
+
+    const row = rows.find((r) => r.stakeId === "902")!;
+    expect(row.isComplete).toBe(true);
+    expect(row.stakeShares).toBe("4722366482869645213695"); // exact, no exponent
+    expect(row.stakeShares).toMatch(/^\d+$/);
+  });
 });

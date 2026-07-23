@@ -152,7 +152,13 @@ export async function discoverEndedHexStakes(
       observationClient,
     );
 
-    if (result.created) {
+    // A created row and an in-place upgrade both mutate the canonical store, so
+    // both count as persisted. Only a genuine no-op (row already present and
+    // unchanged) counts as skipped. When complete START evidence is present the
+    // persisted row is now guaranteed complete (created complete, upgraded, or
+    // already complete), so suppressing the incomplete warning above never
+    // disagrees with the canonical row.
+    if (result.created || result.updated) {
       persisted++;
     } else {
       skipped++;

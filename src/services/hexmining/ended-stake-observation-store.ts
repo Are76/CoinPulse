@@ -99,8 +99,17 @@ type StoreClient = {
         endBlockNumber: bigint;
         discoveryMethod: string;
       };
-      select: { id: true };
-    }): Promise<{ id: string } | null>;
+      select: { id: true; isComplete: true };
+    }): Promise<{ id: string; isComplete: boolean } | null>;
+    update(args: {
+      where: { id: string };
+      data: {
+        lockedDay: number | null;
+        stakeShares: string | null;
+        isComplete: boolean;
+        warnings: string[];
+      };
+    }): Promise<{ id: string }>;
     create(args: {
       data: {
         chainId: number;
@@ -155,13 +164,24 @@ type StoreClient = {
 
 // ─── Persistence ──────────────────────────────────────────────────────────────
 //
-// Returns the id of the created or pre-existing row.
-// Skips write if a row with the same dedup key already exists.
+// Returns the id of the created, upgraded, or pre-existing row, plus flags
+// describing which happened.
+//
+// - created:  no row existed for the dedupe key; a new row was written.
+// - updated:  a row existed but was previously incomplete, and the incoming
+//             observation is complete; the row is upgraded in place using the
+//             exact evidence on the input (lockedDay, stakeShares, isComplete,
+//             warnings). This reconciles stale rows written before START-time
+//             evidence was available, so the canonical row never lags behind
+//             the completeness the operator result reports.
+// - neither:  a row existed and is left unchanged (already complete, or the
+//             incoming observation is not complete). A complete row is never
+//             downgraded or rewritten; the dedupe identity is never changed.
 
 export async function persistEndedHexStakeObservation(
   input: PersistEndedHexStakeObservationInput,
   client: StoreClient = getDb(),
-): Promise<{ id: string; created: boolean }> {
+): Promise<{ id: string; created: boolean; updated: boolean }> {
   const walletAddress = input.walletAddress.toLowerCase();
 
   const existing = await client.rawEndedHexStakeObservation.findFirst({
@@ -172,11 +192,25 @@ export async function persistEndedHexStakeObservation(
       endBlockNumber: input.endBlockNumber,
       discoveryMethod: input.discoveryMethod,
     },
-    select: { id: true },
+    select: { id: true, isComplete: true },
   });
 
   if (existing) {
-    return { id: existing.id, created: false };
+    if (existing.isComplete === false && input.isComplete === true) {
+      const upgraded = await client.rawEndedHexStakeObservation.update({
+        where: { id: existing.id },
+        data: {
+          lockedDay: input.lockedDay,
+          stakeShares: input.stakeShares,
+          isComplete: input.isComplete,
+          warnings: input.warnings,
+        },
+      });
+
+      return { id: upgraded.id, created: false, updated: true };
+    }
+
+    return { id: existing.id, created: false, updated: false };
   }
 
   const created = await client.rawEndedHexStakeObservation.create({
@@ -202,7 +236,7 @@ export async function persistEndedHexStakeObservation(
     },
   });
 
-  return { id: created.id, created: true };
+  return { id: created.id, created: true, updated: false };
 }
 
 // ─── Read ──────────────────────────────────────────────────────────────────────
