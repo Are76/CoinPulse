@@ -19,8 +19,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildEndedStakeDedupeKey,
+  enrichEndedHexStakeObservation,
   persistEndedHexStakeObservation,
   readEndedHexStakeObservations,
+  type EnrichEndedHexStakeObservationInput,
   type PersistEndedHexStakeObservationInput,
   type PersistedEndedHexStakeObservation,
 } from "@/services/hexmining/ended-stake-observation-store";
@@ -48,6 +50,12 @@ type StoredRow = {
   isComplete: boolean;
   warnings: string[];
   createdAt: Date;
+  evidenceRecoveryMethod: string | null;
+  evidenceRecoveryBlockNumber: bigint | null;
+  evidenceRecoverySourceContract: string | null;
+  evidenceRecoverySourceFunction: string | null;
+  evidenceRecoveryReturnedStakeId: string | null;
+  evidenceRecoveredAt: Date | null;
 };
 
 let idCounter = 0;
@@ -94,14 +102,90 @@ function makeMockDb(initial: StoredRow[] = []) {
         row.warnings = args.data.warnings;
         return { id: row.id };
       },
-      async create(args: { data: Omit<StoredRow, "id" | "createdAt"> }) {
+      async create(args: {
+        data: Omit<
+          StoredRow,
+          | "id"
+          | "createdAt"
+          | "evidenceRecoveryMethod"
+          | "evidenceRecoveryBlockNumber"
+          | "evidenceRecoverySourceContract"
+          | "evidenceRecoverySourceFunction"
+          | "evidenceRecoveryReturnedStakeId"
+          | "evidenceRecoveredAt"
+        >;
+      }) {
         const row: StoredRow = {
           id: `mock-id-${++idCounter}`,
           createdAt: new Date("2026-06-29T00:00:00Z"),
+          evidenceRecoveryMethod: null,
+          evidenceRecoveryBlockNumber: null,
+          evidenceRecoverySourceContract: null,
+          evidenceRecoverySourceFunction: null,
+          evidenceRecoveryReturnedStakeId: null,
+          evidenceRecoveredAt: null,
           ...args.data,
         };
         rows.push(row);
         return { id: row.id };
+      },
+      async updateMany(args: {
+        where: {
+          id: string;
+          isComplete: false;
+          chainId: number;
+          walletAddress: string;
+          stakeId: string;
+          endBlockNumber: bigint;
+        };
+        data: {
+          lockedDay: number;
+          stakeShares: string;
+          isComplete: true;
+          warnings: string[];
+          evidenceRecoveryMethod: string;
+          evidenceRecoveryBlockNumber: bigint;
+          evidenceRecoverySourceContract: string;
+          evidenceRecoverySourceFunction: string;
+          evidenceRecoveryReturnedStakeId: string;
+          evidenceRecoveredAt: Date;
+        };
+      }) {
+        const matched = rows.filter(
+          (r) =>
+            r.id === args.where.id &&
+            r.isComplete === false &&
+            r.chainId === args.where.chainId &&
+            r.walletAddress === args.where.walletAddress &&
+            r.stakeId === args.where.stakeId &&
+            r.endBlockNumber === args.where.endBlockNumber,
+        );
+        for (const row of matched) {
+          row.lockedDay = args.data.lockedDay;
+          row.stakeShares = args.data.stakeShares;
+          row.isComplete = args.data.isComplete;
+          row.warnings = args.data.warnings;
+          row.evidenceRecoveryMethod = args.data.evidenceRecoveryMethod;
+          row.evidenceRecoveryBlockNumber = args.data.evidenceRecoveryBlockNumber;
+          row.evidenceRecoverySourceContract = args.data.evidenceRecoverySourceContract;
+          row.evidenceRecoverySourceFunction = args.data.evidenceRecoverySourceFunction;
+          row.evidenceRecoveryReturnedStakeId = args.data.evidenceRecoveryReturnedStakeId;
+          row.evidenceRecoveredAt = args.data.evidenceRecoveredAt;
+        }
+        return { count: matched.length };
+      },
+      async findUnique(args: { where: { id: string } }) {
+        const row = rows.find((r) => r.id === args.where.id);
+        if (!row) return null;
+        return {
+          chainId: row.chainId,
+          walletAddress: row.walletAddress,
+          stakeId: row.stakeId,
+          endBlockNumber: row.endBlockNumber,
+          isComplete: row.isComplete,
+          lockedDay: row.lockedDay,
+          stakeShares: row.stakeShares,
+        };
       },
       async findMany(args: {
         where: { chainId: number; walletAddress: string };
@@ -510,5 +594,284 @@ describe("buildEndedStakeDedupeKey", () => {
       discoveryMethod: "rpc_history",
     });
     expect(key1).not.toBe(key2);
+  });
+});
+
+// ─── enrichEndedHexStakeObservation ────────────────────────────────────────────
+//
+// Historical-state evidence-recovery enrichment: an UPDATE-only, create-free
+// path that upgrades an existing incomplete row in place, bound to its full
+// canonical identity (id + chainId + walletAddress + stakeId + endBlockNumber)
+// via a single atomic conditional updateMany. Verifies:
+//
+//   1. Happy path: incomplete row is upgraded in place.
+//   2. Atomic update requires isComplete: false (a complete row is never hit).
+//   3. Wrong id cannot mutate any row.
+//   4. Right id + wrong stakeId cannot mutate that row.
+//   5. Right id + wrong endBlockNumber cannot mutate that row.
+//   6. Row became complete with matching values before the write →
+//      concurrent_matching_completion, no mutation.
+//   7. Row became complete with conflicting values before the write →
+//      concurrent_conflict, no mutation.
+//   8. Row vanished before the write → observation_missing.
+//   9. Row's identity changed (still incomplete) before the write →
+//      state_changed, no mutation.
+//  10. discoveryMethod, observedAt, endTxHash, and all untouched fields are
+//      byte-for-byte preserved.
+//  11. No create/insert path exists on this function at all.
+
+function makeIncompleteRow(overrides: Partial<StoredRow> = {}): StoredRow {
+  return {
+    id: `mock-id-${++idCounter}`,
+    chainId: 369,
+    walletAddress: "0x75f808367720951e789d47e9e9db51148d9aa765",
+    stakeId: "507128",
+    stakeIndex: 0,
+    stakedDays: null,
+    lockedDay: null,
+    stakeShares: null,
+    principalHex: null,
+    yieldHex: null,
+    penaltyHex: null,
+    endTxHash: "0xbfb33e49d93a16ca2c8e297867011d7eccbcbc1b859aaee49ea3a0451da8490",
+    endBlockNumber: 15767882n,
+    startTxHash: null,
+    startBlockNumber: null,
+    discoveryMethod: "raw_stake_action",
+    observedAt: new Date("2026-07-04T00:00:00Z"),
+    isComplete: false,
+    warnings: ["hexmining-ended-stake-lockedday-unknown"],
+    createdAt: new Date("2026-07-04T00:00:00Z"),
+    evidenceRecoveryMethod: null,
+    evidenceRecoveryBlockNumber: null,
+    evidenceRecoverySourceContract: null,
+    evidenceRecoverySourceFunction: null,
+    evidenceRecoveryReturnedStakeId: null,
+    evidenceRecoveredAt: null,
+    ...overrides,
+  };
+}
+
+function makeEnrichInput(
+  row: StoredRow,
+  overrides: Partial<EnrichEndedHexStakeObservationInput> = {},
+): EnrichEndedHexStakeObservationInput {
+  return {
+    id: row.id,
+    chainId: row.chainId,
+    walletAddress: row.walletAddress,
+    stakeId: row.stakeId,
+    endBlockNumber: row.endBlockNumber,
+    lockedDay: 683,
+    stakeShares: "442200077208",
+    warnings: [],
+    evidenceRecoveryMethod: "historical_contract_state",
+    evidenceRecoveryBlockNumber: row.endBlockNumber - 1n,
+    evidenceRecoverySourceContract: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+    evidenceRecoverySourceFunction: "stakeLists",
+    evidenceRecoveryReturnedStakeId: row.stakeId,
+    evidenceRecoveredAt: new Date("2026-07-23T00:00:00Z"),
+    ...overrides,
+  };
+}
+
+describe("enrichEndedHexStakeObservation", () => {
+  it("upgrades an incomplete row in place and returns outcome: updated", async () => {
+    const row = makeIncompleteRow();
+    const db = makeMockDb([row]);
+
+    const result = await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+    expect(result.outcome).toBe("updated");
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    const updated = rows.find((r) => r.id === row.id)!;
+    expect(updated.isComplete).toBe(true);
+    expect(updated.lockedDay).toBe(683);
+    expect(updated.stakeShares).toBe("442200077208");
+    expect(updated.warnings).toEqual([]);
+    expect(updated.evidenceRecoveryMethod).toBe("historical_contract_state");
+    expect(updated.evidenceRecoveryBlockNumber).toBe(row.endBlockNumber - 1n);
+    expect(updated.evidenceRecoverySourceContract).toBe(
+      "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+    );
+    expect(updated.evidenceRecoverySourceFunction).toBe("stakeLists");
+    expect(updated.evidenceRecoveryReturnedStakeId).toBe(row.stakeId);
+    expect(updated.evidenceRecoveredAt).toEqual(new Date("2026-07-23T00:00:00Z"));
+  });
+
+  it("preserves discoveryMethod, observedAt, endTxHash, and all untouched fields byte-for-byte", async () => {
+    const row = makeIncompleteRow({
+      startTxHash: null,
+      startBlockNumber: null,
+      principalHex: "700000000000",
+    });
+    const db = makeMockDb([row]);
+
+    await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    const updated = rows.find((r) => r.id === row.id)!;
+    expect(updated.discoveryMethod).toBe("raw_stake_action");
+    expect(updated.observedAt).toEqual(row.observedAt);
+    expect(updated.endTxHash).toBe(row.endTxHash);
+    expect(updated.endBlockNumber).toBe(row.endBlockNumber);
+    expect(updated.startTxHash).toBeNull();
+    expect(updated.startBlockNumber).toBeNull();
+    expect(updated.principalHex).toBe("700000000000");
+    expect(updated.chainId).toBe(row.chainId);
+    expect(updated.walletAddress).toBe(row.walletAddress);
+    expect(updated.stakeId).toBe(row.stakeId);
+  });
+
+  it("never mutates an already-complete row (atomic update requires isComplete: false)", async () => {
+    const row = makeIncompleteRow({
+      isComplete: true,
+      lockedDay: 683,
+      stakeShares: "442200077208",
+      warnings: [],
+    });
+    const db = makeMockDb([row]);
+
+    const result = await enrichEndedHexStakeObservation(
+      makeEnrichInput(row, { lockedDay: 999, stakeShares: "1" }),
+      db,
+    );
+
+    // Values match exactly what's already stored → concurrent_matching_completion
+    // is NOT the classification here because the input itself intentionally
+    // supplies different (999/"1") values to prove the row is never touched;
+    // re-read must show conflicting values against a complete row.
+    expect(result.outcome).toBe("concurrent_conflict");
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    const unchanged = rows.find((r) => r.id === row.id)!;
+    expect(unchanged.lockedDay).toBe(683);
+    expect(unchanged.stakeShares).toBe("442200077208");
+  });
+
+  it("returns concurrent_matching_completion when the row is already complete with identical evidence", async () => {
+    const row = makeIncompleteRow({
+      isComplete: true,
+      lockedDay: 683,
+      stakeShares: "442200077208",
+      warnings: [],
+    });
+    const db = makeMockDb([row]);
+
+    const result = await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+    expect(result.outcome).toBe("concurrent_matching_completion");
+  });
+
+  it("wrong id cannot mutate any row", async () => {
+    const row = makeIncompleteRow();
+    const db = makeMockDb([row]);
+
+    const result = await enrichEndedHexStakeObservation(
+      makeEnrichInput(row, { id: "does-not-exist" }),
+      db,
+    );
+    expect(result.outcome).toBe("observation_missing");
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    expect(rows.find((r) => r.id === row.id)!.isComplete).toBe(false);
+  });
+
+  it("right id with wrong stakeId cannot mutate that row (fails closed, no cross-stake write)", async () => {
+    const target = makeIncompleteRow({ stakeId: "507128" });
+    const other = makeIncompleteRow({ stakeId: "655741" });
+    const db = makeMockDb([target, other]);
+
+    // Caller bug: id points at `target`, but the evidence payload claims a
+    // different stakeId — must never silently write target's row with
+    // mismatched-stake evidence.
+    const result = await enrichEndedHexStakeObservation(
+      makeEnrichInput(target, { stakeId: "655741" }),
+      db,
+    );
+    expect(result.outcome).toBe("state_changed");
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: target.walletAddress },
+      db,
+    );
+    expect(rows.find((r) => r.id === target.id)!.isComplete).toBe(false);
+    expect(rows.find((r) => r.id === other.id)!.isComplete).toBe(false);
+  });
+
+  it("right id with wrong endBlockNumber cannot mutate that row", async () => {
+    const row = makeIncompleteRow({ endBlockNumber: 15767882n });
+    const db = makeMockDb([row]);
+
+    const result = await enrichEndedHexStakeObservation(
+      makeEnrichInput(row, { endBlockNumber: 99999999n }),
+      db,
+    );
+    expect(result.outcome).toBe("state_changed");
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    expect(rows.find((r) => r.id === row.id)!.isComplete).toBe(false);
+  });
+
+  it("unrelated observation for a different wallet is never touched", async () => {
+    const target = makeIncompleteRow();
+    const unrelated = makeIncompleteRow({
+      walletAddress: "0x0000000000000000000000000000000000dead",
+      stakeId: "1",
+    });
+    const db = makeMockDb([target, unrelated]);
+
+    await enrichEndedHexStakeObservation(makeEnrichInput(target), db);
+
+    const unrelatedRows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: unrelated.walletAddress },
+      db,
+    );
+    expect(unrelatedRows[0]!.isComplete).toBe(false);
+    expect(unrelatedRows[0]!.evidenceRecoveryMethod).toBeNull();
+  });
+
+  it("rerun after a successful update is idempotent (no duplicate row, no re-write)", async () => {
+    const row = makeIncompleteRow();
+    const db = makeMockDb([row]);
+
+    const first = await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+    expect(first.outcome).toBe("updated");
+
+    const second = await enrichEndedHexStakeObservation(makeEnrichInput(row), db);
+    expect(second.outcome).toBe("concurrent_matching_completion");
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: row.walletAddress },
+      db,
+    );
+    expect(rows.filter((r) => r.stakeId === row.stakeId)).toHaveLength(1);
+  });
+
+  it("has no create/insert path — enrichment can only ever update an existing row", () => {
+    // Structural proof: enrichEndedHexStakeObservation's exported type never
+    // accepts data sufficient to create a row (no endTxHash/discoveryMethod/
+    // observedAt in its input), and its client contract type only exposes
+    // updateMany + findUnique, never create. This test documents that contract;
+    // a TypeScript compile failure here would indicate the create-free
+    // guarantee was broken.
+    const input: EnrichEndedHexStakeObservationInput = makeEnrichInput(makeIncompleteRow());
+    expect("endTxHash" in input).toBe(false);
+    expect("discoveryMethod" in input).toBe(false);
+    expect("observedAt" in input).toBe(false);
   });
 });

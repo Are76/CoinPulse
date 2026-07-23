@@ -63,6 +63,12 @@ export type PersistedEndedHexStakeObservation = {
   isComplete: boolean;
   warnings: string[];
   createdAt: Date;
+  evidenceRecoveryMethod: string | null;
+  evidenceRecoveryBlockNumber: bigint | null;
+  evidenceRecoverySourceContract: string | null;
+  evidenceRecoverySourceFunction: string | null;
+  evidenceRecoveryReturnedStakeId: string | null;
+  evidenceRecoveredAt: Date | null;
 };
 
 // ─── Dedup key ────────────────────────────────────────────────────────────────
@@ -157,6 +163,12 @@ type StoreClient = {
         isComplete: boolean;
         warnings: string[];
         createdAt: Date;
+        evidenceRecoveryMethod: string | null;
+        evidenceRecoveryBlockNumber: bigint | null;
+        evidenceRecoverySourceContract: string | null;
+        evidenceRecoverySourceFunction: string | null;
+        evidenceRecoveryReturnedStakeId: string | null;
+        evidenceRecoveredAt: Date | null;
       }[]
     >;
   };
@@ -283,5 +295,187 @@ export async function readEndedHexStakeObservations(
     isComplete: r.isComplete,
     warnings: r.warnings,
     createdAt: r.createdAt,
+    evidenceRecoveryMethod: r.evidenceRecoveryMethod,
+    evidenceRecoveryBlockNumber:
+      r.evidenceRecoveryBlockNumber == null ? null : (r.evidenceRecoveryBlockNumber as bigint),
+    evidenceRecoverySourceContract: r.evidenceRecoverySourceContract,
+    evidenceRecoverySourceFunction: r.evidenceRecoverySourceFunction,
+    evidenceRecoveryReturnedStakeId: r.evidenceRecoveryReturnedStakeId,
+    evidenceRecoveredAt: r.evidenceRecoveredAt,
   }));
+}
+
+// ─── Historical-state evidence-recovery enrichment ───────────────────────────
+//
+// Upgrades an existing incomplete observation with lockedDay/stakeShares
+// recovered from a pinned historical contract-state read (stakeLists at
+// endBlockNumber-1), instead of from a matched RawStakeAction START record.
+//
+// This is a strictly additive UPDATE-only path:
+//   - There is no create/INSERT here. It can only ever complete a row that
+//     already exists — it never persists a new canonical observation.
+//   - The write is a single atomic conditional UPDATE, bound to the row's full
+//     canonical identity (id + chainId + walletAddress + stakeId +
+//     endBlockNumber) AND isComplete: false. A caller bug that passes the wrong
+//     id, or the right id with a mismatched stakeId/endBlockNumber, can never
+//     mutate the wrong row: the WHERE clause simply matches zero rows and the
+//     write is a no-op, not a mismatched write.
+//   - discoveryMethod and observedAt (original END-discovery provenance) are
+//     never touched here — only lockedDay, stakeShares, isComplete, warnings,
+//     and the evidenceRecovery* columns are written.
+
+export type EnrichEndedHexStakeObservationInput = {
+  id: string;
+  chainId: number;
+  walletAddress: string;
+  stakeId: string;
+  endBlockNumber: bigint;
+  lockedDay: number;
+  stakeShares: string;
+  warnings: string[];
+  evidenceRecoveryMethod: string;
+  evidenceRecoveryBlockNumber: bigint;
+  evidenceRecoverySourceContract: string;
+  evidenceRecoverySourceFunction: string;
+  evidenceRecoveryReturnedStakeId: string;
+  evidenceRecoveredAt: Date;
+};
+
+export type EnrichEndedHexStakeObservationOutcome =
+  | "updated"
+  | "concurrent_matching_completion"
+  | "concurrent_conflict"
+  | "state_changed"
+  | "observation_missing";
+
+type EnrichStoreClient = {
+  rawEndedHexStakeObservation: {
+    updateMany(args: {
+      where: {
+        id: string;
+        isComplete: false;
+        chainId: number;
+        walletAddress: string;
+        stakeId: string;
+        endBlockNumber: bigint;
+      };
+      data: {
+        lockedDay: number;
+        stakeShares: string;
+        isComplete: true;
+        warnings: string[];
+        evidenceRecoveryMethod: string;
+        evidenceRecoveryBlockNumber: bigint;
+        evidenceRecoverySourceContract: string;
+        evidenceRecoverySourceFunction: string;
+        evidenceRecoveryReturnedStakeId: string;
+        evidenceRecoveredAt: Date;
+      };
+    }): Promise<{ count: number }>;
+    findUnique(args: {
+      where: { id: string };
+      select: {
+        chainId: true;
+        walletAddress: true;
+        stakeId: true;
+        endBlockNumber: true;
+        isComplete: true;
+        lockedDay: true;
+        stakeShares: true;
+      };
+    }): Promise<
+      | {
+          chainId: number;
+          walletAddress: string;
+          stakeId: string;
+          endBlockNumber: bigint;
+          isComplete: boolean;
+          lockedDay: number | null;
+          stakeShares: string | null;
+        }
+      | null
+    >;
+  };
+};
+
+export async function enrichEndedHexStakeObservation(
+  input: EnrichEndedHexStakeObservationInput,
+  client: EnrichStoreClient = getDb() as unknown as EnrichStoreClient,
+): Promise<{ outcome: EnrichEndedHexStakeObservationOutcome }> {
+  const walletAddress = input.walletAddress.toLowerCase();
+
+  const result = await client.rawEndedHexStakeObservation.updateMany({
+    where: {
+      id: input.id,
+      isComplete: false,
+      chainId: input.chainId,
+      walletAddress,
+      stakeId: input.stakeId,
+      endBlockNumber: input.endBlockNumber,
+    },
+    data: {
+      lockedDay: input.lockedDay,
+      stakeShares: input.stakeShares,
+      isComplete: true,
+      warnings: input.warnings,
+      evidenceRecoveryMethod: input.evidenceRecoveryMethod,
+      evidenceRecoveryBlockNumber: input.evidenceRecoveryBlockNumber,
+      evidenceRecoverySourceContract: input.evidenceRecoverySourceContract,
+      evidenceRecoverySourceFunction: input.evidenceRecoverySourceFunction,
+      evidenceRecoveryReturnedStakeId: input.evidenceRecoveryReturnedStakeId,
+      evidenceRecoveredAt: input.evidenceRecoveredAt,
+    },
+  });
+
+  if (result.count === 1) {
+    return { outcome: "updated" };
+  }
+
+  if (result.count > 1) {
+    // id is the primary key, so more than one matched row is structurally
+    // impossible. Fail loudly rather than silently accept an invariant break.
+    throw new Error(
+      `enrichEndedHexStakeObservation: updateMany matched ${result.count} rows for id ${input.id} — invariant violation`,
+    );
+  }
+
+  // count === 0: the conditional update matched nothing. Re-read and classify
+  // why, rather than assuming failure. Never write in any of these branches.
+  const current = await client.rawEndedHexStakeObservation.findUnique({
+    where: { id: input.id },
+    select: {
+      chainId: true,
+      walletAddress: true,
+      stakeId: true,
+      endBlockNumber: true,
+      isComplete: true,
+      lockedDay: true,
+      stakeShares: true,
+    },
+  });
+
+  if (current == null) {
+    return { outcome: "observation_missing" };
+  }
+
+  const identityMatches =
+    current.chainId === input.chainId &&
+    current.walletAddress === walletAddress &&
+    current.stakeId === input.stakeId &&
+    current.endBlockNumber === input.endBlockNumber;
+
+  if (!identityMatches) {
+    return { outcome: "state_changed" };
+  }
+
+  if (current.isComplete) {
+    const matches =
+      current.lockedDay === input.lockedDay && current.stakeShares === input.stakeShares;
+    return { outcome: matches ? "concurrent_matching_completion" : "concurrent_conflict" };
+  }
+
+  // Identity matches, still incomplete, yet the conditional update matched
+  // zero rows — some other field changed concurrently in a way this function
+  // does not model. Fail closed rather than guess.
+  return { outcome: "state_changed" };
 }

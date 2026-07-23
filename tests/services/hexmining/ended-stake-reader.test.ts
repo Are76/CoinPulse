@@ -65,6 +65,12 @@ const COMPLETE_ROW: PersistedEndedHexStakeObservation = {
   isComplete: true,
   warnings: [],
   createdAt: new Date("2026-06-29T00:00:00Z"),
+  evidenceRecoveryMethod: null,
+  evidenceRecoveryBlockNumber: null,
+  evidenceRecoverySourceContract: null,
+  evidenceRecoverySourceFunction: null,
+  evidenceRecoveryReturnedStakeId: null,
+  evidenceRecoveredAt: null,
 };
 
 const INCOMPLETE_ROW: PersistedEndedHexStakeObservation = {

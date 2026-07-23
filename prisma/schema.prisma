@@ -726,6 +726,21 @@ model RawEndedHexStakeObservation {
   createdAt        DateTime     @default(now())
   chain            Chain        @relation(fields: [chainId], references: [id], onDelete: Restrict)
 
+  // ─── Historical-state evidence-recovery provenance (additive, all nullable) ──
+  //
+  // Populated only when lockedDay/stakeShares are recovered from a pinned
+  // historical contract-state read (stakeLists at endBlockNumber-1), NOT from a
+  // matched RawStakeAction START transaction. discoveryMethod above is never
+  // repurposed to describe this — it always keeps describing how the END event
+  // itself was discovered. These fields describe the separate, later act of
+  // recovering the missing start-time evidence.
+  evidenceRecoveryMethod          String?
+  evidenceRecoveryBlockNumber     BigInt?
+  evidenceRecoverySourceContract  String?
+  evidenceRecoverySourceFunction  String?
+  evidenceRecoveryReturnedStakeId String?
+  evidenceRecoveredAt             DateTime?
+
   @@index([chainId, walletAddress, stakeId])
   @@index([chainId, walletAddress, endBlockNumber])
   @@index([chainId, sourceFamily])
