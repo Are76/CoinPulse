@@ -117,12 +117,14 @@ export type WindowPlanResult =
   | { status: "misaligned_cursor"; detail: string };
 
 /**
- * Computes the next window to run, purely from the live persisted TRANSFERS
- * cursor lower edge. Never trusts a hardcoded "windows completed" count —
- * the live cursor is the only source of truth for campaign progress.
+ * Computes the next window to run from the planning cursor lower edge: the
+ * live persisted TRANSFERS cursor in execute mode, or the in-memory simulated
+ * cursor for later dry-run previews. Never trusts a hardcoded "windows
+ * completed" count — in execute mode the live cursor is the only source of
+ * truth for campaign progress.
  */
 export function computeWindowPlan(args: {
-  liveCursorFromBlock: bigint;
+  planningCursorFromBlock: bigint;
   originalCursorFromBlock?: bigint;
   firstActivityBlock?: bigint;
   fullWindowBlocks?: bigint;
@@ -137,29 +139,29 @@ export function computeWindowPlan(args: {
     fullWindowBlocks,
   });
 
-  if (args.liveCursorFromBlock <= firstActivityBlock) {
+  if (args.planningCursorFromBlock <= firstActivityBlock) {
     return { status: "campaign_complete", totalWindows };
   }
 
-  if (args.liveCursorFromBlock > originalCursorFromBlock) {
+  if (args.planningCursorFromBlock > originalCursorFromBlock) {
     return {
       status: "misaligned_cursor",
-      detail: `live cursor fromBlock ${args.liveCursorFromBlock} is above the original campaign cursor ${originalCursorFromBlock}`,
+      detail: `planning cursor fromBlock ${args.planningCursorFromBlock} is above the original campaign cursor ${originalCursorFromBlock}`,
     };
   }
 
-  const diff = originalCursorFromBlock - args.liveCursorFromBlock;
+  const diff = originalCursorFromBlock - args.planningCursorFromBlock;
   if (diff % fullWindowBlocks !== 0n) {
     return {
       status: "misaligned_cursor",
-      detail: `live cursor fromBlock ${args.liveCursorFromBlock} is not aligned to the ${fullWindowBlocks}-block campaign grid (offset ${diff} from ${originalCursorFromBlock})`,
+      detail: `planning cursor fromBlock ${args.planningCursorFromBlock} is not aligned to the ${fullWindowBlocks}-block campaign grid (offset ${diff} from ${originalCursorFromBlock})`,
     };
   }
 
   const windowNumber = Number(diff / fullWindowBlocks) + 1;
-  const rawStart = args.liveCursorFromBlock - fullWindowBlocks;
+  const rawStart = args.planningCursorFromBlock - fullWindowBlocks;
   const startBlock = rawStart < firstActivityBlock ? firstActivityBlock : rawStart;
-  const endBlock = args.liveCursorFromBlock - 1n;
+  const endBlock = args.planningCursorFromBlock - 1n;
   const isFinalWindow = startBlock === firstActivityBlock;
   const blockCount = endBlock - startBlock + 1n;
 
@@ -235,13 +237,13 @@ export function validateNoActiveOperation(args: {
 }
 
 export function validateAdjacency(args: {
-  liveCursorFromBlock: bigint;
+  planningCursorFromBlock: bigint;
   proposedEndBlock: bigint;
 }): GateResult {
-  if (args.proposedEndBlock + 1n !== args.liveCursorFromBlock) {
+  if (args.proposedEndBlock + 1n !== args.planningCursorFromBlock) {
     return {
       ok: false,
-      reason: `proposed endBlock ${args.proposedEndBlock} is not directly adjacent to the live cursor fromBlock ${args.liveCursorFromBlock}`,
+      reason: `proposed endBlock ${args.proposedEndBlock} is not directly adjacent to the planning cursor fromBlock ${args.planningCursorFromBlock}`,
     };
   }
   return { ok: true };
@@ -943,7 +945,7 @@ export async function runTransferBackfillRunner(
         ? simulatedCursorFromBlock
         : cursor.fromBlock;
 
-    const plan = computeWindowPlan({ liveCursorFromBlock: planningFromBlock });
+    const plan = computeWindowPlan({ planningCursorFromBlock: planningFromBlock });
     if (plan.status === "campaign_complete") {
       return stop(deps, "campaign_complete", undefined, windowsCompleted, lastWindowNumber);
     }
@@ -960,7 +962,7 @@ export async function runTransferBackfillRunner(
       expectedCursorFromBlock = cursor.fromBlock;
     }
 
-    const adjacencyGate = validateAdjacency({ liveCursorFromBlock: planningFromBlock, proposedEndBlock: plan.endBlock });
+    const adjacencyGate = validateAdjacency({ planningCursorFromBlock: planningFromBlock, proposedEndBlock: plan.endBlock });
     if (!adjacencyGate.ok) return stop(deps, "adjacency_violation", adjacencyGate.reason, windowsCompleted, lastWindowNumber);
 
     const rangeGate = validateRangeSize({ startBlock: plan.startBlock, endBlock: plan.endBlock, isFinalWindow: plan.isFinalWindow });

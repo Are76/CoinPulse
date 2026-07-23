@@ -171,7 +171,7 @@ function completedManualRun(overrides: Partial<RunnerSyncRunRecord> = {}): Runne
 
 describe("Window 19 calculation", () => {
   it("computes Window 19 exactly from the given current cursor", () => {
-    const plan = computeWindowPlan({ liveCursorFromBlock: 26_679_999n });
+    const plan = computeWindowPlan({ planningCursorFromBlock: 26_679_999n });
     if (plan.status !== "next_window") throw new Error("expected next_window");
     expect(plan.windowNumber).toBe(19);
     expect(plan.startBlock).toBe(26_678_999n);
@@ -185,7 +185,7 @@ describe("Window 19 calculation", () => {
 
 describe("normal 1,000-block adjacency", () => {
   it("spans exactly 1,000 inclusive blocks for a non-final window", () => {
-    const plan = computeWindowPlan({ liveCursorFromBlock: 26_679_999n });
+    const plan = computeWindowPlan({ planningCursorFromBlock: 26_679_999n });
     if (plan.status !== "next_window") throw new Error("expected next_window");
     expect(plan.blockCount).toBe(1000n);
     expect(plan.endBlock - plan.startBlock + 1n).toBe(FULL_WINDOW_BLOCKS);
@@ -196,7 +196,7 @@ describe("normal 1,000-block adjacency", () => {
 
 describe("window numbering and policyLabel generation", () => {
   it("Window 1 is derived from the original cursor", () => {
-    const plan = computeWindowPlan({ liveCursorFromBlock: ORIGINAL_CURSOR_FROM_BLOCK });
+    const plan = computeWindowPlan({ planningCursorFromBlock: ORIGINAL_CURSOR_FROM_BLOCK });
     if (plan.status !== "next_window") throw new Error("expected next_window");
     expect(plan.windowNumber).toBe(1);
     expect(plan.policyLabel).toBe("transfer-history-backfill-window-1");
@@ -221,7 +221,7 @@ describe("final Window 13,688 partial range", () => {
     // Live cursor after window 13,687 completed: CURSOR_FROM - 1000*13687 = 13,010,999.
     const liveCursorFromBlock = ORIGINAL_CURSOR_FROM_BLOCK - FULL_WINDOW_BLOCKS * 13_687n;
     expect(liveCursorFromBlock).toBe(13_010_999n);
-    const plan = computeWindowPlan({ liveCursorFromBlock });
+    const plan = computeWindowPlan({ planningCursorFromBlock: liveCursorFromBlock });
     if (plan.status !== "next_window") throw new Error("expected next_window");
     expect(plan.windowNumber).toBe(13_688);
     expect(plan.startBlock).toBe(13_010_696n);
@@ -231,7 +231,7 @@ describe("final Window 13,688 partial range", () => {
   });
 
   it("reports campaign_complete once the cursor reaches FIRST_ACTIVITY_BLOCK", () => {
-    const plan = computeWindowPlan({ liveCursorFromBlock: FIRST_ACTIVITY_BLOCK });
+    const plan = computeWindowPlan({ planningCursorFromBlock: FIRST_ACTIVITY_BLOCK });
     expect(plan.status).toBe("campaign_complete");
   });
 });
@@ -243,7 +243,7 @@ describe("no gap or overlap between consecutive windows", () => {
     let liveCursorFromBlock = 26_679_999n;
     const windows = [];
     for (let i = 0; i < 3; i += 1) {
-      const plan = computeWindowPlan({ liveCursorFromBlock });
+      const plan = computeWindowPlan({ planningCursorFromBlock: liveCursorFromBlock });
       if (plan.status !== "next_window") throw new Error("expected next_window");
       windows.push(plan);
       liveCursorFromBlock = plan.startBlock; // cursor advances to the window's startBlock once completed
@@ -1143,7 +1143,7 @@ describe("checkEnv", () => {
 
 describe("request body builders", () => {
   it("buildManualSyncRequestBody always includes explicit startBlock and endBlock", () => {
-    const plan = computeWindowPlan({ liveCursorFromBlock: 26_679_999n });
+    const plan = computeWindowPlan({ planningCursorFromBlock: 26_679_999n });
     if (plan.status !== "next_window") throw new Error("expected next_window");
     const body = buildManualSyncRequestBody({ walletAddress: WALLET_ADDRESS, window: plan });
     expect(body.startBlock).toBe("26678999");
@@ -1154,7 +1154,7 @@ describe("request body builders", () => {
   });
 
   it("buildRebuildRequestBody scopes to fromBlock/toBlock and TRANSFERS only", () => {
-    const plan = computeWindowPlan({ liveCursorFromBlock: 26_679_999n });
+    const plan = computeWindowPlan({ planningCursorFromBlock: 26_679_999n });
     if (plan.status !== "next_window") throw new Error("expected next_window");
     const body = buildRebuildRequestBody({ walletAddress: WALLET_ADDRESS, window: plan });
     expect(body.fromBlock).toBe("26678999");
@@ -1165,11 +1165,11 @@ describe("request body builders", () => {
 
 describe("validateAdjacency and validateRangeSize", () => {
   it("rejects a proposed window disconnected from the live cursor", () => {
-    expect(validateAdjacency({ liveCursorFromBlock: 26_679_999n, proposedEndBlock: 26_670_000n }).ok).toBe(false);
+    expect(validateAdjacency({ planningCursorFromBlock: 26_679_999n, proposedEndBlock: 26_670_000n }).ok).toBe(false);
   });
 
   it("accepts an adjacent window", () => {
-    expect(validateAdjacency({ liveCursorFromBlock: 26_679_999n, proposedEndBlock: 26_679_998n }).ok).toBe(true);
+    expect(validateAdjacency({ planningCursorFromBlock: 26_679_999n, proposedEndBlock: 26_679_998n }).ok).toBe(true);
   });
 
   it("rejects a non-final window that is not exactly 1,000 blocks", () => {
