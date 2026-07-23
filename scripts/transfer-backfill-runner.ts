@@ -365,10 +365,10 @@ export function isExpectedRebuildWarningDetail(detail: unknown): boolean {
 export function classifyRebuildWarningDetails(
   warningDetails: unknown,
 ): { ok: true } | { ok: false; reason: string } {
-  if (!Array.isArray(warningDetails)) {
+  if (!Array.isArray(warningDetails) || warningDetails.length === 0) {
     return {
       ok: false,
-      reason: "warningCount > 0 but warningDetails is missing or not an array; cannot verify rebuild warnings are the documented negative-token-balance class",
+      reason: "warningCount > 0 but warningDetails is missing, empty, or not an array; cannot verify rebuild warnings are the documented negative-token-balance class",
     };
   }
   const unexpected = warningDetails.filter((detail) => !isExpectedRebuildWarningDetail(detail));

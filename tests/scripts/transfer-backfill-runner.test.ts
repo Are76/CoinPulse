@@ -384,6 +384,20 @@ describe("REBUILD trigger-specific warning validation", () => {
     expect(classifyRebuildWarningDetails(undefined).ok).toBe(false);
   });
 
+  it("classifyRebuildWarningDetails fails closed when warningDetails is an empty array", () => {
+    expect(classifyRebuildWarningDetails([]).ok).toBe(false);
+  });
+
+  it("verifySyncRunTerminalState fails a REBUILD run with warningCount > 0 but an empty warningDetails array", () => {
+    const result = verifySyncRunTerminalState({
+      run: completedRebuildRun({ warningCount: 1, warningDetails: [] }),
+      expectedTrigger: "REBUILD",
+      expectedStartBlock: 26_678_999n,
+      expectedEndBlock: 26_679_998n,
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("classifyRebuildWarningDetails fails closed on the capWarningDetails truncation marker", () => {
     const result = classifyRebuildWarningDetails([
       "negative-token-balance:chain:369:erc20:0xabc:12.5",
