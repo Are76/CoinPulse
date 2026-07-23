@@ -1,5 +1,5 @@
 import type { HexMiningEvidenceCoverageReportDto } from "@/services/hexmining/evidence-coverage-report";
-import type { HexStakeListDto } from "@/services/hexmining/types";
+import type { EndedHexStakeListDto, HexStakeListDto } from "@/services/hexmining/types";
 
 import {
   ApiClientError,
@@ -24,6 +24,26 @@ export async function fetchHexMiningStakes(
 
   const response = await fetchJson<ApiDataResponse<HexStakeListDto>>(
     `/api/hexmining/stakes?${params.toString()}`,
+  );
+
+  return response.data;
+}
+
+export type FetchHexMiningEndedStakesArgs = {
+  walletAddress: string;
+  chainId?: number;
+};
+
+export async function fetchHexMiningEndedStakes(
+  args: FetchHexMiningEndedStakesArgs,
+): Promise<EndedHexStakeListDto> {
+  const params = new URLSearchParams({
+    walletAddress: args.walletAddress,
+    chainId: String(args.chainId ?? 369),
+  });
+
+  const response = await fetchJson<ApiDataResponse<EndedHexStakeListDto>>(
+    `/api/hexmining/ended-stakes?${params.toString()}`,
   );
 
   return response.data;

@@ -32,6 +32,10 @@ export const QUERY_DEFAULTS = {
     staleTime: 30_000,
     gcTime: 10 * 60_000,
   },
+  hexminingEndedStakes: {
+    staleTime: 30_000,
+    gcTime: 10 * 60_000,
+  },
   hexminingEvidenceMissing: {
     staleTime: 30_000,
     gcTime: 10 * 60_000,
