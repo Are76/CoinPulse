@@ -40,7 +40,11 @@ import type {
 
 const PULSECHAIN_CHAIN_ID = 369 as const;
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
-const DEFAULT_BASE_URL = process.env.OPERATOR_RUNNER_BASE_URL ?? "http://localhost:3000";
+// Literal fallback only. parseInput never reads ambient process.env: the base URL
+// is derived strictly from --base-url, the injected env object, then this literal,
+// so parsing stays deterministic regardless of the ambient environment. The CLI
+// entrypoint (main) explicitly passes process.env in when it wants that source.
+const LOCALHOST_BASE_URL = "http://localhost:3000";
 const DEFAULT_EVIDENCE_DIR = "operator-evidence/hexmining-ended-stake-api-verification";
 
 // ─── parseInput ───────────────────────────────────────────────────────────────
@@ -71,7 +75,7 @@ export function parseInput(
   }
 
   const wallet = args["wallet"];
-  const baseUrl = args["base-url"] ?? env["OPERATOR_RUNNER_BASE_URL"] ?? DEFAULT_BASE_URL;
+  const baseUrl = args["base-url"] ?? env["OPERATOR_RUNNER_BASE_URL"] ?? LOCALHOST_BASE_URL;
   const chainIdRaw = args["chain-id"] ?? String(PULSECHAIN_CHAIN_ID);
   const evidenceDir = args["evidence-dir"] ?? null;
 

@@ -331,6 +331,125 @@ describe("runEndedStakeApiVerification", () => {
   });
 });
 
+// ─── P2-1: malformed stake entries never throw — deterministic FAIL ─────────────
+
+describe("runEndedStakeApiVerification: malformed stake entries fail closed", () => {
+  // Build a 200 envelope whose `stakes` array carries an arbitrary (possibly
+  // malformed) entry alongside the typed shape, bypassing the fixture types.
+  function listWithRawStakes(rawStakes: unknown[]): unknown {
+    return {
+      data: {
+        schemaVersion: "v1",
+        chainId: CHAIN_ID,
+        walletAddress: WALLET,
+        stakes: rawStakes,
+        totalCount: rawStakes.length,
+        isComplete: true,
+        warnings: [],
+      },
+    };
+  }
+
+  it("FAIL (no throw): a null stake entry", async () => {
+    const { deps } = makeFetch({ body: listWithRawStakes([completeStake(), null]) });
+
+    // Must resolve to a report, never reject/throw.
+    const report = await runEndedStakeApiVerification(BASE_INPUT, deps);
+
+    expect(report.classification).toBe("FAIL");
+    expect(report.warnings).toContain("hexmining-ended-stake-verification-malformed-stake-entry");
+  });
+
+  it("FAIL (no throw): an object missing walletAddress", async () => {
+    const noWallet: Record<string, unknown> = { ...completeStake() };
+    delete noWallet.walletAddress;
+    const { deps } = makeFetch({ body: listWithRawStakes([noWallet]) });
+
+    const report = await runEndedStakeApiVerification(BASE_INPUT, deps);
+
+    expect(report.classification).toBe("FAIL");
+    expect(report.warnings).toContain("hexmining-ended-stake-verification-malformed-stake-entry");
+  });
+
+  it("FAIL (no throw): a primitive stake entry", async () => {
+    const { deps } = makeFetch({ body: listWithRawStakes(["not-an-object", 42]) });
+
+    const report = await runEndedStakeApiVerification(BASE_INPUT, deps);
+
+    expect(report.classification).toBe("FAIL");
+    expect(report.warnings).toContain("hexmining-ended-stake-verification-malformed-stake-entry");
+  });
+
+  it("FAIL (no throw): an object missing endBlockNumber (identity dereference)", async () => {
+    // endBlockNumber feeds observationIdentity; a missing/non-string value would
+    // previously slip through and skew identity. It must fail closed structurally.
+    const noEndBlock: Record<string, unknown> = { ...completeStake() };
+    delete noEndBlock.endBlockNumber;
+    const { deps } = makeFetch({ body: listWithRawStakes([noEndBlock]) });
+
+    const report = await runEndedStakeApiVerification(BASE_INPUT, deps);
+
+    expect(report.classification).toBe("FAIL");
+    expect(report.warnings).toContain("hexmining-ended-stake-verification-malformed-stake-entry");
+  });
+
+  it("does not reject the promise for a malformed array (returns a report)", async () => {
+    const { deps } = makeFetch({ body: listWithRawStakes([null, "x", {}]) });
+    await expect(runEndedStakeApiVerification(BASE_INPUT, deps)).resolves.toBeDefined();
+  });
+});
+
+// ─── P2-2: list-level scope validated before the empty-result branch ────────────
+
+describe("runEndedStakeApiVerification: list-level scope guards empty results", () => {
+  function emptyListWithScope(chainId: number, walletAddress: string): { data: EndedHexStakeListDto } {
+    return {
+      data: {
+        schemaVersion: "v1",
+        chainId,
+        walletAddress,
+        stakes: [],
+        totalCount: 0,
+        isComplete: true,
+        warnings: [],
+      },
+    };
+  }
+
+  it("FAIL: empty stakes but list-level chainId does not match the request", async () => {
+    const { deps } = makeFetch({ body: emptyListWithScope(1, WALLET) });
+
+    const report = await runEndedStakeApiVerification(BASE_INPUT, deps);
+
+    expect(report.classification).toBe("FAIL");
+    expect(report.checks.allScopedToRequestedChain).toBe(false);
+    expect(report.totalObservations).toBe(0);
+  });
+
+  it("FAIL: empty stakes but list-level walletAddress does not match the request", async () => {
+    const { deps } = makeFetch({
+      body: emptyListWithScope(CHAIN_ID, "0x2222222222222222222222222222222222222222"),
+    });
+
+    const report = await runEndedStakeApiVerification(BASE_INPUT, deps);
+
+    expect(report.classification).toBe("FAIL");
+    expect(report.checks.allScopedToRequestedWallet).toBe(false);
+    expect(report.totalObservations).toBe(0);
+  });
+
+  it("WARN: empty stakes with correct list-level scope keeps the honest no-rows path", async () => {
+    const { deps } = makeFetch({ body: emptyListWithScope(CHAIN_ID, WALLET) });
+
+    const report = await runEndedStakeApiVerification(BASE_INPUT, deps);
+
+    expect(report.classification).toBe("WARN");
+    expect(report.checks.allScopedToRequestedChain).toBe(true);
+    expect(report.checks.allScopedToRequestedWallet).toBe(true);
+    expect(report.notes.join(" ")).toContain("not proof of successful ended-stake ingestion");
+  });
+});
+
 describe("buildRequestUrl", () => {
   it("builds the ended-stakes GET URL and strips a trailing slash on base", () => {
     expect(buildRequestUrl("http://localhost:3000/", 369, WALLET)).toBe(

@@ -66,6 +66,37 @@ describe("parseInput", () => {
     if (result.ok) expect(result.input.baseUrl).toBe("http://localhost:3000");
   });
 
+  it("ignores ambient process.env when an explicit empty env object is supplied", () => {
+    // Regression for the P2 finding: parseInput must derive the base URL only from
+    // its injected `env`, never from ambient process.env. Set the ambient var and
+    // prove an injected empty env still falls back to localhost.
+    const prior = process.env.OPERATOR_RUNNER_BASE_URL;
+    process.env.OPERATOR_RUNNER_BASE_URL = "http://ambient-should-not-be-used:9999";
+    try {
+      const result = parseInput(["--wallet", WALLET], {});
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.input.baseUrl).toBe("http://localhost:3000");
+    } finally {
+      if (prior === undefined) delete process.env.OPERATOR_RUNNER_BASE_URL;
+      else process.env.OPERATOR_RUNNER_BASE_URL = prior;
+    }
+  });
+
+  it("uses the injected env value even when ambient process.env differs", () => {
+    const prior = process.env.OPERATOR_RUNNER_BASE_URL;
+    process.env.OPERATOR_RUNNER_BASE_URL = "http://ambient-should-not-be-used:9999";
+    try {
+      const result = parseInput(["--wallet", WALLET], {
+        OPERATOR_RUNNER_BASE_URL: "http://injected:4000",
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.input.baseUrl).toBe("http://injected:4000");
+    } finally {
+      if (prior === undefined) delete process.env.OPERATOR_RUNNER_BASE_URL;
+      else process.env.OPERATOR_RUNNER_BASE_URL = prior;
+    }
+  });
+
   it("lets an explicit --base-url override the env default", () => {
     const result = parseInput(["--wallet", WALLET, "--base-url", "http://override:9000"], {
       OPERATOR_RUNNER_BASE_URL: "http://example.test:4000",

@@ -181,19 +181,41 @@ export async function runEndedStakeApiVerification(
   }
   report.checks.envelopeShapeValid = true;
 
+  // Guard: every stake entry must be structurally valid BEFORE any field access.
+  // A 200 response can still carry a malformed `stakes` array (null entries,
+  // primitives, or objects missing required fields). Without this guard the
+  // classification path below would dereference `s.isComplete` /
+  // `s.walletAddress.toLowerCase()` and throw, so the operator CLI would crash
+  // instead of emitting a sanitized FAIL report. A malformed entry is treated as
+  // a hard integrity failure and fails closed, deterministically.
+  if (!dto.stakes.every(isStructurallyValidStake)) {
+    report.warnings.push("hexmining-ended-stake-verification-malformed-stake-entry");
+    report.classification = "FAIL";
+    return report;
+  }
+
   const stakes = dto.stakes;
   report.totalObservations = stakes.length;
   report.completeObservations = stakes.filter((s) => s.isComplete === true).length;
   report.incompleteObservations = stakes.filter((s) => s.isComplete !== true).length;
 
   // ── Presence / consistency / scoping checks (no financial math) ─────────────
-  report.checks.allScopedToRequestedChain = stakes.every(
-    (s) => s.chainId === input.chainId,
-  );
-  report.checks.allScopedToRequestedWallet = stakes.every(
-    (s) => typeof s.walletAddress === "string" &&
-      s.walletAddress.toLowerCase() === walletAddress,
-  );
+  //
+  // Scope is validated at BOTH the list level (the top-level DTO fields) and the
+  // row level (every stake). List-level validation matters when `stakes` is empty:
+  // per-stake `every()` is vacuously true, so a route that ignored/misrouted the
+  // request params and returned an empty list for the wrong chain/wallet would
+  // otherwise be misclassified as WARN/no-rows instead of a scoping FAIL.
+  report.checks.allScopedToRequestedChain =
+    dto.chainId === input.chainId &&
+    stakes.every((s) => s.chainId === input.chainId);
+  report.checks.allScopedToRequestedWallet =
+    dto.walletAddress.toLowerCase() === walletAddress &&
+    stakes.every(
+      (s) =>
+        typeof s.walletAddress === "string" &&
+        s.walletAddress.toLowerCase() === walletAddress,
+    );
 
   const completeStakes = stakes.filter((s) => s.isComplete === true);
   report.checks.everyCompleteHasLockedDay = completeStakes.every(
@@ -291,6 +313,27 @@ function observationIdentity(stake: EndedHexStakeListDto["stakes"][number]): str
     stake.endBlockNumber,
     stake.discoveryMethod,
   ].join(":");
+}
+
+// Structural (not value-level) validation of a single stake entry. It asserts
+// only the shape required to run every downstream check without throwing —
+// notably a non-null object plus the identity/scope/classification fields with
+// correct primitive types. Value-level problems (missing lockedDay on a complete
+// row, a non-digit or non-string stakeShares, a missing incomplete-row warning)
+// are intentionally left to their dedicated checks so those failures stay
+// granular; this guard only prevents runtime throws on malformed shapes.
+function isStructurallyValidStake(entry: unknown): entry is EndedHexStakeListDto["stakes"][number] {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
+  const s = entry as Record<string, unknown>;
+  return (
+    typeof s.chainId === "number" &&
+    typeof s.walletAddress === "string" &&
+    typeof s.stakeId === "string" &&
+    typeof s.endBlockNumber === "string" &&
+    typeof s.discoveryMethod === "string" &&
+    typeof s.isComplete === "boolean" &&
+    Array.isArray(s.warnings)
+  );
 }
 
 // Narrow, defensive envelope extraction. Returns null unless the payload is the
