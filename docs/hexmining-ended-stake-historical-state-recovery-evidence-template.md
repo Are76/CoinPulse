@@ -84,9 +84,23 @@ not recorded).
 | State changed / Observation missing | `0` / `0` |
 | RPC failures / Validation failures | `0` / `0` |
 | Total failures | `0` |
+| Exit code | not captured in the JSONL report (`ok: true`, `totalFailures: 0`; the report JSON has no exit-code field) |
 
-**Notes:** all 9 outcomes `would_update`; stakeIds 507128, 823259, 823260,
-829821, 655741, 915997, 932004, 809011, 800372.
+**Per-stake outcomes (Run 1 — dry-run):**
+
+| stakeId | id | status |
+|---|---|---|
+| `507128` | `cmrxi947i0000go5f82bitx2t` | `would_update` |
+| `823259` | `cmrxi94840001go5fkvf3nins` | `would_update` |
+| `823260` | `cmrxi948e0002go5f98evxqkg` | `would_update` |
+| `829821` | `cmrxi948o0003go5fx3zc2mws` | `would_update` |
+| `655741` | `cmrxi948z0004go5fx3pa77xs` | `would_update` |
+| `915997` | `cmrxi94990005go5f9pcg75k5` | `would_update` |
+| `932004` | `cmrxi949k0006go5fgb5wjroy` | `would_update` |
+| `809011` | `cmrxi949t0007go5fg5vu00cu` | `would_update` |
+| `800372` | `cmrxi94a40008go5fp4am7eps` | `would_update` |
+
+**Notes:** all 9 outcomes `would_update`.
 
 ### Run 2 — execute
 
@@ -102,8 +116,23 @@ recorded).
 | Scanned / Planned / Recovered | `9` / `9` / `9` |
 | Updated | `9` |
 | Total failures | `0` |
+| Exit code | not captured in the JSONL report (`ok: true`, `totalFailures: 0`; the report JSON has no exit-code field) |
 
-**Notes:** all 9 outcomes `updated` (same 9 stakeIds as the dry-run). All 9
+**Per-stake outcomes (Run 2 — execute):**
+
+| stakeId | id | status |
+|---|---|---|
+| `507128` | `cmrxi947i0000go5f82bitx2t` | `updated` |
+| `823259` | `cmrxi94840001go5fkvf3nins` | `updated` |
+| `823260` | `cmrxi948e0002go5f98evxqkg` | `updated` |
+| `829821` | `cmrxi948o0003go5fx3zc2mws` | `updated` |
+| `655741` | `cmrxi948z0004go5fx3pa77xs` | `updated` |
+| `915997` | `cmrxi94990005go5f9pcg75k5` | `updated` |
+| `932004` | `cmrxi949k0006go5fgb5wjroy` | `updated` |
+| `809011` | `cmrxi949t0007go5fg5vu00cu` | `updated` |
+| `800372` | `cmrxi94a40008go5fp4am7eps` | `updated` |
+
+**Notes:** all 9 outcomes `updated` (same observation ids as the dry-run). All 9
 observations carry recovery provenance (`evidenceRecoveryMethod` present). No
 incomplete observations remain; no additional recovery execution is required.
 

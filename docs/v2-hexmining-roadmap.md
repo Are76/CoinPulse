@@ -53,7 +53,7 @@ Nothing above is marked live-verified without recorded evidence (per D-017, D-02
 
 ## HexMining Phase 1 Completion Record (D-033)
 
-**Native pHEX Phase 1 is complete.** Every item in the D-032 Phase 1 scope is implemented, tested, and covered by recorded operator evidence:
+**Native pHEX Phase 1 is complete.** Every item in the D-032 Phase 1 scope is implemented and tested. Recorded **operator** evidence covers the native active-stake live verification and the ended-stake recovery + API verification runs; the remaining scope items (frontend rendering, DTO/API contracts, estimated-yield behavior) are supported by merged implementation and test evidence — plus the Gate 10 live-data evidence recorded in PR #252 for estimated yield — not by separate operator runs:
 
 - **Native active stakes:** 32 active stakes live-verified and block-pinned against the canonical backend (PR #318: stakeCount 32 / enumeratedCount 32, all checks passed, `observedAtBlock` 26944376; block pinning #319).
 - **Native ended stakes:** 9 persisted observations, all 9 complete, 0 incomplete, 0 duplicate identities, canonical ended-stake identity enforced at the database level (#343). The ended-stake API verification runner (#336) recorded a clean `PASS` for chain ID 369 wallet `0x75f808367720951e789d47e9e9db51148d9aa765`: HTTP 200, 9 returned, 9 complete, no warnings, every integrity check `true` — the persisted PostgreSQL observations reconcile exactly with what the shipped `GET /api/hexmining/ended-stakes` contract returns, and the bigint/string-safe contract held (stakeShares always string or null, digit-only when complete).
