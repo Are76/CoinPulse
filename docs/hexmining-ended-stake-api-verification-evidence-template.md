@@ -98,13 +98,22 @@ Superseded by Run 4 after historical-state recovery.
 | no duplicate observation identities | `true` |
 | **classification** | `PASS` |
 
-**Warnings/notes:** none — `warnings: []`, `notes: []`.
+**Runner-level warnings/notes:** none — the report's own `warnings: []` and
+`notes: []` arrays are empty. (This is the runner's warning list only: the
+runner does not assert that `EndedHexStakeListDto.warnings` or per-row
+`warnings` arrays are empty — it only requires incomplete rows to carry a
+warning, and this run had 0 incomplete rows.)
 
 **Discovered issues:** none.
 
 **Final decision:** **PASS.** `classification` is `PASS` from a real run with no
-defect observed. The persisted PostgreSQL observations reconcile with the shipped
-`GET /api/hexmining/ended-stakes` contract (PostgreSQL ↔ API consistent), and the
+defect observed. The runner performs a single read-only HTTP GET against the
+shipped `GET /api/hexmining/ended-stakes` route and opens no DB connection, so
+this PASS proves exactly the checks listed above as served by that route over
+the persisted observations: envelope shape, chain/wallet scoping, completeness
+fields, digit-only `stakeShares` on complete rows, string-or-null
+`stakeShares`, and absence of duplicate identities. It does **not**
+independently reconcile PostgreSQL rows against the API response. The
 bigint/string-safe contract held. This run followed the completed execute-mode
 historical-state recovery — see
 `docs/hexmining-ended-stake-historical-state-recovery-evidence-template.md`.

@@ -61,10 +61,14 @@ afterward.
 
 ## Recorded runs
 
-Values below are taken verbatim from the operator evidence JSONL
+Result fields below (counts, per-stake outcomes, failure totals) are taken
+verbatim from the operator evidence JSONL
 (`operator-evidence/hexmining-ended-stake-historical-state-recovery/ended-stake-historical-state-recovery-evidence.jsonl`).
-The report JSON contains no timestamp field; the date below comes from the
-evidence file's modification timestamp, not from the reports themselves.
+The recovery CLI appends only the result payload, which contains **no**
+`chainId`, `walletAddress`, or timestamp fields — so the Chain id and Wallet
+rows below are **operator command context** (the CLI invocation inputs), not
+report-backed values, and the date comes from the evidence file's modification
+timestamp, not from the reports themselves.
 
 ### Run 1 — dry-run
 
@@ -75,8 +79,8 @@ not recorded).
 | Field | Value |
 |---|---|
 | Date (UTC) | 2026-07-23 (from evidence file timestamp; report JSON has no date field) |
-| Chain id | `369` |
-| Wallet | `0x75f808367720951e789d47e9e9db51148d9aa765` |
+| Chain id | `369` (operator command context — not in report JSON) |
+| Wallet | `0x75f808367720951e789d47e9e9db51148d9aa765` (operator command context — not in report JSON) |
 | Scanned / Planned / Recovered | `9` / `9` / `9` |
 | Already complete / Updated | `0` / `0` (dry-run — all 9 `would_update`) |
 | No match / Multiple match | `0` / `0` |
@@ -111,8 +115,8 @@ recorded).
 | Field | Value |
 |---|---|
 | Date (UTC) | 2026-07-23 (from evidence file timestamp; report JSON has no date field) |
-| Chain id | `369` |
-| Wallet | `0x75f808367720951e789d47e9e9db51148d9aa765` |
+| Chain id | `369` (operator command context — not in report JSON) |
+| Wallet | `0x75f808367720951e789d47e9e9db51148d9aa765` (operator command context — not in report JSON) |
 | Scanned / Planned / Recovered | `9` / `9` / `9` |
 | Updated | `9` |
 | Total failures | `0` |
