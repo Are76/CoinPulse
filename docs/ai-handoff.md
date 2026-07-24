@@ -1,6 +1,6 @@
 # CoinPulse AI Handoff
 
-**Last updated:** 2026-07-04
+**Last updated:** 2026-07-24 (D-032: HexMining Phase 1 completion scope defined as native pHEX only)
 
 ---
 
@@ -78,6 +78,23 @@ These rules apply to every PR. [E1]
 **HexMining posture:** Phase 4C complete and gate-lifted (PR #252). Phase 5 complete (PRs #307–#310). Public estimated yield is live for valid evidence paths. Ended stake pipeline (persistence, discovery, reader, DTO, API route) is live. Phase 6 **HSI backend implementation is complete** (PRs #312–#317: persistence, discovery, reader enrichment, live-verification tooling), but HSI is **not yet exposed via the public DTO/API** — `HexStakeSource` is still `"native"` only and `GET /api/hexmining/stakes` still calls only `readNativeHexStakes`. **HSI live verification is deferred pending availability of an HSI-owning wallet** (the tooling shipped but no live run occurred). Public HSI DTO/API integration, the **HTT** source family within Phase 6, and Phase 7 (pricing/valuation/PnL) are not started. Native active-stake reads (Phase 2) gained live-verification tooling (#318) — a live run against the fixture wallet recorded stakeCount 32 / 32 with all checks passing — and deterministic single-block read pinning (#319). [E1] [E2] [E3]
 
 **Source/RPC policy posture:** PR #249 removed the hardcoded `pulsechainstats.com` RPC default. No third-party RPC default is hardcoded. Runtime/operator/env/CLI-supplied RPC is the authoritative transport. PR #246 established the accepted authoritative PulseChain source reference doc. [E2]
+
+---
+
+## HexMining Phase 1 Completion Scope (D-032)
+
+**Canonical decision:** D-032 in `docs/project-decisions.md`, accepted 2026-07-24. [E1]
+
+**HexMining Phase 1 = native pHEX stakes on PulseChain (chain ID 369), active + ended.** Phase 1 completion is measured against this scope only. [E1]
+
+- **In scope:** native active stakes; native ended stakes (discovery, evidence completion/recovery, reader, DTO, API, UI); backend-canonical persistence and evidence; DTO/API contracts; frontend display of active and ended native stakes; backend-provided estimated yield with provenance/warnings; bigint/string-safe display formatting; no frontend computation of yield, pricing, valuation, or PnL. [E1]
+- **Later-phase scope (deferred, not dropped):** public HSI DTO/API exposure, HSI frontend UI, HSI live verification, HTT, Ethereum eHEX and all non-PulseChain chains, and Phase 7 pricing/valuation/PnL. [E1]
+- **HSI:** backend foundation code exists on `main` (PRs #312–#317) but HSI is **not publicly finished** — `HexStakeSource` is `"native"` only, the public stakes route calls only `readNativeHexStakes`, and HSI live verification is blocked by the lack of an HSI-owning wallet/evidence. **Do not pull HSI into Phase 1 without a new explicit decision superseding D-032.** [E1] [E3]
+- Frontend rules stand unchanged: no direct frontend RPC, and no frontend computation of yield, pricing, valuation, or PnL. [E1]
+
+**Ended-stake follow-ups merged after this file's PR-timeline cutoff (verify details in git log):** operator discovery trigger (#333), start-time stake evidence persistence (#334), completion from start evidence (#335), reader/API verification tooling (#336), historical contract-state evidence recovery (#337), frontend ended-stake history (#340). Ended-stake operator evidence (verification and recovery execute runs) is still `PENDING OPERATOR EXECUTION` — do not claim it was recorded. [E2] [E3]
+
+**Transfer-backfill posture (unrelated to HexMining scope, recorded here for the next agent):** the TRANSFER-family backfill is **paused after Window 60**. Window 61 requires explicit operator approval before any run. PR #341 (multi-window runner batch fix) is a runner correctness fix only — **it does not authorize further transfer-backfill execution.** [E2] [E4]
 
 ---
 
@@ -225,6 +242,8 @@ Read docs/ai-handoff.md first.
 Then read the specific PR, roadmap, or docs I mention.
 
 Treat Gate 10 and Gate 11 as lifted by PR #252. Phase 5 (ended stake pipeline) is complete via PRs #307–#310. Phase 6 HSI implementation is complete via PRs #312–#317, but HSI live verification is deferred pending an HSI-owning wallet (do not claim it passed). Native active-stake verification tooling (#318) and reader block pinning (#319) are merged. Do not infer HTT, Phase 7, or any HSI live-verification pass from HSI implementation completion.
+
+HexMining Phase 1 completion scope is defined by D-032 (docs/project-decisions.md): native pHEX only (active + ended, chainId 369). HSI/HTT/eHEX and pricing/valuation/PnL are later-phase scope and do not block Phase 1 completion. Do not pull HSI into Phase 1 without a new decision superseding D-032. Transfer-backfill is paused after Window 60; Window 61 needs explicit operator approval; PR #341 does not authorize further backfill runs.
 Do not propose runtime changes until you identify:
 1. current latest merged PR,
 2. current gate/status,

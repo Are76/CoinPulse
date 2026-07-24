@@ -1,6 +1,6 @@
 # CoinPulse Project Decisions
 
-**Last updated:** 2026-07-04
+**Last updated:** 2026-07-24
 
 ---
 
@@ -528,3 +528,41 @@ Do not: What must not happen as a result
 **Implications:** Native active-stake reads (Phase 2) are now block-pinned and have operator live-verification tooling. This is hardening/verification of already-complete native work — not a new roadmap phase and not pricing/valuation/PnL. Ended-stake live verification does not exist; only native active-stake verification tooling was added.
 
 **Do not:** Reintroduce independent `latest` reads for `stakeCount`/`stakeLists` in the production native reader. Do not remove the `latest` fallback or the `hexmining-provenance-block-unavailable` warning. Do not claim ended-stake live verification exists, and do not treat #318/#319 as pricing, valuation, PnL, or a new phase.
+
+---
+
+## D-032: HexMining Phase 1 Completion Scope Is Native pHEX Only
+
+**Status:** Accepted (2026-07-24)
+
+**Evidence:** [E2] Merged PRs #190–#191 (native active-stake reads), #252 (Gate 10/11 public estimated yield), #307–#310 (ended-stake pipeline), #318–#319 (native live verification + block pinning), #333 (operator ended-stake discovery trigger), #334 (start-time stake evidence persistence), #335 (ended-stake completion from start evidence), #336 (ended-stake reader/API verification runner), #337 (ended-stake historical contract-state evidence recovery), #340 (ended-stake history rendered in UI). [E3] `src/services/hexmining/types.ts` (`HexStakeSource` is `"native"` only; `"hsi"`/`"htt"` are declared deferred), `app/api/hexmining/stakes/route.ts` (calls only `readNativeHexStakes`), `src/components/hexmining/hexmining-screen.tsx` (renders active and ended native stakes from backend DTOs only). [E1] `docs/v2-hexmining-roadmap.md`; `docs/ai-handoff.md`.
+
+**Decision:** **HexMining Phase 1 is defined as native pHEX stakes on PulseChain (chain ID 369), covering both active and ended stakes.** HexMining Phase 1 completion is measured against this scope only.
+
+Phase 1 **includes**:
+
+- PulseChain `chainId 369` only
+- Native pHEX stakes (the HEX contract's own `stakeCount`/`stakeLists` ownership model)
+- Active native stakes (persistence, reader, DTO, API, UI)
+- Ended native stakes (discovery, persistence, evidence completion/recovery, reader, DTO, API, UI)
+- Backend-canonical persistence and evidence (raw observations, provenance, warnings)
+- Versioned DTO/API contracts for the above
+- Frontend display of active and ended native stakes (backend DTOs only)
+- Backend-provided estimated yield with provenance and warnings (per D-018)
+- Bigint/string-safe display conversion in the frontend (formatting only, never computation)
+- No frontend computation of yield, pricing, valuation, or PnL (per D-004)
+
+Phase 1 **does not include** (later phases — deferred scope, not dropped functionality):
+
+- Public HSI DTO/API exposure (`HexStakeSource: "hsi"`, route wiring)
+- HSI frontend UI
+- HSI live verification
+- HTT (Hedron Token Transfer / Actuator delegated) source family
+- Ethereum eHEX or any non-PulseChain chain
+- Pricing, valuation, and PnL (Phase 7; `pricing.status`, `valuation.status`, `pnl.status` remain `"unsupported"`)
+
+**Rationale:** Native pHEX is chosen as the Phase 1 completion scope because it is the only source family that is implemented end-to-end and verifiable today: native active-stake reads are implemented, tested, block-pinned (#319), and live-verified with recorded evidence (#318: stakeCount 32 / enumeratedCount 32, all checks passed); the ended-stake pipeline is implemented and tested through discovery, operator trigger, start-evidence completion, historical contract-state evidence recovery, API verification tooling, and UI rendering (#307–#310, #333–#337, #340). The HSI **backend foundation exists** (persistence, discovery, reader enrichment — PRs #312–#317) but public HSI support is not finished: HSI is not exposed through any public DTO/API, and **HSI live verification is blocked by the lack of a suitable HSI-owning wallet/evidence** (D-030). Under the project's evidence-first principle (D-017, D-020, D-027), it would be indefensible to declare HSI complete — or to fold it into the Phase 1 completion bar — without recorded live evidence. HSI, HTT, and eHEX are therefore moved to later phases.
+
+**Implications:** HexMining Phase 1 can be declared functionally complete when the native pHEX scope above is implemented, tested, and its operator evidence is recorded — without HSI, HTT, or eHEX. The roadmap must no longer be read as keeping Phase 1 open because HSI/HTT are unfinished. Existing HSI backend code (observation store, discovery, reader, verification tooling) remains on `main` unchanged and is the foundation for the later HSI phase. Re-including HSI in the Phase 1 completion bar requires a new explicit decision superseding this one.
+
+**Do not:** Treat this decision as deleting, deprecating, or removing existing HSI code — it is a scope decision only. Do not expose HSI publicly, start HTT, or add eHEX under a Phase 1 label. Do not claim HSI live verification passed (D-030 stands). Do not interpret deferred scope as cancelled scope.
