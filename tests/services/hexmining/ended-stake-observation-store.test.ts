@@ -500,6 +500,10 @@ describe("persistEndedHexStakeObservation", () => {
       expect(second.conflictReason).toMatch(/endBlockNumber/);
       expect(second.conflictReason).toContain("21000000");
       expect(second.conflictReason).toContain("22000000");
+      // Regression guard: the store's conflictReason must NOT carry the
+      // warning-code prefix. Callers (discovery/route) own the prefix so it
+      // appears exactly once in operator-visible warnings.
+      expect(second.conflictReason).not.toMatch(/^hexmining-ended-stake-end-evidence-conflict/);
     }
 
     const rows = await readEndedHexStakeObservations(

@@ -794,14 +794,13 @@ describe("discoverEndedHexStakes", () => {
     expect(result.persisted).toBe(0);
     expect(result.skipped).toBe(0);
     expect(result.conflicts).toBe(1);
-    expect(
-      result.warnings.some((w) =>
-        w.startsWith("hexmining-ended-stake-end-evidence-conflict:stake=5000"),
-      ),
-    ).toBe(true);
-    expect(
-      result.warnings.some((w) => w.includes("endBlockNumber")),
-    ).toBe(true);
+    const conflictWarning = result.warnings.find((w) =>
+      w.startsWith("hexmining-ended-stake-end-evidence-conflict:stake=5000"),
+    );
+    expect(conflictWarning).toBeDefined();
+    expect(conflictWarning).toContain("endBlockNumber");
+    // Regression guard: the warning-code prefix must appear exactly once.
+    expect(conflictWarning!.match(/hexmining-ended-stake-end-evidence-conflict/g)).toHaveLength(1);
 
     // Canonical row is unchanged — no second row, no overwrite.
     const row = rows.find((r) => r.stakeId === "5000")!;

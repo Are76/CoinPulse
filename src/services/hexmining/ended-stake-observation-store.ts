@@ -227,20 +227,24 @@ export type PersistEndedHexStakeObservationResult =
 // either signals two distinct end events being reported for the same
 // canonical stake identity, which the persistence layer must surface rather
 // than silently pick a winner or duplicate the row.
+//
+// The returned string describes *only* which field disagreed and both values —
+// it does not include the warning-code prefix. Callers (discovery, route)
+// own the prefix so it appears exactly once in operator-visible warnings.
 function detectEndEvidenceConflict(
   persisted: { endBlockNumber: bigint; endTxHash: string },
   incoming: { endBlockNumber: bigint; endTxHash: string },
 ): string | null {
   if (persisted.endBlockNumber !== incoming.endBlockNumber) {
     return (
-      `hexmining-ended-stake-end-evidence-conflict:endBlockNumber ` +
+      `endBlockNumber ` +
       `persisted=${persisted.endBlockNumber.toString()} ` +
       `incoming=${incoming.endBlockNumber.toString()}`
     );
   }
   if (persisted.endTxHash.toLowerCase() !== incoming.endTxHash.toLowerCase()) {
     return (
-      `hexmining-ended-stake-end-evidence-conflict:endTxHash ` +
+      `endTxHash ` +
       `persisted=${persisted.endTxHash} ` +
       `incoming=${incoming.endTxHash}`
     );

@@ -91,7 +91,7 @@ const CONFLICT_RESULT: DiscoverEndedHexStakesResult = {
   skipped: 0,
   conflicts: 1,
   warnings: [
-    "hexmining-ended-stake-end-evidence-conflict:stake=942663:hexmining-ended-stake-end-evidence-conflict:endBlockNumber persisted=21000000 incoming=22000000",
+    "hexmining-ended-stake-end-evidence-conflict:stake=942663:endBlockNumber persisted=21000000 incoming=22000000",
   ],
 };
 
