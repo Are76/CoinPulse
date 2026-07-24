@@ -61,36 +61,90 @@ afterward.
 
 ## Recorded runs
 
+Result fields below (counts, per-stake outcomes, failure totals) are taken
+verbatim from the operator evidence JSONL
+(`operator-evidence/hexmining-ended-stake-historical-state-recovery/ended-stake-historical-state-recovery-evidence.jsonl`).
+The recovery CLI appends only the result payload, which contains **no**
+`chainId`, `walletAddress`, or timestamp fields — so the Chain id and Wallet
+rows below are **operator command context** (the CLI invocation inputs), not
+report-backed values, and the date comes from the evidence file's modification
+timestamp, not from the reports themselves.
+
 ### Run 1 — dry-run
 
-`PENDING OPERATOR EXECUTION` — executed via
-`scripts/hexmining-ended-stake-historical-state-recovery.ts` (no `--execute`)
-against a real local database and PulseChain RPC (RPC URL value not recorded).
+Executed via `scripts/hexmining-ended-stake-historical-state-recovery.ts`
+(no `--execute`) against a real local database and PulseChain RPC (RPC URL value
+not recorded).
 
 | Field | Value |
 |---|---|
-| Date (UTC) | `PENDING OPERATOR EXECUTION` |
-| Chain id | `369` |
-| Wallet | `PENDING OPERATOR EXECUTION` |
-| Scanned / Planned / Recovered | `PENDING OPERATOR EXECUTION` |
-| Total failures | `PENDING OPERATOR EXECUTION` |
+| Date (UTC) | 2026-07-23 (from evidence file timestamp; report JSON has no date field) |
+| Chain id | `369` (operator command context — not in report JSON) |
+| Wallet | `0x75f808367720951e789d47e9e9db51148d9aa765` (operator command context — not in report JSON) |
+| Scanned / Planned / Recovered | `9` / `9` / `9` |
+| Already complete / Updated | `0` / `0` (dry-run — all 9 `would_update`) |
+| No match / Multiple match | `0` / `0` |
+| Concurrent matching completion / conflict | `0` / `0` |
+| State changed / Observation missing | `0` / `0` |
+| RPC failures / Validation failures | `0` / `0` |
+| Total failures | `0` |
+| Exit code | not captured in the JSONL report (`ok: true`, `totalFailures: 0`; the report JSON has no exit-code field) |
 
-**Notes:** `PENDING OPERATOR EXECUTION`
+**Per-stake outcomes (Run 1 — dry-run):**
+
+| stakeId | id | status |
+|---|---|---|
+| `507128` | `cmrxi947i0000go5f82bitx2t` | `would_update` |
+| `823259` | `cmrxi94840001go5fkvf3nins` | `would_update` |
+| `823260` | `cmrxi948e0002go5f98evxqkg` | `would_update` |
+| `829821` | `cmrxi948o0003go5fx3zc2mws` | `would_update` |
+| `655741` | `cmrxi948z0004go5fx3pa77xs` | `would_update` |
+| `915997` | `cmrxi94990005go5f9pcg75k5` | `would_update` |
+| `932004` | `cmrxi949k0006go5fgb5wjroy` | `would_update` |
+| `809011` | `cmrxi949t0007go5fg5vu00cu` | `would_update` |
+| `800372` | `cmrxi94a40008go5fp4am7eps` | `would_update` |
+
+**Notes:** all 9 outcomes `would_update`.
 
 ### Run 2 — execute
 
-`PENDING OPERATOR EXECUTION` — executed via
-`scripts/hexmining-ended-stake-historical-state-recovery.ts --execute` against a
-real local database and PulseChain RPC (RPC URL value not recorded).
+Executed via `scripts/hexmining-ended-stake-historical-state-recovery.ts
+--execute` against a real local database and PulseChain RPC (RPC URL value not
+recorded).
 
 | Field | Value |
 |---|---|
-| Date (UTC) | `PENDING OPERATOR EXECUTION` |
-| Chain id | `369` |
-| Wallet | `PENDING OPERATOR EXECUTION` |
-| Updated | `PENDING OPERATOR EXECUTION` |
-| Total failures | `PENDING OPERATOR EXECUTION` |
+| Date (UTC) | 2026-07-23 (from evidence file timestamp; report JSON has no date field) |
+| Chain id | `369` (operator command context — not in report JSON) |
+| Wallet | `0x75f808367720951e789d47e9e9db51148d9aa765` (operator command context — not in report JSON) |
+| Scanned / Planned / Recovered | `9` / `9` / `9` |
+| Updated | `9` |
+| Total failures | `0` |
+| Exit code | not captured in the JSONL report (`ok: true`, `totalFailures: 0`; the report JSON has no exit-code field) |
 
-**Notes:** `PENDING OPERATOR EXECUTION`
+**Per-stake outcomes (Run 2 — execute):**
 
-**Final decision:** `PENDING OPERATOR EXECUTION`
+| stakeId | id | status |
+|---|---|---|
+| `507128` | `cmrxi947i0000go5f82bitx2t` | `updated` |
+| `823259` | `cmrxi94840001go5fkvf3nins` | `updated` |
+| `823260` | `cmrxi948e0002go5f98evxqkg` | `updated` |
+| `829821` | `cmrxi948o0003go5fx3zc2mws` | `updated` |
+| `655741` | `cmrxi948z0004go5fx3pa77xs` | `updated` |
+| `915997` | `cmrxi94990005go5f9pcg75k5` | `updated` |
+| `932004` | `cmrxi949k0006go5fgb5wjroy` | `updated` |
+| `809011` | `cmrxi949t0007go5fg5vu00cu` | `updated` |
+| `800372` | `cmrxi94a40008go5fp4am7eps` | `updated` |
+
+**Notes:** all 9 outcomes `updated` (same observation ids as the dry-run). All 9
+observations carry recovery provenance (`evidenceRecoveryMethod` present). No
+incomplete observations remain; no additional recovery execution is required.
+
+**Discovered issues:** none — every outcome was `would_update` (dry-run) or
+`updated` (execute).
+
+**Final decision:** **Clean.** `totalFailures` is `0` for both the real dry-run
+and the subsequent execute run, and the ended-stake API verification runner
+subsequently reached `PASS` (see
+`docs/hexmining-ended-stake-api-verification-evidence-template.md`, Run 4).
+Execute-mode recovery is **complete**; 9/9 observations recovered.

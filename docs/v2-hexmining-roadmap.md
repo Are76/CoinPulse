@@ -2,9 +2,9 @@
 
 > **AI USAGE NOTE:** This is the condensed active working document (~200 lines). Full historical context, completed-phase details, PR logs, validation history, and research records are in [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md). **For routine implementation work, read only this file.** Use `grep` to locate specific gates or sections. Do not load the archive into context unless explicitly asked.
 
-**Document status:** HexMining Phase 1 completion scope formally defined as **native pHEX only** (active + ended stakes on PulseChain, chain ID 369) — see D-032 in `docs/project-decisions.md` and the Phase 1 Completion Scope section below. HSI, HTT, and eHEX are **later-phase scope and do not block Phase 1 completion**. Phase 6 HSI backend foundation exists (PRs #312–#317) but public HSI exposure is later scope; HSI live verification is deferred pending availability of an HSI-owning wallet. Native active-stake reads are live-verified (#318) and block-pinned (#319). The ended-stake pipeline (Phase 5, PRs #307–#310) has since gained an operator discovery trigger (#333), start-time stake evidence persistence (#334), completion from start evidence (#335), reader/API verification tooling (#336), historical contract-state evidence recovery (#337), and frontend ended-stake history rendering (#340). Phase 4C remains complete and gate-lifted (PRs #208–#252). Public estimated yield is live for valid evidence paths. HTT source family remains not started.
+**Document status:** **HexMining Phase 1 (native pHEX) is COMPLETE** — see D-032 (scope) and D-033 (completion record) in `docs/project-decisions.md`, and the Phase 1 Completion Record section below. Native active-stake reads are live-verified (#318) and block-pinned (#319). The ended-stake pipeline (Phase 5, PRs #307–#310, follow-ups #333–#337, #340; canonical identity enforced by #343) has recorded operator evidence: execute-mode historical-state recovery completed 9/9 observations, and the ended-stake API verification runner (#336) recorded a clean `PASS` (9 observations, 9 complete, 0 incomplete, no duplicate identities, no runner-level warnings) via a read-only GET against the shipped API route. HSI, HTT, and eHEX are **later-phase scope and do not block Phase 1 completion**; Phase 6 HSI backend foundation exists (PRs #312–#317) but public HSI exposure is later scope and HSI live verification remains deferred pending availability of an HSI-owning wallet. Phase 4C remains complete and gate-lifted (PRs #208–#252); public estimated yield is live for valid evidence paths. HTT source family remains not started.
 **Created:** 2026-06-06
-**Last updated:** 2026-07-24 (D-032: HexMining Phase 1 completion scope defined as native pHEX only; ended-stake follow-up PRs #333–#337, #340 recorded)
+**Last updated:** 2026-07-24 (Phase 1 completion recorded: ended-stake recovery + API verification operator evidence recorded; D-033 added)
 
 **Archive:** [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md) — historical PR logs, completed phase details, research records, validation history, full §1–§15 prose.
 
@@ -39,8 +39,8 @@
 | Area | Implemented | Tested | Live-verified | Operator tooling | Operator evidence |
 |---|---|---|---|---|---|
 | Native active stakes | ✅ (#190–#191, block-pinned #319) | ✅ | ✅ (#318: stakeCount 32/32, all checks passed) | ✅ (#318) | ✅ recorded in PR #318 |
-| Native ended stakes — discovery/reader/DTO/API | ✅ (#307–#310, operator trigger #333) | ✅ | ❌ no live verification run recorded | ✅ verification runner (#336) | ⏳ still pending — evidence template `PENDING OPERATOR EXECUTION` |
-| Native ended stakes — evidence completion/recovery | ✅ (#334 start evidence, #335 completion, #337 historical contract-state recovery) | ✅ | ❌ no execute-mode run recorded in repo | ✅ recovery CLI (#337) | ⏳ still pending — evidence template `PENDING OPERATOR EXECUTION` |
+| Native ended stakes — discovery/reader/DTO/API | ✅ (#307–#310, operator trigger #333, canonical identity #343) | ✅ | ✅ API verification `PASS` — 9 returned, 9 complete, 0 incomplete, no duplicate identities, no runner-level warnings (read-only GET via the shipped API route) | ✅ verification runner (#336) | ✅ recorded in `docs/hexmining-ended-stake-api-verification-evidence-template.md` |
+| Native ended stakes — evidence completion/recovery | ✅ (#334 start evidence, #335 completion, #337 historical contract-state recovery) | ✅ | ✅ execute-mode recovery run recorded — 9/9 recovered and updated, 0 failures | ✅ recovery CLI (#337) | ✅ recorded in `docs/hexmining-ended-stake-historical-state-recovery-evidence-template.md` |
 | Ended-stake frontend history | ✅ (#340) | ✅ | n/a | n/a | n/a |
 | Public estimated yield | ✅ (#252 gate-lifted) | ✅ | ✅ Gate 10 (#252) | ✅ | ✅ recorded in PR #252 |
 | HSI backend foundation | ✅ (#312–#317) — **not publicly exposed** | ✅ | ❌ deferred — no HSI-owning wallet available | ✅ (#316) | ⏳ `PENDING OPERATOR EXECUTION` — later phase |
@@ -48,6 +48,21 @@
 | eHEX | ❌ not started — later phase | — | — | — | — |
 
 Nothing above is marked live-verified without recorded evidence (per D-017, D-020, D-027).
+
+---
+
+## HexMining Phase 1 Completion Record (D-033)
+
+**Native pHEX Phase 1 is complete.** Every item in the D-032 Phase 1 scope is implemented and tested. Recorded **operator** evidence covers the native active-stake live verification and the ended-stake recovery + API verification runs; the remaining scope items (frontend rendering, DTO/API contracts, estimated-yield behavior) are supported by merged implementation and test evidence — plus the Gate 10 live-data evidence recorded in PR #252 for estimated yield — not by separate operator runs:
+
+- **Native active stakes:** 32 active stakes live-verified and block-pinned against the canonical backend (PR #318: stakeCount 32 / enumeratedCount 32, all checks passed, `observedAtBlock` 26944376; block pinning #319).
+- **Native ended stakes:** 9 persisted observations, all 9 complete, 0 incomplete, 0 duplicate identities, canonical ended-stake identity enforced at the database level (#343). The ended-stake API verification runner (#336) recorded a clean `PASS` for chain ID 369 wallet `0x75f808367720951e789d47e9e9db51148d9aa765`: HTTP 200, 9 returned, 9 complete, no runner-level warnings, every integrity check `true`. The runner is a single read-only HTTP GET (it opens no DB connection), so this proves the shipped `GET /api/hexmining/ended-stakes` route serves the persisted observations complete, correctly scoped, free of duplicate identities, and bigint/string-safe (stakeShares always string or null, digit-only when complete) — it does not independently reconcile PostgreSQL rows against the response.
+- **Historical-state recovery:** already executed successfully. The execute-mode recovery run (#337 CLI) recovered and updated 9/9 previously-incomplete observations with 0 failures; all 9 observations carry recovery provenance (`evidenceRecoveryMethod` present). No incomplete observations remain and **no additional recovery execution is required**.
+- **Frontend:** ended-stake history rendered from backend DTOs only (#340); public estimated yield live for valid evidence paths (#252).
+
+Recorded evidence lives in `docs/hexmining-ended-stake-api-verification-evidence-template.md` and `docs/hexmining-ended-stake-historical-state-recovery-evidence-template.md` (summaries of the operator JSONL evidence).
+
+**Remaining roadmap work is later-phase scope only:** HSI (public exposure, UI, live verification), HTT, eHEX, and pricing / valuation / PnL (Phase 7). None of these block or reopen Phase 1. Future roadmap scope is unchanged by this record.
 
 ---
 
@@ -338,5 +353,5 @@ Phase 6 delivers the HSI (Hedron Stake Instance) **backend pipeline**: observati
 
 ### Not claimed
 
-- No ended-stake live verification exists — the ended-stake pipeline (Phase 5) is discovery/reader only; do not claim live verification for it.
+- Ended-stake verification was **not** performed by #318/#319 — it was recorded later via the #336 API verification runner (`PASS`; see the Phase 1 Completion Record above and `docs/hexmining-ended-stake-api-verification-evidence-template.md`).
 - No pricing, valuation, PnL, or frontend accounting was introduced by #318 or #319.
