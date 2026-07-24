@@ -71,3 +71,23 @@ DROP INDEX "RawEndedHexStakeObservation_chainId_walletAddress_stakeId_idx";
 -- CreateIndex: canonical identity uniqueness.
 CREATE UNIQUE INDEX "RawEndedHexStakeObservation_chainId_walletAddress_stakeId_key"
     ON "RawEndedHexStakeObservation"("chainId", "walletAddress", "stakeId");
+
+-- Persistent lowercase invariant.
+--
+-- The unique index above is storage-level case-sensitive; without this CHECK,
+-- an out-of-band write (manual SQL, a future service that forgets to
+-- lowercase, a backfill script) could insert a mixed-case row that satisfies
+-- the unique index and then silently collide with the application's
+-- lowercase lookup — allowing two canonical rows for the same EVM wallet +
+-- stake. This CHECK closes that gap permanently at the database boundary
+-- and pairs with safety check 1 above: pre-migration proves no existing row
+-- violates the invariant, then this CHECK stops any future row from doing so.
+--
+-- Prisma has no native syntax for CHECK constraints; it tolerates them as
+-- unmodeled DB objects (same as functional indexes). The application's
+-- persist path already lowercases before every write, so this CHECK never
+-- fires in normal operation — it exists exclusively as defence-in-depth
+-- against out-of-band writers.
+ALTER TABLE "RawEndedHexStakeObservation"
+    ADD CONSTRAINT "RawEndedHexStakeObs_walletAddress_lowercase_check"
+    CHECK ("walletAddress" = lower("walletAddress"));
