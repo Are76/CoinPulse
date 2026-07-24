@@ -1,5 +1,5 @@
 -- Enforce canonical identity for RawEndedHexStakeObservation at the database
--- level. Native pHEX Phase 1 (D-032, D-033) defines the canonical identity of
+-- level. Native pHEX Phase 1 (D-032) defines the canonical identity of
 -- an ended stake as (chainId, walletAddress-lowercase, stakeId). Only one
 -- canonical row per ended stake per wallet per chain is permitted; other
 -- persisted columns (endBlockNumber, endTxHash, discoveryMethod, stakeIndex,

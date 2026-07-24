@@ -28,7 +28,7 @@ export type DiscoverEndedHexStakesResult = {
   // stakeId) already exists with conflicting end evidence (differing
   // endBlockNumber or endTxHash). Conflicts are neither newly persisted nor
   // idempotent skips — they surface a data disagreement that the operator
-  // must resolve. See D-033.
+  // must resolve.
   conflicts: number;
   warnings: string[];
 };

@@ -102,7 +102,7 @@ export async function POST(request: Request) {
         skipped: result.skipped,
         // Additive field (v1-compatible) surfacing canonical-identity conflict
         // count from the persistence layer. Conflicts are never counted as
-        // newly persisted or as plain idempotent skips — see D-033.
+        // newly persisted or as plain idempotent skips.
         conflicts: result.conflicts,
         warnings: result.warnings,
       },

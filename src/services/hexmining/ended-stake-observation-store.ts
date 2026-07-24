@@ -14,7 +14,7 @@ import { getDb } from "@/lib/db";
 //
 // discoveryMethod records HOW the end event was found; it is not part of the
 // canonical identity of the stake itself (see the canonical-identity note on
-// the buildEndedStakeDedupeKey helper below and D-033).
+// the buildEndedStakeDedupeKey helper below).
 
 export type EndedStakeDiscoveryMethod = "raw_stake_action" | "rpc_history";
 
@@ -79,11 +79,11 @@ export type PersistedEndedHexStakeObservation = {
 
 // ─── Canonical identity dedupe key ───────────────────────────────────────────
 //
-// The canonical identity of an ended stake for native pHEX Phase 1 (D-032,
-// D-033) is (chainId, lowercase walletAddress, stakeId). endBlockNumber,
-// endTxHash, and discoveryMethod are evidence/attributes recorded on the row,
-// not identity — they no longer participate in the dedupe key, and the
-// database enforces this identity via a unique constraint.
+// The canonical identity of an ended stake for native pHEX Phase 1 (D-032)
+// is (chainId, lowercase walletAddress, stakeId). endBlockNumber, endTxHash,
+// and discoveryMethod are evidence/attributes recorded on the row, not
+// identity — they no longer participate in the dedupe key, and the database
+// enforces this identity via a unique constraint.
 
 export function buildEndedStakeDedupeKey(args: {
   chainId: number;

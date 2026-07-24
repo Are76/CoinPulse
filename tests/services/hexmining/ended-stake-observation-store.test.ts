@@ -7,7 +7,8 @@
 //      same canonical identity (chainId, walletAddress, stakeId) returns
 //      created: false and does not write a second row.
 //   3. A different discoveryMethod for the same canonical stake does NOT
-//      produce a second row (D-033: discoveryMethod is evidence, not identity).
+//      produce a second row (canonical-identity rule: discoveryMethod is
+//      evidence, not identity).
 //   4. walletAddress is normalized to lowercase before write and read.
 //   5. Nullable fields (lockedDay, stakeShares, stakeIndex, etc.) are stored
 //      as-is — the store never coerces null to zero or a default value.
@@ -291,7 +292,7 @@ describe("persistEndedHexStakeObservation", () => {
     expect(second.id).toBe(first.id);
   });
 
-  it("does NOT write a second row when only discoveryMethod differs (D-033: evidence, not identity)", async () => {
+  it("does NOT write a second row when only discoveryMethod differs (evidence, not identity)", async () => {
     const db = makeMockDb();
     const first = await persistEndedHexStakeObservation(
       { ...BASE_INPUT, discoveryMethod: "raw_stake_action" },
@@ -480,7 +481,7 @@ describe("persistEndedHexStakeObservation", () => {
     expect(BigInt(row.stakeShares as string).toString()).toBe(uint72Max);
   });
 
-  // ── Canonical-identity end-evidence conflict (D-033) ─────────────────────
+  // ── Canonical-identity end-evidence conflict ─────────────────────────────
 
   it("returns conflict (no create, no overwrite) when endBlockNumber disagrees", async () => {
     const db = makeMockDb();
@@ -829,9 +830,10 @@ describe("buildEndedStakeDedupeKey (canonical identity)", () => {
   });
 
   it("produces the SAME key for the same canonical stake regardless of discovery method or block", () => {
-    // D-033: discoveryMethod, endBlockNumber, and endTxHash are evidence, not
-    // identity. The canonical dedupe key must not include them, or a second
-    // observation from a different source would appear to be a distinct stake.
+    // Canonical-identity rule: discoveryMethod, endBlockNumber, and endTxHash
+    // are evidence, not identity. The canonical dedupe key must not include
+    // them, or a second observation from a different source would appear to
+    // be a distinct stake.
     const key = buildEndedStakeDedupeKey({
       chainId: 369,
       walletAddress: "0xabc",

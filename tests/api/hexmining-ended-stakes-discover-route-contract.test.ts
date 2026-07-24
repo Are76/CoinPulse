@@ -197,9 +197,10 @@ describe("POST /api/hexmining/ended-stakes/discover route contract", () => {
     });
 
     it("surfaces canonical-identity conflicts as a `conflicts` count, not persisted or skipped", async () => {
-      // D-033: a canonical-identity conflict must never inflate `persisted`
-      // or fold into `skipped` — it is its own accounting bucket that the
-      // route must expose so operators can act on the disagreement.
+      // Canonical-identity rule: a canonical-identity conflict must never
+      // inflate `persisted` or fold into `skipped` — it is its own accounting
+      // bucket that the route must expose so operators can act on the
+      // disagreement.
       discoverEndedHexStakes.mockResolvedValue(CONFLICT_RESULT);
 
       const { POST } = await importRoute();

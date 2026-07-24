@@ -751,7 +751,7 @@ describe("discoverEndedHexStakes", () => {
     expect(row.stakeShares).toMatch(/^\d+$/);
   });
 
-  // ── Canonical-identity conflict discovery accounting (D-033) ────────────────
+  // ── Canonical-identity conflict discovery accounting ───────────────────────
   //
   // When the persisted canonical row for (chainId, walletAddress, stakeId)
   // disagrees with the incoming END event's evidence (endBlockNumber and/or

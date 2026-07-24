@@ -697,16 +697,15 @@ model RawHexDailyDataObservationInvalidation {
 // (e.g., lockedDay or stakeShares is null). The DTO must surface this as a
 // warning — never coerce missing fields to zero.
 //
-// Canonical identity (native pHEX Phase 1, D-032, D-033):
+// Canonical identity (native pHEX Phase 1, D-032):
 //   (chainId, walletAddress-lowercase, stakeId)
 //
 // One canonical row per ended stake. endBlockNumber, endTxHash,
 // discoveryMethod, stakeIndex, recovery provenance, and completion fields are
 // evidence/attributes — not identity. Different end evidence for the same
 // canonical stake is a conflict surfaced by the persistence layer, never a
-// second row. See D-033 for scope (native pHEX Phase 1 only); future
-// multi-contract stake sources may require a separately approved identity
-// dimension.
+// second row. Scope: native pHEX Phase 1 only; future multi-contract stake
+// sources may require a separately approved identity dimension.
 
 model RawEndedHexStakeObservation {
   id               String       @id @default(cuid())
