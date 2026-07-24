@@ -469,7 +469,7 @@ Do not: What must not happen as a result
 
 ## D-028: Ended Stake Observations Are Always Incomplete at Discovery Time
 
-**Status:** Active
+**Status:** Active **at discovery time only** — partially SUPERSEDED 2026-07-24 by PRs #334, #335, #337 and D-032 (see Supersession Note below). The *discovery-time* invariant remains valid; the claim that observations can never become complete and that no on-chain backfill exists is no longer true.
 
 **Evidence:** [E1] `docs/v2-hexmining-roadmap.md` Phase 5 Completion Record; [E2] PRs #307–#308 merged; [E3] `src/services/hexmining/ended-stake-discovery.ts`, `src/services/hexmining/ended-stake-observation-store.ts`.
 
@@ -480,6 +480,22 @@ Do not: What must not happen as a result
 **Implications:** Consumers of `EndedHexStakeListDto` must handle `isComplete: false` rows and null `lockedDay`/`stakeShares` on every Phase 5 observation. `isComplete: true` on the list DTO is only possible if all stake observations are complete, which does not occur for any Phase 5–discovered row.
 
 **Do not:** Set `lockedDay` or `stakeShares` from `RawStakeAction` fields or from inference. Do not suppress the `hexmining-ended-stake-lockedday-unknown` warning. Do not treat `isComplete: false` as an error — it is the expected and correct state for Phase 5.
+
+### Supersession Note (2026-07-24)
+
+**What is superseded.** The original Decision/Implications above described the *only* lifecycle state a `RawEndedHexStakeObservation` could ever have. That is no longer accurate. After the original decision, three merged PRs added a **separate, later completion/recovery lifecycle** on top of discovery:
+
+- **#334 — start-time stake evidence persistence.** Persists start-time `lockedDay`/`stakeShares` evidence for ended stakes where a matching `RawStakeAction` START record exists. [E2]
+- **#335 — completion from persisted start evidence.** Enriches an already-discovered observation from that persisted start evidence and can flip it to `isComplete: true`. [E2] [E3] `enrichEndedHexStakeObservation` in `src/services/hexmining/ended-stake-observation-store.ts`.
+- **#337 — historical contract-state evidence recovery.** Recovers `lockedDay`/`stakeShares` for ended stakes that have **no** matching START record, by reading pinned historical contract state (`stakeLists` at `endBlockNumber − 1`) and writing dedicated `evidenceRecovery*` provenance columns — never repurposing `discoveryMethod`. [E2] [E3] `recoverEndedHexStakeHistoricalState` in `src/services/hexmining/ended-stake-historical-state-recovery.ts`.
+
+Consequently these original claims are **no longer true**: "no on-chain backfill from `stakeLists` is implemented"; and "`isComplete: true` … does not occur for any Phase 5–discovered row." On-chain backfill IS implemented, and a discovered row CAN later become complete.
+
+**What remains valid.** The **discovery-time** invariant is unchanged and still authoritative: `discoverEndedHexStakes()` itself still persists every row as `isComplete: false` with `lockedDay: null`/`stakeShares: null` and the `hexmining-ended-stake-lockedday-unknown` warning, because END records carry no start-time data. Completion is a distinct, later act performed by the enrichment/recovery functions above — not by discovery.
+
+**Corrected guidance for the "Do not" above.** The prohibition on setting `lockedDay`/`stakeShares` from `RawStakeAction` fields or from *inference* still stands. It does **not** forbid the implemented recovery path: recovering these fields from a matched persisted START record (#334/#335) or from an authoritative pinned historical contract-state read (#337) is evidence-based, not inference, and is the approved, merged mechanism. Agents must **not** read D-028 as active policy forbidding the completion/recovery path.
+
+**Related decisions.** See D-032 (native ended stakes, including evidence completion/recovery, are in HexMining Phase 1 scope). A future decision may formalize a DB-level unique identity constraint on `RawEndedHexStakeObservation`; that is out of scope for this note.
 
 ---
 
