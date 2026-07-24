@@ -582,3 +582,23 @@ Phase 1 **does not include** (later phases — deferred scope, not dropped funct
 **Implications:** HexMining Phase 1 can be declared functionally complete when the native pHEX scope above is implemented, tested, and its operator evidence is recorded — without HSI, HTT, or eHEX. The roadmap must no longer be read as keeping Phase 1 open because HSI/HTT are unfinished. Existing HSI backend code (observation store, discovery, reader, verification tooling) remains on `main` unchanged and is the foundation for the later HSI phase. Re-including HSI in the Phase 1 completion bar requires a new explicit decision superseding this one.
 
 **Do not:** Treat this decision as deleting, deprecating, or removing existing HSI code — it is a scope decision only. Do not expose HSI publicly, start HTT, or add eHEX under a Phase 1 label. Do not claim HSI live verification passed (D-030 stands). Do not interpret deferred scope as cancelled scope.
+
+---
+
+## D-033: HexMining Phase 1 (Native pHEX) Is Formally Complete
+
+**Status:** Accepted (2026-07-24) — documentation-only completion record; no functional change
+
+**Evidence:** [E1] `docs/v2-hexmining-roadmap.md` Phase 1 Completion Record; `docs/hexmining-ended-stake-api-verification-evidence-template.md` (Run 4, `PASS`); `docs/hexmining-ended-stake-historical-state-recovery-evidence-template.md` (dry-run + execute, 0 failures). [E2] Merged PRs #318–#319 (native active-stake live verification + block pinning), #307–#310, #333–#337, #340 (ended-stake pipeline through frontend history), #343 (canonical ended-stake identity enforcement), #252 (public estimated yield gate lift). [E3] Operator evidence JSONL under `operator-evidence/hexmining-ended-stake-api-verification/` and `operator-evidence/hexmining-ended-stake-historical-state-recovery/` (kept out of git per evidence policy; summarized in the docs templates above).
+
+**Decision:** **HexMining Phase 1, scoped by D-032 to native pHEX stakes on PulseChain (chain ID 369), is formally complete.** The completion bar is met with recorded evidence:
+
+- Native active stakes: 32 active stakes, live-verified and block-pinned against the canonical backend (#318: stakeCount 32 / enumeratedCount 32, all checks passed; #319 block pinning).
+- Native ended stakes: 9 persisted observations — 9 complete, 0 incomplete, 0 duplicate identities — with canonical identity enforced (#343). The API verification runner (#336) recorded `PASS` for wallet `0x75f808367720951e789d47e9e9db51148d9aa765`: HTTP 200, 9 returned, all integrity checks `true`, no warnings; PostgreSQL persisted observations reconcile with the shipped `GET /api/hexmining/ended-stakes` contract, and the bigint/string-safe contract held.
+- Historical-state recovery: already executed successfully — the execute-mode run recovered and updated 9/9 previously-incomplete observations with 0 failures; all 9 carry recovery provenance (`evidenceRecoveryMethod` present). No incomplete observations remain and no additional recovery execution is required.
+
+**Rationale:** D-032 defined the Phase 1 bar; the missing pieces at that time were recorded operator evidence for the ended-stake pipeline (API verification and execute-mode recovery). Both have since been executed against a real local server, database, and PulseChain RPC, and their factual outputs are recorded in the docs evidence templates per the evidence-first principle (D-017, D-020, D-027). Nothing is claimed without recorded evidence.
+
+**Implications:** Remaining HexMining roadmap work is later-phase scope only: HSI public exposure/UI/live verification, HTT, eHEX, and pricing/valuation/PnL (Phase 7). Phase 1 is closed and must not be reopened by later-phase work. Future roadmap scope is unchanged by this record.
+
+**Do not:** Treat this record as introducing any functionality — it documents completed, merged, evidence-backed work only. Do not read Phase 1 completion as HSI/HTT/eHEX or pricing/valuation/PnL progress. Do not claim HSI live verification passed (D-030 stands). Do not commit or modify the operator evidence JSONL files.
