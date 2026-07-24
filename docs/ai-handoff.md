@@ -1,6 +1,6 @@
 # CoinPulse AI Handoff
 
-**Last updated:** 2026-07-04
+**Last updated:** 2026-07-24 (D-032: HexMining Phase 1 completion scope defined as native pHEX only)
 
 ---
 
@@ -81,6 +81,23 @@ These rules apply to every PR. [E1]
 
 ---
 
+## HexMining Phase 1 Completion Scope (D-032)
+
+**Canonical decision:** D-032 in `docs/project-decisions.md`, accepted 2026-07-24. [E1]
+
+**HexMining Phase 1 = native pHEX stakes on PulseChain (chain ID 369), active + ended.** Phase 1 completion is measured against this scope only. [E1]
+
+- **In scope:** native active stakes; native ended stakes (discovery, evidence completion/recovery, reader, DTO, API, UI); backend-canonical persistence and evidence; DTO/API contracts; frontend display of active and ended native stakes; backend-provided estimated yield with provenance/warnings; bigint/string-safe display formatting; no frontend computation of yield, pricing, valuation, or PnL. [E1]
+- **Later-phase scope (deferred, not dropped):** public HSI DTO/API exposure, HSI frontend UI, HSI live verification, HTT, Ethereum eHEX and all non-PulseChain chains, and Phase 7 pricing/valuation/PnL. [E1]
+- **HSI:** backend foundation code exists on `main` (PRs #312–#317) but HSI is **not publicly finished** — `HexStakeSource` is `"native"` only, the public stakes route calls only `readNativeHexStakes`, and HSI live verification is blocked by the lack of an HSI-owning wallet/evidence. **Do not pull HSI into Phase 1 without a new explicit decision superseding D-032.** [E1] [E3]
+- Frontend rules stand unchanged: no direct frontend RPC, and no frontend computation of yield, pricing, valuation, or PnL. [E1]
+
+**Ended-stake follow-ups merged after this file's PR-timeline cutoff (verify details in git log):** operator discovery trigger (#333), start-time stake evidence persistence (#334), completion from start evidence (#335), reader/API verification tooling (#336), historical contract-state evidence recovery (#337), frontend ended-stake history (#340). Ended-stake operator evidence (verification and recovery execute runs) is still `PENDING OPERATOR EXECUTION` — do not claim it was recorded. [E2] [E3]
+
+**Transfer-backfill posture (unrelated to HexMining scope, recorded here for the next agent):** the TRANSFER-family backfill is **paused after Window 60**. Window 61 requires explicit operator approval before any run. PR #341 (multi-window runner batch fix) is a runner correctness fix only — **it does not authorize further transfer-backfill execution.** [E2] [E4]
+
+---
+
 ## HexMining Post-Gate-11 Current State
 
 > **WARNING: Gate 10 / Gate 11 were lifted by PR #252 only. Do not infer future HexMining phases from the existence of runner/operator scripts, tests, or infrastructure PRs.**
@@ -124,9 +141,10 @@ These rules apply to every PR. [E1]
 - **HSI live verification — NOT completed. Deferred pending availability of an HSI-owning wallet.** PR #316 shipped tooling only; no live run occurred and the evidence template is `PENDING OPERATOR EXECUTION`. No HSI-owning wallet is currently available to verify against. Do not state that HSI verification passed. [E1] [E2]
 - **Public HSI DTO/API integration** — `HexStakeSource` (`"hsi"`), public DTO fields, and route wiring not yet done. [E1] [E3]
 - **HTT** (Hedron Token Transfer / Actuator delegated) source family — not started. [E1]
-- `lockedDay` and `stakeShares` recovery / exact yield (`status: "exact"`) for ended stakes — no on-chain backfill implemented; no ended-stake live verification exists. [E1]
+- `lockedDay` and `stakeShares` recovery for ended stakes — **now implemented** (superseding earlier "no on-chain backfill" wording): #334 persists start-time stake evidence, #335 completes an observation from persisted start evidence, and #337 recovers the fields from pinned historical contract state (`stakeLists` at `endBlockNumber − 1`) with dedicated `evidenceRecovery*` provenance. Operator tooling exists (#336 reader/API verification runner, #337 recovery CLI), but operator **execute/API-verification evidence remains pending** — the evidence templates are still `PENDING OPERATOR EXECUTION`; do not claim an execute run occurred. No ended-stake *live verification* run is recorded. See D-028 Supersession Note and D-032. [E1] [E2] [E3]
+- Ended-stake `status: "exact"` yield and active-stake `status: "exact"` yield remain **not implemented** — active native stakes still surface `status: "estimated"` only. Do not claim `"exact"` yield for any stake. [E1]
 - HexMining pricing, valuation, and PnL remain Phase 7; `valuation.status` and `pnl.status` stay `"unsupported"`. [E1] [E3]
-- Ended stake and HSI frontend UI — no display in the app. [E1]
+- HSI frontend UI — no display in the app. Native ended-stake frontend display shipped in #340 and is in Phase 1 scope (D-032). [E1]
 - Ethereum eHEX remains future scope. [E1]
 
 **Operator tools available (do NOT treat as gate-lift):**
@@ -205,11 +223,11 @@ After PRs #252 (Gate 11), #307–#310 (Phase 5), #312–#317 (Phase 6 HSI implem
 
 1. Gate 10 evidence collection is complete; Gate 11 public estimated-yield promotion is merged.
 2. Valid evidence paths may surface public `status: "estimated"` with non-null `estimatedYieldHex`; BPD-spanning ranges still carry `bpdYieldHex: null` plus warning.
-3. Phase 5 ended stake pipeline is complete (persistence, discovery, reader, DTO, API route). Ended stake observations always have `isComplete: false` and `lockedDay: null` at discovery time — no on-chain backfill, and no ended-stake live verification exists.
+3. Phase 5 ended stake pipeline is complete (persistence, discovery, reader, DTO, API route). Ended stake observations always have `isComplete: false` and `lockedDay: null` **at discovery time** — that discovery-time limitation still holds. A separate, later evidence-based recovery lifecycle is now implemented (#334 start-time evidence persistence, #335 completion from persisted start evidence, #337 historical contract-state recovery), so a discovered row can subsequently become complete; see the recovery entry above and the D-028 Supersession Note. Operator execute/API-verification evidence remains `PENDING OPERATOR EXECUTION`, and no ended-stake live verification run is recorded.
 4. Phase 6 **HSI backend implementation is complete**: persistence (#312–#313), discovery (#314), reader enrichment (#315), and live-verification tooling (#316) are all live. HSI is **not yet exposed via the public DTO/API** (`HexStakeSource` is `"native"` only; the public stakes route calls only `readNativeHexStakes`) — public HSI DTO/API integration is not started.
 5. **HSI live verification is NOT completed. It is deferred pending availability of an HSI-owning wallet.** The tooling shipped but no live run occurred; the evidence template is `PENDING OPERATOR EXECUTION`. No HSI-owning wallet is currently available. Do not claim HSI verification passed.
 6. Native active-stake reads (Phase 2) now have live-verification tooling (#318, live run recorded 32/32 stakes, all checks passed) and single-block read pinning in the production reader (#319).
-7. The **HTT** source family (rest of Phase 6), Phase 7 pricing/valuation/PnL, frontend ended-stake/HSI UI, ended-stake exact-yield, and Ethereum eHEX all remain deferred to their documented phases.
+7. The **HTT** source family (rest of Phase 6), Phase 7 pricing/valuation/PnL, HSI frontend UI, ended-stake exact-yield, and Ethereum eHEX all remain deferred to their documented phases. (Native ended-stake frontend display shipped in #340 and is in Phase 1 scope — see D-032.)
 
 Do not treat Phase 6 HSI implementation as approval for HSI live-verification claims, HTT, Phase 7, Ethereum/Base execution, frontend accounting/pricing/PnL logic, or ended-stake exact-yield. [E1]
 
@@ -225,6 +243,8 @@ Read docs/ai-handoff.md first.
 Then read the specific PR, roadmap, or docs I mention.
 
 Treat Gate 10 and Gate 11 as lifted by PR #252. Phase 5 (ended stake pipeline) is complete via PRs #307–#310. Phase 6 HSI implementation is complete via PRs #312–#317, but HSI live verification is deferred pending an HSI-owning wallet (do not claim it passed). Native active-stake verification tooling (#318) and reader block pinning (#319) are merged. Do not infer HTT, Phase 7, or any HSI live-verification pass from HSI implementation completion.
+
+HexMining Phase 1 completion scope is defined by D-032 (docs/project-decisions.md): native pHEX only (active + ended, chainId 369). HSI/HTT/eHEX and pricing/valuation/PnL are later-phase scope and do not block Phase 1 completion. Do not pull HSI into Phase 1 without a new decision superseding D-032. Transfer-backfill is paused after Window 60; Window 61 needs explicit operator approval; PR #341 does not authorize further backfill runs.
 Do not propose runtime changes until you identify:
 1. current latest merged PR,
 2. current gate/status,

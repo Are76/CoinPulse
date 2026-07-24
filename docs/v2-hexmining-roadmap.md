@@ -2,11 +2,52 @@
 
 > **AI USAGE NOTE:** This is the condensed active working document (~200 lines). Full historical context, completed-phase details, PR logs, validation history, and research records are in [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md). **For routine implementation work, read only this file.** Use `grep` to locate specific gates or sections. Do not load the archive into context unless explicitly asked.
 
-**Document status:** Phase 6 HSI implementation complete — PRs #312–#317 merged. HSI observation persistence, discovery, reader enrichment, and live-verification tooling are all live on main; HSI live verification itself is deferred pending availability of an HSI-owning wallet. Native active-stake reads (Phase 2) gained live-verification tooling (#318) and deterministic single-block read pinning (#319). Phase 5 remains complete (PRs #307–#310). Phase 4C remains complete and gate-lifted (PRs #208–#252). Public estimated yield is live for valid evidence paths. HTT source family remains not started.
+**Document status:** HexMining Phase 1 completion scope formally defined as **native pHEX only** (active + ended stakes on PulseChain, chain ID 369) — see D-032 in `docs/project-decisions.md` and the Phase 1 Completion Scope section below. HSI, HTT, and eHEX are **later-phase scope and do not block Phase 1 completion**. Phase 6 HSI backend foundation exists (PRs #312–#317) but public HSI exposure is later scope; HSI live verification is deferred pending availability of an HSI-owning wallet. Native active-stake reads are live-verified (#318) and block-pinned (#319). The ended-stake pipeline (Phase 5, PRs #307–#310) has since gained an operator discovery trigger (#333), start-time stake evidence persistence (#334), completion from start evidence (#335), reader/API verification tooling (#336), historical contract-state evidence recovery (#337), and frontend ended-stake history rendering (#340). Phase 4C remains complete and gate-lifted (PRs #208–#252). Public estimated yield is live for valid evidence paths. HTT source family remains not started.
 **Created:** 2026-06-06
-**Last updated:** 2026-07-04 (PRs #312–#317: Phase 6 HSI implementation complete; PRs #318–#319: native active-stake live-verification tooling and read block pinning)
+**Last updated:** 2026-07-24 (D-032: HexMining Phase 1 completion scope defined as native pHEX only; ended-stake follow-up PRs #333–#337, #340 recorded)
 
 **Archive:** [`docs/v2-hexmining-roadmap-archive.md`](./v2-hexmining-roadmap-archive.md) — historical PR logs, completed phase details, research records, validation history, full §1–§15 prose.
+
+---
+
+## HexMining Phase 1 Completion Scope (D-032)
+
+> **Canonical scope decision:** D-032 in [`docs/project-decisions.md`](./project-decisions.md), accepted 2026-07-24.
+> **HexMining Phase 1 = native pHEX stakes on PulseChain (chain ID 369), active + ended.**
+> HSI, HTT, and eHEX are **later-phase scope**. They are deferred, not dropped — and they do **not** block declaring HexMining Phase 1 complete. Do not read the internal phase table below (Phases 0–7) as a Phase 1 completion checklist; Phase 1 completion is measured against this scope section only.
+
+**In Phase 1 scope:**
+
+- PulseChain `chainId 369` only
+- Native pHEX stakes — active and ended
+- Backend-canonical persistence and evidence (raw observations, provenance, warnings)
+- DTO/API contracts for native active and ended stakes
+- Frontend display of active and ended native stakes (backend DTOs only)
+- Backend-provided estimated yield with provenance and warnings
+- Bigint/string-safe display conversion (formatting only)
+- No frontend computation of yield, pricing, valuation, or PnL
+
+**Later-phase scope (not Phase 1, not dropped):**
+
+- Public HSI DTO/API exposure, HSI frontend UI, HSI live verification
+- HTT (Hedron Token Transfer / Actuator delegated) source family
+- Ethereum eHEX / any non-PulseChain chain
+- Pricing, valuation, and PnL (Phase 7)
+
+**Native pHEX status ladder (exact claims — do not overstate):**
+
+| Area | Implemented | Tested | Live-verified | Operator tooling | Operator evidence |
+|---|---|---|---|---|---|
+| Native active stakes | ✅ (#190–#191, block-pinned #319) | ✅ | ✅ (#318: stakeCount 32/32, all checks passed) | ✅ (#318) | ✅ recorded in PR #318 |
+| Native ended stakes — discovery/reader/DTO/API | ✅ (#307–#310, operator trigger #333) | ✅ | ❌ no live verification run recorded | ✅ verification runner (#336) | ⏳ still pending — evidence template `PENDING OPERATOR EXECUTION` |
+| Native ended stakes — evidence completion/recovery | ✅ (#334 start evidence, #335 completion, #337 historical contract-state recovery) | ✅ | ❌ no execute-mode run recorded in repo | ✅ recovery CLI (#337) | ⏳ still pending — evidence template `PENDING OPERATOR EXECUTION` |
+| Ended-stake frontend history | ✅ (#340) | ✅ | n/a | n/a | n/a |
+| Public estimated yield | ✅ (#252 gate-lifted) | ✅ | ✅ Gate 10 (#252) | ✅ | ✅ recorded in PR #252 |
+| HSI backend foundation | ✅ (#312–#317) — **not publicly exposed** | ✅ | ❌ deferred — no HSI-owning wallet available | ✅ (#316) | ⏳ `PENDING OPERATOR EXECUTION` — later phase |
+| HTT | ❌ not started — later phase | — | — | — | — |
+| eHEX | ❌ not started — later phase | — | — | — | — |
+
+Nothing above is marked live-verified without recorded evidence (per D-017, D-020, D-027).
 
 ---
 
@@ -21,9 +62,11 @@
 | Phase 4A | Observation persistence, status API, and operator surface | ✅ Complete — merged PRs #199–#202 |
 | Phase 4B | dailyDataRange read boundary, persistence wiring, and gated operator route | ✅ Complete — merged PRs #204, #205, #206 |
 | Phase 4C | Yield estimation and DTO wiring | ✅ Complete and gate-lifted — PRs #208–#252 merged; formula, DTO contract, reader assembly, route wiring, contract coverage, live-data evidence, and production promotion complete |
-| Phase 5 | Ended stake discovery and reader | ✅ Complete — merged PRs #307–#310 |
-| Phase 6 | HSI and HTT source families | 🟡 HSI backend implementation complete — merged PRs #312–#317 (persistence, discovery, reader enrichment, live-verification tooling). Not yet exposed via public DTO/API (`HexStakeSource` still `"native"` only). HSI live verification **deferred pending availability of an HSI-owning wallet**. HTT source family not started. |
-| Phase 7 | Pricing, valuation, and PnL | 🔲 Not started |
+| Phase 5 | Ended stake discovery and reader | ✅ Complete — merged PRs #307–#310. Follow-ups merged after Phase 5 closure: operator discovery trigger (#333), start-time stake evidence persistence (#334), completion from start evidence (#335), reader/API verification tooling (#336), historical contract-state evidence recovery (#337), frontend ended-stake history (#340) |
+| Phase 6 | HSI and HTT source families | ⏭️ **Later phase — outside HexMining Phase 1 completion scope (D-032).** HSI backend foundation complete — merged PRs #312–#317 (persistence, discovery, reader enrichment, live-verification tooling). Not exposed via public DTO/API (`HexStakeSource` still `"native"` only). HSI live verification **deferred pending availability of an HSI-owning wallet**. HTT source family not started. |
+| Phase 7 | Pricing, valuation, and PnL | 🔲 Not started — **later phase, outside HexMining Phase 1 completion scope (D-032)** |
+
+> **Note:** the phase numbers in this table are the roadmap's internal delivery phases, not the Phase 1 completion bar. Per D-032, HexMining Phase 1 completion covers the native pHEX scope only (see the Phase 1 Completion Scope section above); Phases 6–7 are later scope.
 
 > **Native active-stake reads (Phase 2) hardening:** after Phase 2 shipped, PR #318 added native active-stake live-verification tooling and PR #319 pinned the production native stake reader's `stakeCount`/`stakeLists` reads to a single captured block. See the Native Active-Stake Verification Record below.
 
