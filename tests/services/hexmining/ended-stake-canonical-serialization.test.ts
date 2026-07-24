@@ -91,21 +91,29 @@ class InMemoryDb {
         chainId: number;
         walletAddress: string;
         stakeId: string;
-        endBlockNumber: bigint;
-        discoveryMethod: string;
       };
-      select: { id: true; isComplete: true };
+      select: {
+        id: true;
+        isComplete: true;
+        endBlockNumber: true;
+        endTxHash: true;
+      };
     }) => {
       const { where } = args;
       const found = this.rows.find(
         (r) =>
           r.chainId === where.chainId &&
           r.walletAddress === where.walletAddress &&
-          r.stakeId === where.stakeId &&
-          r.endBlockNumber === where.endBlockNumber &&
-          r.discoveryMethod === where.discoveryMethod,
+          r.stakeId === where.stakeId,
       );
-      return found ? { id: found.id, isComplete: found.isComplete } : null;
+      return found
+        ? {
+            id: found.id,
+            isComplete: found.isComplete,
+            endBlockNumber: found.endBlockNumber,
+            endTxHash: found.endTxHash,
+          }
+        : null;
     },
 
     update: async (args: {

@@ -23,6 +23,13 @@ export type DiscoverEndedHexStakesResult = {
   discovered: number;
   persisted: number;
   skipped: number;
+  // Count of END observations rejected by the canonical-identity persistence
+  // path because a canonical row for the same (chainId, walletAddress,
+  // stakeId) already exists with conflicting end evidence (differing
+  // endBlockNumber or endTxHash). Conflicts are neither newly persisted nor
+  // idempotent skips — they surface a data disagreement that the operator
+  // must resolve.
+  conflicts: number;
   warnings: string[];
 };
 
@@ -50,6 +57,12 @@ const WARN_NO_STAKE_ID = "hexmining-ended-stake-stakeid-unknown";
 // stable contract consumed by route tests and docs, so it is retained verbatim
 // even though completeness now requires both fields rather than lockedDay alone.
 const WARN_INCOMPLETE_START_EVIDENCE = "hexmining-ended-stake-lockedday-unknown";
+// Signals that the incoming END event's evidence (endBlockNumber and/or
+// endTxHash) disagrees with the canonical row already persisted for the same
+// (chainId, walletAddress, stakeId). The persistence layer surfaces the raw
+// reason; the wrapper below prefixes the stake identifier for operator
+// diagnosis.
+const WARN_END_EVIDENCE_CONFLICT = "hexmining-ended-stake-end-evidence-conflict";
 
 // ─── Discovery ────────────────────────────────────────────────────────────────
 //
@@ -91,6 +104,7 @@ export async function discoverEndedHexStakes(
   let discovered = 0;
   let persisted = 0;
   let skipped = 0;
+  let conflicts = 0;
   const warnings: string[] = [];
 
   for (const action of endActions) {
@@ -153,12 +167,18 @@ export async function discoverEndedHexStakes(
     );
 
     // A created row and an in-place upgrade both mutate the canonical store, so
-    // both count as persisted. Only a genuine no-op (row already present and
-    // unchanged) counts as skipped. When complete START evidence is present the
-    // persisted row is now guaranteed complete (created complete, upgraded, or
-    // already complete), so suppressing the incomplete warning above never
-    // disagrees with the canonical row.
-    if (result.created || result.updated) {
+    // both count as persisted. A canonical-identity conflict is neither a
+    // persist nor a plain skip: it means the incoming END event disagrees with
+    // the persisted canonical row for the same stake, which the operator must
+    // resolve. Only a genuine no-op (row already present with matching evidence)
+    // counts as skipped. When complete START evidence is present the persisted
+    // row is now guaranteed complete (created complete, upgraded, or already
+    // complete), so suppressing the incomplete warning above never disagrees
+    // with the canonical row.
+    if (result.conflict) {
+      conflicts++;
+      warnings.push(`${WARN_END_EVIDENCE_CONFLICT}:stake=${stakeIdStr}:${result.conflictReason}`);
+    } else if (result.created || result.updated) {
       persisted++;
     } else {
       skipped++;
@@ -169,6 +189,7 @@ export async function discoverEndedHexStakes(
     discovered,
     persisted,
     skipped,
+    conflicts,
     warnings,
   };
 }

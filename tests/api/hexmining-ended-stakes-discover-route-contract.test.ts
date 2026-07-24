@@ -59,6 +59,7 @@ const SUCCESS_RESULT: DiscoverEndedHexStakesResult = {
   discovered: 2,
   persisted: 2,
   skipped: 0,
+  conflicts: 0,
   warnings: [
     "hexmining-ended-stake-lockedday-unknown:stake=942663",
     "hexmining-ended-stake-lockedday-unknown:stake=942664",
@@ -69,6 +70,7 @@ const EMPTY_RESULT: DiscoverEndedHexStakesResult = {
   discovered: 0,
   persisted: 0,
   skipped: 0,
+  conflicts: 0,
   warnings: [],
 };
 
@@ -76,9 +78,20 @@ const IDEMPOTENT_RERUN_RESULT: DiscoverEndedHexStakesResult = {
   discovered: 2,
   persisted: 0,
   skipped: 2,
+  conflicts: 0,
   warnings: [
     "hexmining-ended-stake-lockedday-unknown:stake=942663",
     "hexmining-ended-stake-lockedday-unknown:stake=942664",
+  ],
+};
+
+const CONFLICT_RESULT: DiscoverEndedHexStakesResult = {
+  discovered: 1,
+  persisted: 0,
+  skipped: 0,
+  conflicts: 1,
+  warnings: [
+    "hexmining-ended-stake-end-evidence-conflict:stake=942663:endBlockNumber persisted=21000000 incoming=22000000",
   ],
 };
 
@@ -178,8 +191,32 @@ describe("POST /api/hexmining/ended-stakes/discover route contract", () => {
         discovered: 2,
         persisted: 2,
         skipped: 0,
+        conflicts: 0,
         warnings: SUCCESS_RESULT.warnings,
       });
+    });
+
+    it("surfaces canonical-identity conflicts as a `conflicts` count, not persisted or skipped", async () => {
+      // Canonical-identity rule: a canonical-identity conflict must never
+      // inflate `persisted` or fold into `skipped` — it is its own accounting
+      // bucket that the route must expose so operators can act on the
+      // disagreement.
+      discoverEndedHexStakes.mockResolvedValue(CONFLICT_RESULT);
+
+      const { POST } = await importRoute();
+      const response = await POST(makeRequest(VALID_BODY));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.data.discovered).toBe(1);
+      expect(body.data.persisted).toBe(0);
+      expect(body.data.skipped).toBe(0);
+      expect(body.data.conflicts).toBe(1);
+      expect(
+        body.data.warnings.some((w: string) =>
+          w.includes("hexmining-ended-stake-end-evidence-conflict"),
+        ),
+      ).toBe(true);
     });
 
     it("defaults fromBlock to 0 when omitted", async () => {

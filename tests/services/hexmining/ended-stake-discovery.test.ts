@@ -177,7 +177,7 @@ describe("discoverEndedHexStakes", () => {
         findFirst: async () => null,
         create: async (args: { data: PersistEndedHexStakeObservationInput & { id?: string } }) => {
           captured.push(args.data);
-          return { id: "obs-1" };
+          return { id: `obs-${captured.length}` };
         },
         findMany: async () => [],
       },
@@ -232,7 +232,7 @@ describe("discoverEndedHexStakes", () => {
         findFirst: async () => null,
         create: async (args: { data: PersistEndedHexStakeObservationInput & { id?: string } }) => {
           captured.push(args.data);
-          return { id: "obs-1" };
+          return { id: `obs-${captured.length}` };
         },
         findMany: async () => [],
       },
@@ -260,7 +260,7 @@ describe("discoverEndedHexStakes", () => {
         findFirst: async () => null,
         create: async (args: { data: PersistEndedHexStakeObservationInput & { id?: string } }) => {
           captured.push(args.data);
-          return { id: "obs-1" };
+          return { id: `obs-${captured.length}` };
         },
         findMany: async () => [],
       },
@@ -285,10 +285,19 @@ describe("discoverEndedHexStakes", () => {
       rawEndedHexStakeObservation: {
         findFirst: async () => {
           callCount++;
-          // Return an existing row to trigger idempotency path
-          return callCount > 0 ? { id: "existing-obs" } : null;
+          // Return an existing row (with matching end evidence) to trigger the
+          // canonical-identity idempotency path.
+          return callCount > 0
+            ? {
+                id: "existing-obs",
+                isComplete: false,
+                endBlockNumber: action.blockNumber,
+                endTxHash: action.txHash,
+              }
+            : null;
         },
         create: vi.fn(async () => ({ id: "should-not-be-called" })),
+        update: async (args: { where: { id: string } }) => ({ id: args.where.id }),
         findMany: async () => [],
       },
     };
@@ -301,6 +310,7 @@ describe("discoverEndedHexStakes", () => {
     expect(result.discovered).toBe(1);
     expect(result.persisted).toBe(0);
     expect(result.skipped).toBe(1);
+    expect(result.conflicts).toBe(0);
   });
 
   it("handles multiple END actions in a single pass", async () => {
@@ -404,7 +414,7 @@ describe("discoverEndedHexStakes", () => {
         findFirst: async () => null,
         create: async (args: { data: PersistEndedHexStakeObservationInput & { id?: string } }) => {
           captured.push(args.data);
-          return { id: "obs-1" };
+          return { id: `obs-${captured.length}` };
         },
         findMany: async () => [],
       },
@@ -511,12 +521,21 @@ describe("discoverEndedHexStakes", () => {
     let existing = false;
     const obsClient = {
       rawEndedHexStakeObservation: {
-        findFirst: async () => (existing ? { id: "existing-obs" } : null),
+        findFirst: async () =>
+          existing
+            ? {
+                id: "existing-obs",
+                isComplete: true,
+                endBlockNumber: action.blockNumber,
+                endTxHash: action.txHash,
+              }
+            : null,
         create: async (args: { data: PersistEndedHexStakeObservationInput & { id?: string } }) => {
           captured.push(args.data);
           existing = true;
           return { id: "obs-1" };
         },
+        update: async (args: { where: { id: string } }) => ({ id: args.where.id }),
         findMany: async () => [],
       },
     };
@@ -561,6 +580,7 @@ describe("discoverEndedHexStakes", () => {
     walletAddress: string;
     stakeId: string;
     endBlockNumber: bigint;
+    endTxHash: string;
     discoveryMethod: string;
     lockedDay: number | null;
     stakeShares: string | null;
@@ -578,19 +598,22 @@ describe("discoverEndedHexStakes", () => {
             chainId: number;
             walletAddress: string;
             stakeId: string;
-            endBlockNumber: bigint;
-            discoveryMethod: string;
           };
         }) {
           const m = rows.find(
             (r) =>
               r.chainId === args.where.chainId &&
               r.walletAddress === args.where.walletAddress &&
-              r.stakeId === args.where.stakeId &&
-              r.endBlockNumber === args.where.endBlockNumber &&
-              r.discoveryMethod === args.where.discoveryMethod,
+              r.stakeId === args.where.stakeId,
           );
-          return m ? { id: m.id, isComplete: m.isComplete } : null;
+          return m
+            ? {
+                id: m.id,
+                isComplete: m.isComplete,
+                endBlockNumber: m.endBlockNumber,
+                endTxHash: m.endTxHash,
+              }
+            : null;
         },
         async update(args: {
           where: { id: string };
@@ -620,6 +643,9 @@ describe("discoverEndedHexStakes", () => {
       walletAddress: "0xwallet",
       stakeId: "900",
       endBlockNumber: 21000000n,
+      // Must match the endAction's txHash below so canonical-identity
+      // reconciliation treats them as the same end evidence.
+      endTxHash: "0xendtx",
       discoveryMethod: "raw_stake_action",
       lockedDay: null,
       stakeShares: null,
@@ -666,6 +692,7 @@ describe("discoverEndedHexStakes", () => {
       walletAddress: "0xwallet",
       stakeId: "901",
       endBlockNumber: 21000000n,
+      endTxHash: "0xendtx",
       discoveryMethod: "raw_stake_action",
       lockedDay: null,
       stakeShares: null,
@@ -712,13 +739,113 @@ describe("discoverEndedHexStakes", () => {
     const second = await discoverEndedHexStakes(BASE_ARGS, { rawClient, observationClient: client as never });
 
     expect(first.persisted).toBe(1); // created complete
+    expect(first.conflicts).toBe(0);
     expect(second.persisted).toBe(0);
     expect(second.skipped).toBe(1); // already complete → untouched
+    expect(second.conflicts).toBe(0);
     expect(rows).toHaveLength(1); // no duplicate row
 
     const row = rows.find((r) => r.stakeId === "902")!;
     expect(row.isComplete).toBe(true);
     expect(row.stakeShares).toBe("4722366482869645213695"); // exact, no exponent
     expect(row.stakeShares).toMatch(/^\d+$/);
+  });
+
+  // ── Canonical-identity conflict discovery accounting ───────────────────────
+  //
+  // When the persisted canonical row for (chainId, walletAddress, stakeId)
+  // disagrees with the incoming END event's evidence (endBlockNumber and/or
+  // endTxHash), the persistence layer must not create a second row and must
+  // not overwrite the canonical evidence. Discovery must count these as
+  // `conflicts` (not persisted, not idempotent skips) and surface an
+  // end-evidence-conflict warning so the operator can act on the disagreement.
+
+  it("counts a conflicting endBlockNumber as a conflict, not persisted or skipped", async () => {
+    const seeded: StoreRow = {
+      id: "legacy-conflict-blk",
+      chainId: 369,
+      walletAddress: "0xwallet",
+      stakeId: "5000",
+      endBlockNumber: 21000000n,
+      endTxHash: "0xoriginal",
+      discoveryMethod: "raw_stake_action",
+      lockedDay: 100,
+      stakeShares: "1",
+      isComplete: true,
+      warnings: [],
+    };
+    const { client, rows } = makeStatefulStore([seeded]);
+
+    // Incoming END event for the same canonical identity but a different
+    // endBlockNumber — the disagreement must be surfaced as a conflict.
+    const endAction = makeAction({
+      stakeId: 5000n,
+      blockNumber: 22000000n,
+      txHash: "0xoriginal",
+    });
+    const rawClient = makeRawClient([endAction], new Map([[5000n, null]]));
+
+    const result = await discoverEndedHexStakes(BASE_ARGS, {
+      rawClient,
+      observationClient: client as never,
+    });
+
+    expect(result.discovered).toBe(1);
+    expect(result.persisted).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(result.conflicts).toBe(1);
+    const conflictWarning = result.warnings.find((w) =>
+      w.startsWith("hexmining-ended-stake-end-evidence-conflict:stake=5000"),
+    );
+    expect(conflictWarning).toBeDefined();
+    expect(conflictWarning).toContain("endBlockNumber");
+    // Regression guard: the warning-code prefix must appear exactly once.
+    expect(conflictWarning!.match(/hexmining-ended-stake-end-evidence-conflict/g)).toHaveLength(1);
+
+    // Canonical row is unchanged — no second row, no overwrite.
+    const row = rows.find((r) => r.stakeId === "5000")!;
+    expect(rows).toHaveLength(1);
+    expect(row.endBlockNumber).toBe(21000000n);
+    expect(row.endTxHash).toBe("0xoriginal");
+  });
+
+  it("counts a conflicting endTxHash as a conflict, not persisted or skipped", async () => {
+    const seeded: StoreRow = {
+      id: "legacy-conflict-tx",
+      chainId: 369,
+      walletAddress: "0xwallet",
+      stakeId: "5001",
+      endBlockNumber: 21000000n,
+      endTxHash: "0xoriginal",
+      discoveryMethod: "raw_stake_action",
+      lockedDay: 100,
+      stakeShares: "1",
+      isComplete: true,
+      warnings: [],
+    };
+    const { client, rows } = makeStatefulStore([seeded]);
+
+    const endAction = makeAction({
+      stakeId: 5001n,
+      blockNumber: 21000000n,
+      txHash: "0xdifferent",
+    });
+    const rawClient = makeRawClient([endAction], new Map([[5001n, null]]));
+
+    const result = await discoverEndedHexStakes(BASE_ARGS, {
+      rawClient,
+      observationClient: client as never,
+    });
+
+    expect(result.conflicts).toBe(1);
+    expect(result.persisted).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(
+      result.warnings.some((w) => w.includes("endTxHash") && w.includes("stake=5001")),
+    ).toBe(true);
+
+    const row = rows.find((r) => r.stakeId === "5001")!;
+    expect(rows).toHaveLength(1);
+    expect(row.endTxHash).toBe("0xoriginal");
   });
 });

@@ -1,5 +1,7 @@
 import "server-only";
 
+import { Prisma } from "@prisma/client";
+
 import { getDb } from "@/lib/db";
 
 // ─── Discovery method vocabulary ─────────────────────────────────────────────
@@ -9,6 +11,10 @@ import { getDb } from "@/lib/db";
 // rpc_history      — observation sourced from a direct RPC transaction history
 //                   scan (Phase 5 fallback path, used when RawStakeAction is
 //                   absent or incomplete for the wallet).
+//
+// discoveryMethod records HOW the end event was found; it is not part of the
+// canonical identity of the stake itself (see the canonical-identity note on
+// the buildEndedStakeDedupeKey helper below).
 
 export type EndedStakeDiscoveryMethod = "raw_stake_action" | "rpc_history";
 
@@ -71,26 +77,20 @@ export type PersistedEndedHexStakeObservation = {
   evidenceRecoveredAt: Date | null;
 };
 
-// ─── Dedup key ────────────────────────────────────────────────────────────────
+// ─── Canonical identity dedupe key ───────────────────────────────────────────
 //
-// Deduplication uses (chainId, walletAddress, stakeId, endBlockNumber,
-// discoveryMethod). Multiple rows for the same stake are allowed if they
-// were discovered via a different method or at a different block.
+// The canonical identity of an ended stake for native pHEX Phase 1 (D-032)
+// is (chainId, lowercase walletAddress, stakeId). endBlockNumber, endTxHash,
+// and discoveryMethod are evidence/attributes recorded on the row, not
+// identity — they no longer participate in the dedupe key, and the database
+// enforces this identity via a unique constraint.
 
 export function buildEndedStakeDedupeKey(args: {
   chainId: number;
   walletAddress: string;
   stakeId: string;
-  endBlockNumber: bigint;
-  discoveryMethod: EndedStakeDiscoveryMethod;
 }): string {
-  return [
-    args.chainId,
-    args.walletAddress.toLowerCase(),
-    args.stakeId,
-    args.endBlockNumber.toString(),
-    args.discoveryMethod,
-  ].join(":");
+  return [args.chainId, args.walletAddress.toLowerCase(), args.stakeId].join(":");
 }
 
 // ─── Narrow typed client ──────────────────────────────────────────────────────
@@ -102,11 +102,19 @@ type StoreClient = {
         chainId: number;
         walletAddress: string;
         stakeId: string;
-        endBlockNumber: bigint;
-        discoveryMethod: string;
       };
-      select: { id: true; isComplete: true };
-    }): Promise<{ id: string; isComplete: boolean } | null>;
+      select: {
+        id: true;
+        isComplete: true;
+        endBlockNumber: true;
+        endTxHash: true;
+      };
+    }): Promise<{
+      id: string;
+      isComplete: boolean;
+      endBlockNumber: bigint;
+      endTxHash: string;
+    } | null>;
     update(args: {
       where: { id: string };
       data: {
@@ -140,7 +148,12 @@ type StoreClient = {
     }): Promise<{ id: string }>;
     findMany(args: {
       where: { chainId: number; walletAddress: string };
-      orderBy: ({ endBlockNumber: "asc" | "desc" } | { endTxHash: "asc" | "desc" } | { stakeId: "asc" | "desc" } | { id: "asc" | "desc" })[];
+      orderBy: (
+        | { endBlockNumber: "asc" | "desc" }
+        | { endTxHash: "asc" | "desc" }
+        | { stakeId: "asc" | "desc" }
+        | { id: "asc" | "desc" }
+      )[];
     }): Promise<
       {
         id: string;
@@ -176,24 +189,73 @@ type StoreClient = {
 
 // ─── Persistence ──────────────────────────────────────────────────────────────
 //
-// Returns the id of the created, upgraded, or pre-existing row, plus flags
-// describing which happened.
+// Lookup identity is exactly the canonical identity enforced by the database:
+// (chainId, lowercase walletAddress, stakeId). endBlockNumber/endTxHash/
+// discoveryMethod never contribute to the lookup — they are evidence attached
+// to the canonical row.
 //
-// - created:  no row existed for the dedupe key; a new row was written.
-// - updated:  a row existed but was previously incomplete, and the incoming
-//             observation is complete; the row is upgraded in place using the
-//             exact evidence on the input (lockedDay, stakeShares, isComplete,
-//             warnings). This reconciles stale rows written before START-time
-//             evidence was available, so the canonical row never lags behind
-//             the completeness the operator result reports.
-// - neither:  a row existed and is left unchanged (already complete, or the
-//             incoming observation is not complete). A complete row is never
-//             downgraded or rewritten; the dedupe identity is never changed.
+// Outcomes:
+//   - created:  no canonical row existed; a new row was written.
+//   - updated:  a canonical row existed but was previously incomplete, and the
+//               incoming observation is complete; the existing row is upgraded
+//               in place (lockedDay, stakeShares, isComplete, warnings). The
+//               canonical row's identity is never rewritten. This reconciles
+//               stale rows persisted before START-time evidence was available.
+//   - conflict: a canonical row exists, and the incoming end evidence
+//               (endBlockNumber and/or endTxHash) disagrees with the persisted
+//               canonical row. Neither a create nor an in-place mutation
+//               happens; the caller receives an operator-safe reason string
+//               so the discovery/route layer can count and surface conflicts
+//               explicitly instead of silently overwriting or duplicating.
+//   - neither created nor updated nor conflict: the canonical row already
+//               exists with matching or non-conflicting evidence; the row is
+//               left unchanged (already complete, or incoming observation is
+//               not complete). A complete row is never downgraded.
+
+export type PersistEndedHexStakeObservationResult =
+  | { id: string; created: boolean; updated: boolean; conflict: false }
+  | {
+      id: string;
+      created: false;
+      updated: false;
+      conflict: true;
+      conflictReason: string;
+    };
+
+// End-evidence attributes compared during conflict detection. endBlockNumber
+// and endTxHash together identify the on-chain end event; a disagreement on
+// either signals two distinct end events being reported for the same
+// canonical stake identity, which the persistence layer must surface rather
+// than silently pick a winner or duplicate the row.
+//
+// The returned string describes *only* which field disagreed and both values —
+// it does not include the warning-code prefix. Callers (discovery, route)
+// own the prefix so it appears exactly once in operator-visible warnings.
+function detectEndEvidenceConflict(
+  persisted: { endBlockNumber: bigint; endTxHash: string },
+  incoming: { endBlockNumber: bigint; endTxHash: string },
+): string | null {
+  if (persisted.endBlockNumber !== incoming.endBlockNumber) {
+    return (
+      `endBlockNumber ` +
+      `persisted=${persisted.endBlockNumber.toString()} ` +
+      `incoming=${incoming.endBlockNumber.toString()}`
+    );
+  }
+  if (persisted.endTxHash.toLowerCase() !== incoming.endTxHash.toLowerCase()) {
+    return (
+      `endTxHash ` +
+      `persisted=${persisted.endTxHash} ` +
+      `incoming=${incoming.endTxHash}`
+    );
+  }
+  return null;
+}
 
 export async function persistEndedHexStakeObservation(
   input: PersistEndedHexStakeObservationInput,
   client: StoreClient = getDb(),
-): Promise<{ id: string; created: boolean; updated: boolean }> {
+): Promise<PersistEndedHexStakeObservationResult> {
   const walletAddress = input.walletAddress.toLowerCase();
 
   const existing = await client.rawEndedHexStakeObservation.findFirst({
@@ -201,54 +263,117 @@ export async function persistEndedHexStakeObservation(
       chainId: input.chainId,
       walletAddress,
       stakeId: input.stakeId,
-      endBlockNumber: input.endBlockNumber,
-      discoveryMethod: input.discoveryMethod,
     },
-    select: { id: true, isComplete: true },
+    select: {
+      id: true,
+      isComplete: true,
+      endBlockNumber: true,
+      endTxHash: true,
+    },
   });
 
   if (existing) {
-    if (existing.isComplete === false && input.isComplete === true) {
-      const upgraded = await client.rawEndedHexStakeObservation.update({
-        where: { id: existing.id },
-        data: {
-          lockedDay: input.lockedDay,
-          stakeShares: input.stakeShares,
-          isComplete: input.isComplete,
-          warnings: input.warnings,
-        },
-      });
-
-      return { id: upgraded.id, created: false, updated: true };
-    }
-
-    return { id: existing.id, created: false, updated: false };
+    return reconcileWithExisting(existing, input, client);
   }
 
-  const created = await client.rawEndedHexStakeObservation.create({
-    data: {
-      chainId: input.chainId,
-      walletAddress,
-      stakeId: input.stakeId,
-      stakeIndex: input.stakeIndex,
-      stakedDays: input.stakedDays,
-      lockedDay: input.lockedDay,
-      stakeShares: input.stakeShares,
-      principalHex: input.principalHex,
-      yieldHex: input.yieldHex,
-      penaltyHex: input.penaltyHex,
-      endTxHash: input.endTxHash,
-      endBlockNumber: input.endBlockNumber,
-      startTxHash: input.startTxHash,
-      startBlockNumber: input.startBlockNumber,
-      discoveryMethod: input.discoveryMethod,
-      observedAt: input.observedAt,
-      isComplete: input.isComplete,
-      warnings: input.warnings,
-    },
-  });
+  // No canonical row yet — attempt the insert. A concurrent writer may win the
+  // race and cause the DB unique constraint to fire P2002; that path re-reads
+  // the canonical row and reconciles by the same identity/evidence rules used
+  // above. Every other Prisma error is rethrown unchanged.
+  try {
+    const created = await client.rawEndedHexStakeObservation.create({
+      data: {
+        chainId: input.chainId,
+        walletAddress,
+        stakeId: input.stakeId,
+        stakeIndex: input.stakeIndex,
+        stakedDays: input.stakedDays,
+        lockedDay: input.lockedDay,
+        stakeShares: input.stakeShares,
+        principalHex: input.principalHex,
+        yieldHex: input.yieldHex,
+        penaltyHex: input.penaltyHex,
+        endTxHash: input.endTxHash,
+        endBlockNumber: input.endBlockNumber,
+        startTxHash: input.startTxHash,
+        startBlockNumber: input.startBlockNumber,
+        discoveryMethod: input.discoveryMethod,
+        observedAt: input.observedAt,
+        isComplete: input.isComplete,
+        warnings: input.warnings,
+      },
+    });
 
-  return { id: created.id, created: true, updated: false };
+    return { id: created.id, created: true, updated: false, conflict: false };
+  } catch (err) {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      const raced = await client.rawEndedHexStakeObservation.findFirst({
+        where: {
+          chainId: input.chainId,
+          walletAddress,
+          stakeId: input.stakeId,
+        },
+        select: {
+          id: true,
+          isComplete: true,
+          endBlockNumber: true,
+          endTxHash: true,
+        },
+      });
+      if (raced) {
+        return reconcileWithExisting(raced, input, client);
+      }
+      // P2002 without a discoverable row is an invariant break — surface it
+      // rather than silently returning a fake success.
+      throw err;
+    }
+    throw err;
+  }
+}
+
+async function reconcileWithExisting(
+  existing: {
+    id: string;
+    isComplete: boolean;
+    endBlockNumber: bigint;
+    endTxHash: string;
+  },
+  input: PersistEndedHexStakeObservationInput,
+  client: StoreClient,
+): Promise<PersistEndedHexStakeObservationResult> {
+  const conflictReason = detectEndEvidenceConflict(
+    { endBlockNumber: existing.endBlockNumber, endTxHash: existing.endTxHash },
+    { endBlockNumber: input.endBlockNumber, endTxHash: input.endTxHash },
+  );
+
+  if (conflictReason) {
+    return {
+      id: existing.id,
+      created: false,
+      updated: false,
+      conflict: true,
+      conflictReason,
+    };
+  }
+
+  if (existing.isComplete === false && input.isComplete === true) {
+    const upgraded = await client.rawEndedHexStakeObservation.update({
+      where: { id: existing.id },
+      data: {
+        lockedDay: input.lockedDay,
+        stakeShares: input.stakeShares,
+        isComplete: input.isComplete,
+        warnings: input.warnings,
+      },
+    });
+
+    return { id: upgraded.id, created: false, updated: true, conflict: false };
+  }
+
+  return { id: existing.id, created: false, updated: false, conflict: false };
 }
 
 // ─── Read ──────────────────────────────────────────────────────────────────────
