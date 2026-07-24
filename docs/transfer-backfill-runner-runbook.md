@@ -39,11 +39,25 @@ Dry-run is the default — no flags needed. It:
 - computes the next window (number, startBlock, endBlock, policyLabel),
 - runs every pre-submit gate (health, active-operation, policyLabel
   collision, adjacency, range size, fabricated-contamination pre-gate),
-- writes one evidence record with `outcome: "dry_run_planned"`,
-- **never** calls `POST /api/sync/manual` or `POST /api/rebuild`.
+- writes one evidence record per previewed window with
+  `outcome: "dry_run_planned"`,
+- **never** calls `POST /api/sync/manual` or `POST /api/rebuild`, and never
+  mutates `SyncCursor`, `SyncRun`, raw, ledger, or materialized data.
+
+With `--max-windows N`, dry-run previews **N distinct sequential windows**:
+the first is planned from the real live cursor; each later one is planned
+from an in-memory simulated cursor that advances to the previous preview's
+`startBlock`. The simulation exists only inside that single dry-run process —
+nothing in PostgreSQL moves, and execute mode never uses it. Each evidence
+record carries `cursorSource: "live" | "simulated"` (simulated records also
+carry `simulatedCursorFromBlock`) so a simulated preview can never be
+mistaken for a live-planned one. `cursorBefore` always reports the real live
+cursor. A checkpoint boundary crossed inside the simulation is preview-only —
+no rebuild is ever submitted in dry-run, regardless of
+`--allow-checkpoint-rebuild`.
 
 Run this before any execution batch and after any interruption, to see
-exactly what the next window would be before committing to it.
+exactly what the next window(s) would be before committing to them.
 
 ## Executing one window
 
@@ -84,11 +98,26 @@ do not scale up batch size on trust alone.
 npm run backfill:transfers -- --execute --expected-cursor-from 26679999
 ```
 
-`--expected-cursor-from` is an optional extra safety net: if the live
-persisted cursor does not exactly match the value you expect from the last
-approved evidence record, the runner stops with `cursor_expectation_mismatch`
-before touching anything. Use it whenever you are resuming after a gap in
-your own tracking.
+`--expected-cursor-from` is the operator's **initial preflight assertion**:
+if the live persisted cursor does not exactly match the value you expect from
+the last approved evidence record, the runner stops with
+`cursor_expectation_mismatch` before touching anything. Use it whenever you
+are resuming after a gap in your own tracking.
+
+In a multi-window batch the flag is validated once against the live cursor
+before the first submission; it is **not** re-compared verbatim after every
+window (that would falsely stop window 2, since the cursor legitimately
+advances). Instead, after each window completes and passes every post-run
+gate (terminal state, warnings, cursor postcondition, contamination,
+duplicates, active operations), the runner internally expects the verified
+next cursor value — normally the just-completed window's `startBlock`. The
+live `SyncCursor` is re-read and checked against that internal expectation
+before each later submission, so any unexpected cursor movement between
+windows (another process, manual edit, concurrent operation) stops the batch
+with `cursor_expectation_mismatch` before the next `POST`. This internal
+check stays active even when `--expected-cursor-from` was omitted, once the
+first window of the batch has completed. Execute-mode planning always uses
+the live persisted cursor — never a simulated or remembered value.
 
 ## Resuming safely
 
