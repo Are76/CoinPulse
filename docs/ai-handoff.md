@@ -143,7 +143,7 @@ These rules apply to every PR. [E1]
 - **HTT** (Hedron Token Transfer / Actuator delegated) source family — not started. [E1]
 - `lockedDay` and `stakeShares` recovery / exact yield (`status: "exact"`) for ended stakes — no on-chain backfill implemented; no ended-stake live verification exists. [E1]
 - HexMining pricing, valuation, and PnL remain Phase 7; `valuation.status` and `pnl.status` stay `"unsupported"`. [E1] [E3]
-- Ended stake and HSI frontend UI — no display in the app. [E1]
+- HSI frontend UI — no display in the app. Native ended-stake frontend display shipped in #340 and is in Phase 1 scope (D-032). [E1]
 - Ethereum eHEX remains future scope. [E1]
 
 **Operator tools available (do NOT treat as gate-lift):**
@@ -226,7 +226,7 @@ After PRs #252 (Gate 11), #307–#310 (Phase 5), #312–#317 (Phase 6 HSI implem
 4. Phase 6 **HSI backend implementation is complete**: persistence (#312–#313), discovery (#314), reader enrichment (#315), and live-verification tooling (#316) are all live. HSI is **not yet exposed via the public DTO/API** (`HexStakeSource` is `"native"` only; the public stakes route calls only `readNativeHexStakes`) — public HSI DTO/API integration is not started.
 5. **HSI live verification is NOT completed. It is deferred pending availability of an HSI-owning wallet.** The tooling shipped but no live run occurred; the evidence template is `PENDING OPERATOR EXECUTION`. No HSI-owning wallet is currently available. Do not claim HSI verification passed.
 6. Native active-stake reads (Phase 2) now have live-verification tooling (#318, live run recorded 32/32 stakes, all checks passed) and single-block read pinning in the production reader (#319).
-7. The **HTT** source family (rest of Phase 6), Phase 7 pricing/valuation/PnL, frontend ended-stake/HSI UI, ended-stake exact-yield, and Ethereum eHEX all remain deferred to their documented phases.
+7. The **HTT** source family (rest of Phase 6), Phase 7 pricing/valuation/PnL, HSI frontend UI, ended-stake exact-yield, and Ethereum eHEX all remain deferred to their documented phases. (Native ended-stake frontend display shipped in #340 and is in Phase 1 scope — see D-032.)
 
 Do not treat Phase 6 HSI implementation as approval for HSI live-verification claims, HTT, Phase 7, Ethereum/Base execution, frontend accounting/pricing/PnL logic, or ended-stake exact-yield. [E1]
 
