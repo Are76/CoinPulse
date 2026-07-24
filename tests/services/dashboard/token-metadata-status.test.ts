@@ -43,6 +43,12 @@ describe("isMetadataStale", () => {
     expect(isMetadataStale(observedAt, asOf)).toBe(true);
   });
 
+  it("returns false when the observation timestamp is in the future relative to asOf", () => {
+    const asOf = new Date("2026-06-05T00:00:00.000Z");
+    const observedAt = new Date(asOf.getTime() + 24 * 60 * 60 * 1_000); // 1 day "ahead" of asOf
+    expect(isMetadataStale(observedAt, asOf)).toBe(false);
+  });
+
   it("accepts a custom threshold and uses it correctly", () => {
     const asOf = new Date("2026-06-05T00:00:00.000Z");
     const tenMinutesAgo = new Date(asOf.getTime() - 10 * 60 * 1_000);
@@ -119,6 +125,30 @@ describe("computeTokenMetadataStatus", () => {
     const result = computeTokenMetadataStatus({
       source: "unknown",
       latestObservedAt: RECENT,
+      asOf: AS_OF,
+      allSources: [{ decimals: 18 }, { decimals: 8 }],
+    });
+    expect(result).toEqual({ status: "unknown", conflictReason: null });
+  });
+
+  it("returns unknown when source is unknown, even when evidence would otherwise be stale", () => {
+    // Highest-priority rule: an unknown source short-circuits before staleness
+    // is ever evaluated, not just before conflict detection.
+    const result = computeTokenMetadataStatus({
+      source: "unknown",
+      latestObservedAt: STALE,
+      asOf: AS_OF,
+      allSources: [{ decimals: 18 }],
+    });
+    expect(result).toEqual({ status: "unknown", conflictReason: null });
+  });
+
+  it("returns unknown when source is unknown, with both conflicting decimals and stale evidence present", () => {
+    // Combines both lower-priority triggers (conflict, stale) to prove unknown
+    // truly wins over every other rule, not just each one individually.
+    const result = computeTokenMetadataStatus({
+      source: "unknown",
+      latestObservedAt: STALE,
       asOf: AS_OF,
       allSources: [{ decimals: 18 }, { decimals: 8 }],
     });
@@ -206,5 +236,70 @@ describe("computeTokenMetadataStatus", () => {
       const result = computeTokenMetadataStatus({ ...params, asOf: AS_OF });
       expect(result.conflictReason).toBeNull();
     }
+  });
+
+  it("returns observed (not stale) when the latest observation is timestamped in the future", () => {
+    const future = new Date(AS_OF.getTime() + 24 * 60 * 60 * 1_000);
+    const result = computeTokenMetadataStatus({
+      source: "chain",
+      latestObservedAt: future,
+      asOf: AS_OF,
+      allSources: [{ decimals: 18 }],
+    });
+    expect(result).toEqual({ status: "observed", conflictReason: null });
+  });
+});
+
+// ─── Purity and determinism ──────────────────────────────────────────────────
+
+describe("computeTokenMetadataStatus — purity and determinism", () => {
+  it("returns deep-equal output for equivalent-but-distinct input objects/arrays", () => {
+    const paramsA = {
+      source: "chain" as const,
+      latestObservedAt: new Date(STALE.getTime()),
+      asOf: new Date(AS_OF.getTime()),
+      allSources: [{ decimals: 18 }, { decimals: 8 }],
+    };
+    const paramsB = {
+      source: "chain" as const,
+      latestObservedAt: new Date(STALE.getTime()),
+      asOf: new Date(AS_OF.getTime()),
+      allSources: [{ decimals: 18 }, { decimals: 8 }],
+    };
+
+    expect(paramsA).not.toBe(paramsB);
+    expect(computeTokenMetadataStatus(paramsA)).toEqual(computeTokenMetadataStatus(paramsB));
+  });
+
+  it("does not mutate the allSources array or its entries", () => {
+    const allSources = [{ decimals: 18 }, { decimals: 8 }];
+    const snapshot = JSON.parse(JSON.stringify(allSources));
+
+    computeTokenMetadataStatus({
+      source: "chain",
+      latestObservedAt: RECENT,
+      asOf: AS_OF,
+      allSources,
+    });
+
+    expect(allSources).toEqual(snapshot);
+    expect(allSources.length).toBe(2);
+  });
+
+  it("does not mutate the asOf or latestObservedAt Date inputs", () => {
+    const asOf = new Date(AS_OF.getTime());
+    const latestObservedAt = new Date(STALE.getTime());
+    const asOfBefore = asOf.getTime();
+    const observedBefore = latestObservedAt.getTime();
+
+    computeTokenMetadataStatus({
+      source: "chain",
+      latestObservedAt,
+      asOf,
+      allSources: [{ decimals: 18 }],
+    });
+
+    expect(asOf.getTime()).toBe(asOfBefore);
+    expect(latestObservedAt.getTime()).toBe(observedBefore);
   });
 });
