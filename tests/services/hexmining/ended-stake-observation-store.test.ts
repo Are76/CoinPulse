@@ -4,14 +4,21 @@
 //
 //   1. persistEndedHexStakeObservation creates a new row on first write.
 //   2. persistEndedHexStakeObservation is idempotent: a second write with the
-//      same dedup key (chainId, walletAddress, stakeId, endBlockNumber,
-//      discoveryMethod) returns created: false and does not write a second row.
-//   3. A different discoveryMethod for the same stake produces a new row.
+//      same canonical identity (chainId, walletAddress, stakeId) returns
+//      created: false and does not write a second row.
+//   3. A different discoveryMethod for the same canonical stake does NOT
+//      produce a second row (D-033: discoveryMethod is evidence, not identity).
 //   4. walletAddress is normalized to lowercase before write and read.
 //   5. Nullable fields (lockedDay, stakeShares, stakeIndex, etc.) are stored
 //      as-is — the store never coerces null to zero or a default value.
 //   6. readEndedHexStakeObservations returns rows ordered by endBlockNumber asc.
-//   7. buildEndedStakeDedupeKey produces a deterministic colon-delimited string.
+//   7. buildEndedStakeDedupeKey produces a deterministic colon-delimited
+//      canonical-identity string.
+//   8. End-evidence conflict (differing endBlockNumber or endTxHash) for the
+//      same canonical identity returns a typed conflict outcome, never creates
+//      a second row, and never overwrites the persisted canonical evidence.
+//   9. Prisma P2002 race path is reconciled by re-reading and applying the
+//      same identity/evidence rules.
 //
 // No live database, no RPC, no network. Pure in-memory mock.
 
@@ -70,20 +77,28 @@ function makeMockDb(initial: StoredRow[] = []) {
           chainId: number;
           walletAddress: string;
           stakeId: string;
-          endBlockNumber: bigint;
-          discoveryMethod: string;
         };
-        select: { id: true; isComplete: true };
+        select: {
+          id: true;
+          isComplete: true;
+          endBlockNumber: true;
+          endTxHash: true;
+        };
       }) {
         const match = rows.find(
           (r) =>
             r.chainId === args.where.chainId &&
             r.walletAddress === args.where.walletAddress &&
-            r.stakeId === args.where.stakeId &&
-            r.endBlockNumber === args.where.endBlockNumber &&
-            r.discoveryMethod === args.where.discoveryMethod,
+            r.stakeId === args.where.stakeId,
         );
-        return match ? { id: match.id, isComplete: match.isComplete } : null;
+        return match
+          ? {
+              id: match.id,
+              isComplete: match.isComplete,
+              endBlockNumber: match.endBlockNumber,
+              endTxHash: match.endTxHash,
+            }
+          : null;
       },
       async update(args: {
         where: { id: string };
@@ -261,20 +276,22 @@ describe("persistEndedHexStakeObservation", () => {
     const db = makeMockDb();
     const result = await persistEndedHexStakeObservation(BASE_INPUT, db);
     expect(result.created).toBe(true);
+    expect(result.conflict).toBe(false);
     expect(typeof result.id).toBe("string");
     expect(result.id.length).toBeGreaterThan(0);
   });
 
-  it("is idempotent: second write with same dedup key returns created: false", async () => {
+  it("is idempotent: second write with same canonical identity returns created: false", async () => {
     const db = makeMockDb();
     const first = await persistEndedHexStakeObservation(BASE_INPUT, db);
     const second = await persistEndedHexStakeObservation(BASE_INPUT, db);
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
+    expect(second.conflict).toBe(false);
     expect(second.id).toBe(first.id);
   });
 
-  it("writes a second row when discoveryMethod differs", async () => {
+  it("does NOT write a second row when only discoveryMethod differs (D-033: evidence, not identity)", async () => {
     const db = makeMockDb();
     const first = await persistEndedHexStakeObservation(
       { ...BASE_INPUT, discoveryMethod: "raw_stake_action" },
@@ -285,8 +302,20 @@ describe("persistEndedHexStakeObservation", () => {
       db,
     );
     expect(first.created).toBe(true);
-    expect(second.created).toBe(true);
-    expect(second.id).not.toBe(first.id);
+    expect(second.created).toBe(false);
+    expect(second.conflict).toBe(false);
+    // Same canonical row — identity-only dedupe.
+    expect(second.id).toBe(first.id);
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: BASE_INPUT.walletAddress },
+      db,
+    );
+    // Exactly one row survives — no discovery-method duplicate.
+    expect(rows.filter((r) => r.stakeId === BASE_INPUT.stakeId)).toHaveLength(1);
+    // The persisted discoveryMethod is the FIRST evidence recorded and is not
+    // silently rewritten by the second observation.
+    expect(rows[0].discoveryMethod).toBe("raw_stake_action");
   });
 
   it("normalizes walletAddress to lowercase", async () => {
@@ -302,6 +331,7 @@ describe("persistEndedHexStakeObservation", () => {
       db,
     );
     expect(result.created).toBe(false);
+    expect(result.conflict).toBe(false);
   });
 
   it("stores null nullable fields without coercing them", async () => {
@@ -357,6 +387,7 @@ describe("persistEndedHexStakeObservation", () => {
 
     const first = await persistEndedHexStakeObservation(INCOMPLETE_INPUT, db);
     expect(first.created).toBe(true);
+    expect(first.conflict).toBe(false);
     expect(first.updated).toBe(false);
 
     const complete: PersistEndedHexStakeObservationInput = {
@@ -368,8 +399,9 @@ describe("persistEndedHexStakeObservation", () => {
     };
     const second = await persistEndedHexStakeObservation(complete, db);
 
-    // Same dedupe key: not created, but reconciled in place.
+    // Same canonical identity: not created, but reconciled in place.
     expect(second.created).toBe(false);
+    expect(second.conflict).toBe(false);
     expect(second.updated).toBe(true);
     expect(second.id).toBe(first.id);
 
@@ -387,6 +419,7 @@ describe("persistEndedHexStakeObservation", () => {
     // A third identical complete write is a no-op (idempotent, no re-upgrade).
     const third = await persistEndedHexStakeObservation(complete, db);
     expect(third.created).toBe(false);
+    expect(third.conflict).toBe(false);
     expect(third.updated).toBe(false);
     expect(third.id).toBe(first.id);
   });
@@ -410,6 +443,7 @@ describe("persistEndedHexStakeObservation", () => {
       db,
     );
     expect(second.created).toBe(false);
+    expect(second.conflict).toBe(false);
     expect(second.updated).toBe(false);
 
     const rows = await readEndedHexStakeObservations(
@@ -432,6 +466,7 @@ describe("persistEndedHexStakeObservation", () => {
       { ...INCOMPLETE_INPUT, lockedDay: 55, stakeShares: uint72Max, isComplete: true, warnings: [] },
       db,
     );
+    expect(upgraded.conflict).toBe(false);
     expect(upgraded.updated).toBe(true);
 
     const rows = await readEndedHexStakeObservations(
@@ -443,6 +478,216 @@ describe("persistEndedHexStakeObservation", () => {
     expect(row.stakeShares).not.toMatch(/[eE]/);
     expect(row.stakeShares).toMatch(/^\d+$/);
     expect(BigInt(row.stakeShares as string).toString()).toBe(uint72Max);
+  });
+
+  // ── Canonical-identity end-evidence conflict (D-033) ─────────────────────
+
+  it("returns conflict (no create, no overwrite) when endBlockNumber disagrees", async () => {
+    const db = makeMockDb();
+
+    const first = await persistEndedHexStakeObservation(BASE_INPUT, db);
+    expect(first.created).toBe(true);
+
+    const second = await persistEndedHexStakeObservation(
+      { ...BASE_INPUT, endBlockNumber: 22000000n },
+      db,
+    );
+
+    expect(second.conflict).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.updated).toBe(false);
+    if (second.conflict) {
+      expect(second.conflictReason).toMatch(/endBlockNumber/);
+      expect(second.conflictReason).toContain("21000000");
+      expect(second.conflictReason).toContain("22000000");
+    }
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: BASE_INPUT.walletAddress },
+      db,
+    );
+    // Still exactly one canonical row with the ORIGINAL evidence.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].endBlockNumber).toBe(21000000n);
+    expect(rows[0].endTxHash).toBe("0xabc123");
+  });
+
+  it("returns conflict (no create, no overwrite) when endTxHash disagrees", async () => {
+    const db = makeMockDb();
+
+    const first = await persistEndedHexStakeObservation(BASE_INPUT, db);
+    expect(first.created).toBe(true);
+
+    const second = await persistEndedHexStakeObservation(
+      { ...BASE_INPUT, endTxHash: "0xdifferent" },
+      db,
+    );
+
+    expect(second.conflict).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.updated).toBe(false);
+    if (second.conflict) {
+      expect(second.conflictReason).toMatch(/endTxHash/);
+      expect(second.conflictReason).toContain("0xabc123");
+      expect(second.conflictReason).toContain("0xdifferent");
+    }
+
+    const rows = await readEndedHexStakeObservations(
+      { chainId: 369, walletAddress: BASE_INPUT.walletAddress },
+      db,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].endTxHash).toBe("0xabc123");
+  });
+
+  it("does not conflict when endTxHash differs only in letter casing", async () => {
+    const db = makeMockDb();
+
+    await persistEndedHexStakeObservation({ ...BASE_INPUT, endTxHash: "0xABCDEF" }, db);
+    const second = await persistEndedHexStakeObservation(
+      { ...BASE_INPUT, endTxHash: "0xabcdef" },
+      db,
+    );
+
+    // Casing-only difference is not a real conflict; treated as the same
+    // evidence.
+    expect(second.conflict).toBe(false);
+    expect(second.created).toBe(false);
+  });
+
+  // ── Prisma P2002 race path ────────────────────────────────────────────────
+
+  it("reconciles a Prisma P2002 race by re-reading and matching evidence (idempotent success)", async () => {
+    const { Prisma } = await import("@prisma/client");
+    let findFirstCalls = 0;
+    let createCalls = 0;
+
+    const client = {
+      rawEndedHexStakeObservation: {
+        // First findFirst returns null (no row yet), second (after race) returns
+        // the row inserted by the "other writer".
+        async findFirst() {
+          findFirstCalls += 1;
+          if (findFirstCalls === 1) return null;
+          return {
+            id: "raced-row-id",
+            isComplete: false,
+            endBlockNumber: BASE_INPUT.endBlockNumber,
+            endTxHash: BASE_INPUT.endTxHash,
+          };
+        },
+        async create() {
+          createCalls += 1;
+          throw new Prisma.PrismaClientKnownRequestError(
+            "Unique constraint failed",
+            { code: "P2002", clientVersion: "test", meta: { target: ["chainId", "walletAddress", "stakeId"] } },
+          );
+        },
+        async update(args: { where: { id: string }; data: { isComplete: boolean } }) {
+          return { id: args.where.id };
+        },
+      },
+    };
+
+    const result = await persistEndedHexStakeObservation(
+      BASE_INPUT,
+      client as unknown as Parameters<typeof persistEndedHexStakeObservation>[1],
+    );
+
+    // Same evidence → race resolved as a plain existing-row outcome.
+    expect(result.conflict).toBe(false);
+    expect(result.created).toBe(false);
+    // The incoming is complete and the raced row was incomplete → upgraded.
+    expect(result.updated).toBe(true);
+    expect(result.id).toBe("raced-row-id");
+    expect(createCalls).toBe(1);
+    expect(findFirstCalls).toBe(2);
+  });
+
+  it("reconciles a Prisma P2002 race as a CONFLICT when raced row has different endBlockNumber", async () => {
+    const { Prisma } = await import("@prisma/client");
+    let findFirstCalls = 0;
+
+    const client = {
+      rawEndedHexStakeObservation: {
+        async findFirst() {
+          findFirstCalls += 1;
+          if (findFirstCalls === 1) return null;
+          return {
+            id: "raced-row-id",
+            isComplete: true,
+            endBlockNumber: 99999999n,
+            endTxHash: "0xotherwriter",
+          };
+        },
+        async create() {
+          throw new Prisma.PrismaClientKnownRequestError(
+            "Unique constraint failed",
+            { code: "P2002", clientVersion: "test", meta: { target: ["chainId", "walletAddress", "stakeId"] } },
+          );
+        },
+        async update() {
+          throw new Error("update must not be called during conflict path");
+        },
+      },
+    };
+
+    const result = await persistEndedHexStakeObservation(
+      BASE_INPUT,
+      client as unknown as Parameters<typeof persistEndedHexStakeObservation>[1],
+    );
+
+    expect(result.conflict).toBe(true);
+    expect(result.created).toBe(false);
+    if (result.conflict) {
+      expect(result.conflictReason).toMatch(/endBlockNumber/);
+    }
+    expect(findFirstCalls).toBe(2);
+  });
+
+  it("does not swallow non-P2002 Prisma errors from create", async () => {
+    const { Prisma } = await import("@prisma/client");
+
+    const client = {
+      rawEndedHexStakeObservation: {
+        async findFirst() {
+          return null;
+        },
+        async create() {
+          throw new Prisma.PrismaClientKnownRequestError(
+            "Connection lost",
+            { code: "P1017", clientVersion: "test" },
+          );
+        },
+      },
+    };
+
+    await expect(
+      persistEndedHexStakeObservation(
+        BASE_INPUT,
+        client as unknown as Parameters<typeof persistEndedHexStakeObservation>[1],
+      ),
+    ).rejects.toMatchObject({ code: "P1017" });
+  });
+
+  it("does not swallow generic (non-Prisma) errors from create", async () => {
+    const client = {
+      rawEndedHexStakeObservation: {
+        async findFirst() {
+          return null;
+        },
+        async create() {
+          throw new Error("network exploded");
+        },
+      },
+    };
+
+    await expect(
+      persistEndedHexStakeObservation(
+        BASE_INPUT,
+        client as unknown as Parameters<typeof persistEndedHexStakeObservation>[1],
+      ),
+    ).rejects.toThrow("network exploded");
   });
 });
 
@@ -560,16 +805,14 @@ describe("readEndedHexStakeObservations", () => {
   });
 });
 
-describe("buildEndedStakeDedupeKey", () => {
-  it("produces a deterministic colon-delimited string", () => {
+describe("buildEndedStakeDedupeKey (canonical identity)", () => {
+  it("produces a deterministic colon-delimited canonical-identity string", () => {
     const key = buildEndedStakeDedupeKey({
       chainId: 369,
       walletAddress: "0xabcdef",
       stakeId: "942663",
-      endBlockNumber: 21000000n,
-      discoveryMethod: "raw_stake_action",
     });
-    expect(key).toBe("369:0xabcdef:942663:21000000:raw_stake_action");
+    expect(key).toBe("369:0xabcdef:942663");
   });
 
   it("normalizes walletAddress to lowercase in the key", () => {
@@ -577,26 +820,46 @@ describe("buildEndedStakeDedupeKey", () => {
       chainId: 369,
       walletAddress: "0xAbCdEf",
       stakeId: "1",
-      endBlockNumber: 1n,
-      discoveryMethod: "raw_stake_action",
     });
-    expect(key).toBe("369:0xabcdef:1:1:raw_stake_action");
+    expect(key).toBe("369:0xabcdef:1");
   });
 
-  it("produces different keys for different discovery methods", () => {
-    const base = {
+  it("produces the SAME key for the same canonical stake regardless of discovery method or block", () => {
+    // D-033: discoveryMethod, endBlockNumber, and endTxHash are evidence, not
+    // identity. The canonical dedupe key must not include them, or a second
+    // observation from a different source would appear to be a distinct stake.
+    const key = buildEndedStakeDedupeKey({
       chainId: 369,
       walletAddress: "0xabc",
       stakeId: "1",
-      endBlockNumber: 100n,
-    };
+    });
+    expect(key).toBe("369:0xabc:1");
+  });
+
+  it("produces different keys for different chainIds (same stakeId, same wallet)", () => {
     const key1 = buildEndedStakeDedupeKey({
-      ...base,
-      discoveryMethod: "raw_stake_action",
+      chainId: 369,
+      walletAddress: "0xabc",
+      stakeId: "1",
     });
     const key2 = buildEndedStakeDedupeKey({
-      ...base,
-      discoveryMethod: "rpc_history",
+      chainId: 1,
+      walletAddress: "0xabc",
+      stakeId: "1",
+    });
+    expect(key1).not.toBe(key2);
+  });
+
+  it("produces different keys for different wallets (same chainId, same stakeId)", () => {
+    const key1 = buildEndedStakeDedupeKey({
+      chainId: 369,
+      walletAddress: "0xaaa",
+      stakeId: "1",
+    });
+    const key2 = buildEndedStakeDedupeKey({
+      chainId: 369,
+      walletAddress: "0xbbb",
+      stakeId: "1",
     });
     expect(key1).not.toBe(key2);
   });
