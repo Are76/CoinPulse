@@ -1,6 +1,7 @@
 "use client";
 
-import { type FormEvent, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { type FormEvent, Suspense, useEffect, useRef, useState } from "react";
 
 import { EmptyState } from "@/components/ui/data-state/empty-state";
 import { ErrorState } from "@/components/ui/data-state/error-state";
@@ -15,6 +16,12 @@ import { SectionCard } from "@/components/ui/section-card";
 import { SurfaceCard } from "@/components/ui/surface-card";
 import { ApiClientError } from "@/lib/api/hexmining-client";
 import { formatHeartsAsHexDisplay } from "@/lib/hex-format";
+import {
+  CHAIN_ID_PARAM,
+  WALLET_ADDRESS_PARAM,
+  buildWalletNavHref,
+  parseChainIdParam,
+} from "@/lib/navigation/wallet-query-params";
 import { useHexMiningEndedStakesQuery } from "@/lib/query/use-hexmining-ended-stakes-query";
 import { useHexMiningStakesQuery } from "@/lib/query/use-hexmining-stakes-query";
 import type {
@@ -45,9 +52,43 @@ function resolveStatusTone(status: HexStakeStatus): "fresh" | "warn" | "neutral"
 /* ── Screen ──────────────────────────────────────────────────────────────── */
 
 export function HexMiningScreen() {
-  const [walletAddress, setWalletAddress] = useState("");
+  // useSearchParams requires a Suspense boundary for static rendering — same
+  // pattern as app/transactions/page.tsx, kept inside the screen module.
+  return (
+    <Suspense>
+      <HexMiningScreenContent />
+    </Suspense>
+  );
+}
+
+function HexMiningScreenContent() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // HexMining stays PulseChain-only: a walletAddress param seeds the draft
+  // field only when the chainId param is absent or matches chainId 369.
+  // Any other chainId is ignored entirely; nothing ever auto-submits.
+  const rawUrlWallet = (searchParams?.get(WALLET_ADDRESS_PARAM) ?? "").trim();
+  const rawUrlChainId = searchParams?.get(CHAIN_ID_PARAM) ?? null;
+  const urlChainAccepted =
+    rawUrlChainId === null || parseChainIdParam(rawUrlChainId) === PULSECHAIN_CHAIN_ID;
+  const urlWallet = rawUrlWallet.length > 0 && urlChainAccepted ? rawUrlWallet : null;
+
+  const [walletAddress, setWalletAddress] = useState(urlWallet ?? "");
   const [submittedParams, setSubmittedParams] = useState<SubmittedParams | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+
+  // Synchronize the wallet draft when the URL context changes while mounted
+  // (e.g. browser back/forward). Keyed on the applied value so it never loops
+  // and never overwrites in-progress typing without a real param change.
+  const appliedUrlWalletRef = useRef<string | null>(urlWallet);
+  useEffect(() => {
+    if (urlWallet === null) return;
+    if (appliedUrlWalletRef.current === urlWallet) return;
+    appliedUrlWalletRef.current = urlWallet;
+    setWalletAddress(urlWallet);
+  }, [urlWallet]);
 
   const stakesQuery = useHexMiningStakesQuery({
     walletAddress: submittedParams?.walletAddress ?? "",
@@ -71,6 +112,17 @@ export function HexMiningScreen() {
     }
     setValidationError(null);
     setSubmittedParams({ walletAddress: trimmed, chainId: PULSECHAIN_CHAIN_ID });
+
+    // Reflect the validated submission in the URL (navigation context only).
+    // Called once per explicit submit; chainId is always 369 here.
+    appliedUrlWalletRef.current = trimmed;
+    router.replace(
+      buildWalletNavHref(pathname ?? "/hexmining", {
+        walletAddress: trimmed,
+        chainId: PULSECHAIN_CHAIN_ID,
+      }),
+      { scroll: false },
+    );
   }
 
   const isIdle = submittedParams === null && validationError === null;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { PageContainer } from "@/components/ui/page-container";
@@ -15,6 +15,7 @@ import { LabelBadge } from "@/components/ui/status/status-badge";
 import { ProvenanceChip } from "@/components/ui/provenance-chip";
 import { TimestampLabel } from "@/components/ui/value/timestamp-label";
 import { ApiClientError, type TransactionFilters } from "@/lib/api/transactions-client";
+import { buildWalletNavHref } from "@/lib/navigation/wallet-query-params";
 import { queryKeys } from "@/lib/query/query-keys";
 import { useTransactionsQuery } from "@/lib/query/use-transactions-query";
 import { SUPPORTED_CHAINS } from "@/config/chains";
@@ -76,14 +77,21 @@ function truncateTxHash(txHash: string): string {
 
 export function TransactionHistoryScreen() {
   const queryClient = useQueryClient();
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const initialWalletAddress = searchParams?.get("walletAddress") ?? "";
-  const initialChainId = searchParams?.get("chainId") ?? DEFAULT_CHAIN_ID;
-  const initialAssetId = searchParams?.get("assetId") ?? "";
+  const urlWalletAddress = searchParams?.get("walletAddress") ?? "";
+  const urlChainIdParam = searchParams?.get("chainId");
+  const urlAssetId = searchParams?.get("assetId") ?? "";
+  // One key per distinct URL context — the sync/drill-down effect below runs
+  // at most once per key, so it can never loop or resubmit the same context.
+  const urlContextKey = `${urlWalletAddress}|${urlChainIdParam ?? ""}|${urlAssetId}`;
 
-  const [walletAddress, setWalletAddress] = useState(initialWalletAddress);
-  const [chainId, setChainId] = useState(initialChainId);
+  const initialAssetId = urlAssetId;
+
+  const [walletAddress, setWalletAddress] = useState(urlWalletAddress);
+  const [chainId, setChainId] = useState(urlChainIdParam ?? DEFAULT_CHAIN_ID);
   const [limit, setLimit] = useState("");
   const [filterAssetId, setFilterAssetId] = useState(initialAssetId);
   const [filterActionType, setFilterActionType] = useState("");
@@ -99,7 +107,7 @@ export function TransactionHistoryScreen() {
   const [accumulatedTransactions, setAccumulatedTransactions] = useState<TransactionDto[]>([]);
   const [latestPage, setLatestPage] = useState<TransactionsPageDto | null>(null);
   const activeSubmitKeyRef = useRef<number>(0);
-  const drillDownSubmittedRef = useRef(false);
+  const handledUrlContextKeyRef = useRef<string | null>(null);
 
   const transactionsQuery = useTransactionsQuery({
     walletAddress: submittedParams?.walletAddress ?? "",
@@ -131,16 +139,33 @@ export function TransactionHistoryScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactionsQuery.data, currentCursor, submitKey]);
 
-  // Auto-submit once on mount when arriving via drill-down (assetId in URL)
+  // URL context handling — runs at most once per distinct URL context key:
+  // - On mount, draft fields are already seeded from the URL by the state
+  //   initializers above, so only the drill-down auto-submit applies.
+  // - On a same-route search-param change (e.g. back/forward or a new
+  //   drill-down while mounted), draft fields are synchronized from the URL.
+  //   Draft typing never changes the key, so typing is never overwritten.
+  // - The one-time auto-submit fires only for the complete drill-down
+  //   contract (walletAddress + assetId, with chainId defaulting as before);
+  //   the key guard prevents the same drill-down from resubmitting.
+  //   walletAddress + chainId without assetId only fills draft fields.
   useEffect(() => {
-    if (drillDownSubmittedRef.current) return;
-    if (!initialWalletAddress || !initialAssetId) return;
-    drillDownSubmittedRef.current = true;
+    if (handledUrlContextKeyRef.current === urlContextKey) return;
+    const isInitialUrl = handledUrlContextKeyRef.current === null;
+    handledUrlContextKeyRef.current = urlContextKey;
+
+    if (!isInitialUrl) {
+      setWalletAddress(urlWalletAddress);
+      setChainId(urlChainIdParam ?? DEFAULT_CHAIN_ID);
+      setFilterAssetId(urlAssetId);
+    }
+
+    if (!urlWalletAddress || !urlAssetId) return;
     const submission = resolveSubmission({
-      walletAddress: initialWalletAddress,
-      chainId: initialChainId,
+      walletAddress: urlWalletAddress,
+      chainId: urlChainIdParam ?? DEFAULT_CHAIN_ID,
       limit: "",
-      filters: { assetId: initialAssetId },
+      filters: { assetId: urlAssetId },
     });
     if (submission.submittedParams === null) return;
     const params = submission.submittedParams;
@@ -150,9 +175,8 @@ export function TransactionHistoryScreen() {
     setAccumulatedTransactions([]);
     setLatestPage(null);
     setSubmittedParams({ ...params, submitKey: nextKey });
-  // Only run once on mount — intentionally omitting reactive deps
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Intentionally keyed on the URL context only — draft state must not retrigger it
+  }, [urlContextKey, urlWalletAddress, urlChainIdParam, urlAssetId]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -194,6 +218,20 @@ export function TransactionHistoryScreen() {
     setAccumulatedTransactions([]);
     setLatestPage(null);
     setSubmittedParams({ ...params, submitKey: nextKey });
+
+    // Reflect the validated submission in the URL (navigation context only).
+    // Only walletAddress and chainId are written — assetId stays a drill-down
+    // entry parameter and filters are not persisted in the URL by this screen.
+    // The handled-key ref is pre-set so the URL sync effect neither clobbers
+    // filter drafts nor re-submits after the replace.
+    handledUrlContextKeyRef.current = `${params.walletAddress}|${String(params.chainId)}|`;
+    router.replace(
+      buildWalletNavHref(pathname ?? "/transactions", {
+        walletAddress: params.walletAddress,
+        chainId: params.chainId,
+      }),
+      { scroll: false },
+    );
   }
 
   function handleLoadMore() {

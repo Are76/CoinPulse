@@ -11,6 +11,12 @@ import type {
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  usePathname: () => "/transactions",
+  useSearchParams: () => null,
+}));
+
 vi.mock("@/lib/query/use-transactions-query", () => ({
   useTransactionsQuery: vi.fn(),
 }));
