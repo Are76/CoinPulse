@@ -21,7 +21,9 @@ export function DataTableShell({
           </p>
         ) : null}
       </div>
-      <DataTable className="cp-table">{children}</DataTable>
+      <div className="overflow-x-auto">
+        <DataTable className="cp-table">{children}</DataTable>
+      </div>
     </TableFrame>
   );
 }
