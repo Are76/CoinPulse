@@ -49,6 +49,33 @@ describe("DataTableShell — horizontal scroll containment", () => {
     expect(screen.getByRole("table")).not.toHaveClass("overflow-x-auto");
   });
 
+  it("the scroll wrapper is a keyboard-focusable region with an accessible name", () => {
+    render(
+      <DataTableShell title="Test table">
+        <thead>
+          <tr>
+            <th scope="col">Column</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Value</td>
+          </tr>
+        </tbody>
+      </DataTableShell>,
+    );
+
+    const table = screen.getByRole("table");
+    const scrollWrapper = table.parentElement;
+    expect(scrollWrapper).not.toBeNull();
+    expect(scrollWrapper).toHaveAttribute("role", "region");
+    expect(scrollWrapper).toHaveAttribute("tabIndex", "0");
+    expect(scrollWrapper).toHaveAccessibleName();
+
+    const region = screen.getByRole("region", { name: "Test table table" });
+    expect(region).toBe(scrollWrapper);
+  });
+
   it("renders title and subtitle unchanged", () => {
     render(
       <DataTableShell title="Test table" subtitle="Test subtitle">
@@ -62,6 +89,26 @@ describe("DataTableShell — horizontal scroll containment", () => {
 
     expect(screen.getByText("Test table")).toBeInTheDocument();
     expect(screen.getByText("Test subtitle")).toBeInTheDocument();
+  });
+
+  it("title and subtitle remain outside the horizontal scroll region", () => {
+    render(
+      <DataTableShell title="Test table" subtitle="Test subtitle">
+        <tbody>
+          <tr>
+            <td>Value</td>
+          </tr>
+        </tbody>
+      </DataTableShell>,
+    );
+
+    const table = screen.getByRole("table");
+    const scrollWrapper = table.parentElement!;
+    const titleEl = screen.getByText("Test table");
+    const subtitleEl = screen.getByText("Test subtitle");
+
+    expect(scrollWrapper.contains(titleEl)).toBe(false);
+    expect(scrollWrapper.contains(subtitleEl)).toBe(false);
   });
 
   it("renders table children content unchanged", () => {

@@ -21,7 +21,12 @@ export function DataTableShell({
           </p>
         ) : null}
       </div>
-      <div className="overflow-x-auto">
+      <div
+        className="overflow-x-auto"
+        role="region"
+        tabIndex={0}
+        aria-label={`${title} table`}
+      >
         <DataTable className="cp-table">{children}</DataTable>
       </div>
     </TableFrame>
