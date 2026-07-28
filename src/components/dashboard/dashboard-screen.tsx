@@ -1,7 +1,8 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { type FormEvent, Suspense, useEffect, useRef, useState } from "react";
 
 import { PageContainer } from "@/components/ui/page-container";
 import {
@@ -30,6 +31,10 @@ import {
   findTrackedWalletLabel,
   type SubmittedParams,
 } from "@/components/dashboard/dashboard-screen-helpers";
+import {
+  buildWalletNavHref,
+  parseWalletNavContext,
+} from "@/lib/navigation/wallet-query-params";
 import { queryKeys } from "@/lib/query/query-keys";
 import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
 import { useDebugHealthQuery } from "@/lib/query/use-debug-health-query";
@@ -42,9 +47,32 @@ const DASHBOARD_SCHEMA_VERSION = "v1" as const;
 const DISABLE_REFETCH_INTERVAL = false as const;
 
 export function DashboardScreen() {
+  // useSearchParams requires a Suspense boundary for static rendering — same
+  // pattern as app/transactions/page.tsx, kept inside the screen module.
+  return (
+    <Suspense>
+      <DashboardScreenContent />
+    </Suspense>
+  );
+}
+
+function DashboardScreenContent() {
   const queryClient = useQueryClient();
-  const [walletAddress, setWalletAddress] = useState("");
-  const [chainId, setChainId] = useState(DEFAULT_CHAIN_ID);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // URL navigation context (draft-state input only — never enables a query).
+  // Invalid or partial params yield null and fall back to form defaults.
+  const urlWalletContext = parseWalletNavContext(searchParams);
+  const urlWallet = urlWalletContext?.walletAddress ?? null;
+  const urlChainId = urlWalletContext?.chainId ?? null;
+  const urlContextKey = urlWallet !== null && urlChainId !== null ? `${urlWallet}|${urlChainId}` : null;
+
+  const [walletAddress, setWalletAddress] = useState(urlWallet ?? "");
+  const [chainId, setChainId] = useState(
+    urlChainId !== null ? String(urlChainId) : DEFAULT_CHAIN_ID,
+  );
   const [submittedParams, setSubmittedParams] = useState<SubmittedParams | null>(null);
   const [submittedWalletSource, setSubmittedWalletSource] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -72,12 +100,35 @@ export function DashboardScreen() {
       )
     : null;
 
+  // Synchronize draft fields when the URL navigation context changes while
+  // mounted (e.g. browser back/forward). Keyed on the applied context so it
+  // never loops and never overwrites in-progress typing without a real
+  // search-param change. Submitted state is untouched — no auto-submit.
+  // When the context disappears or becomes invalid (urlContextKey === null),
+  // the previously-applied URL-derived draft is cleared back to defaults so
+  // stale wallet/chain values don't linger, and the ref resets so the same
+  // valid context can re-apply cleanly on a later navigation.
+  const appliedUrlContextKeyRef = useRef<string | null>(urlContextKey);
+  useEffect(() => {
+    if (appliedUrlContextKeyRef.current === urlContextKey) return;
+    appliedUrlContextKeyRef.current = urlContextKey;
+    if (urlContextKey === null) {
+      setWalletAddress("");
+      setChainId(DEFAULT_CHAIN_ID);
+      return;
+    }
+    setWalletAddress(urlWallet!);
+    setChainId(String(urlChainId));
+  }, [urlContextKey, urlWallet, urlChainId]);
+
   // Auto-load first tracked wallet on initial page view, but not after the user
   // has started editing the form — hasInteracted guards against overwriting
-  // in-progress manual input with wallets[0].
+  // in-progress manual input with wallets[0]. A valid URL wallet context also
+  // suppresses the auto-load so it cannot overwrite the URL-derived draft.
   const autoLoadedRef = useRef(false);
   useEffect(() => {
     if (autoLoadedRef.current || hasInteracted || submittedParams !== null) return;
+    if (urlContextKey !== null) return;
     if (!trackedWalletsQuery.isSuccess) return;
     const wallets = trackedWalletsQuery.data?.wallets ?? [];
     if (wallets.length === 0) return;
@@ -89,7 +140,7 @@ export function DashboardScreen() {
     setChainId(String(first.chainId));
     setSubmittedParams(params);
     setSubmittedWalletSource(resolveSubmittedWalletSource(params, wallets));
-  }, [hasInteracted, trackedWalletsQuery.isSuccess, trackedWalletsQuery.data, submittedParams]);
+  }, [hasInteracted, trackedWalletsQuery.isSuccess, trackedWalletsQuery.data, submittedParams, urlContextKey]);
 
   function handleSelectTrackedWallet(address: string, selectedChainId: string) {
     setHasInteracted(true);
@@ -140,6 +191,19 @@ export function DashboardScreen() {
         params,
         hasHealthyTrackedWallets ? trackedWallets : undefined,
       ),
+    );
+
+    // Reflect the validated submission in the URL (navigation context only).
+    // Called once per explicit submit — never on keystrokes or tracked-wallet
+    // selection. The applied-context ref is pre-set so the sync effect does
+    // not re-apply the same values over subsequent edits.
+    appliedUrlContextKeyRef.current = `${params.walletAddress}|${params.chainId}`;
+    router.replace(
+      buildWalletNavHref(pathname ?? "/", {
+        walletAddress: params.walletAddress,
+        chainId: params.chainId,
+      }),
+      { scroll: false },
     );
   }
 

@@ -12,6 +12,12 @@ import type {
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  usePathname: () => "/hexmining",
+  useSearchParams: () => null,
+}));
+
 vi.mock("@/lib/query/use-hexmining-stakes-query", () => ({
   useHexMiningStakesQuery: vi.fn(),
 }));

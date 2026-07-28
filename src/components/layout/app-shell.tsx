@@ -1,8 +1,66 @@
-import type { ReactNode } from "react";
+"use client";
+
+import { Suspense, type ReactNode } from "react";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+
+import {
+  buildWalletNavHref,
+  parseWalletNavContext,
+} from "@/lib/navigation/wallet-query-params";
 
 import { OPERATOR_NAV_LINKS, PRIMARY_NAV_LINKS } from "./nav-config";
+
+/**
+ * Primary links rendered without wallet context. Used directly as the
+ * Suspense fallback so navigation is always present, and as the no-context
+ * render path in tests/environments without a router.
+ */
+function StaticPrimaryNavLinks({ linkClassName }: { linkClassName: string }) {
+  return (
+    <>
+      {PRIMARY_NAV_LINKS.map((link) => (
+        <Link key={link.href} href={link.href} className={linkClassName}>
+          {link.label}
+        </Link>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Primary links that forward validated walletAddress/chainId from the current
+ * URL. Destination hrefs are computed at render time; PRIMARY_NAV_LINKS is
+ * never mutated. Invalid or absent params fall back to the plain hrefs, and
+ * assetId (or any other param) is never forwarded.
+ */
+function WalletContextPrimaryNavLinks({ linkClassName }: { linkClassName: string }) {
+  const searchParams = useSearchParams();
+  const walletNavContext = parseWalletNavContext(searchParams);
+
+  return (
+    <>
+      {PRIMARY_NAV_LINKS.map((link) => (
+        <Link
+          key={link.href}
+          href={buildWalletNavHref(link.href, walletNavContext)}
+          className={linkClassName}
+        >
+          {link.label}
+        </Link>
+      ))}
+    </>
+  );
+}
+
+function PrimaryNavLinks({ linkClassName }: { linkClassName: string }) {
+  return (
+    <Suspense fallback={<StaticPrimaryNavLinks linkClassName={linkClassName} />}>
+      <WalletContextPrimaryNavLinks linkClassName={linkClassName} />
+    </Suspense>
+  );
+}
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
@@ -13,11 +71,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="coin-sidebar__primary" aria-label="Primary">
-          {PRIMARY_NAV_LINKS.map((link) => (
-            <Link key={link.href} href={link.href} className="coin-sidebar__link">
-              {link.label}
-            </Link>
-          ))}
+          <PrimaryNavLinks linkClassName="coin-sidebar__link" />
         </nav>
 
         <div className="coin-sidebar__section-label">Operator</div>
@@ -40,11 +94,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <details className="coin-mobile-nav__menu">
             <summary className="coin-mobile-nav__toggle">CoinPulse</summary>
             <div className="coin-mobile-nav__links">
-              {PRIMARY_NAV_LINKS.map((link) => (
-                <Link key={link.href} href={link.href} className="coin-mobile-nav__link">
-                  {link.label}
-                </Link>
-              ))}
+              <PrimaryNavLinks linkClassName="coin-mobile-nav__link" />
               <div className="coin-mobile-nav__section-label">Operator</div>
               {OPERATOR_NAV_LINKS.map((link) => (
                 <Link

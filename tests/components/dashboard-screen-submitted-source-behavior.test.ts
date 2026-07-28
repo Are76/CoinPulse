@@ -10,6 +10,12 @@ import { useDebugHealthQuery } from "@/lib/query/use-debug-health-query";
 import { useDebugStatusQuery } from "@/lib/query/use-debug-status-query";
 import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => null,
+}));
+
 vi.mock("@/lib/api/dashboard-client", () => ({
   ApiClientError: class ApiClientError extends Error {},
   fetchDebugHealth: vi.fn(async () => ({

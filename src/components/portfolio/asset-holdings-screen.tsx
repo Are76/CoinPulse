@@ -1,8 +1,9 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 
+import { findTrackedWalletMatch } from "@/components/dashboard/dashboard-screen-helpers";
 import { EmptyState } from "@/components/ui/data-state/empty-state";
 import { ErrorState } from "@/components/ui/data-state/error-state";
 import { LoadingState } from "@/components/ui/data-state/loading-state";
@@ -13,6 +14,7 @@ import { StatusBadge } from "@/components/ui/status/status-badge";
 import { SurfaceCard } from "@/components/ui/surface-card";
 import { ValueDisplay } from "@/components/ui/value/value-display";
 import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
+import { parseWalletNavContext } from "@/lib/navigation/wallet-query-params";
 import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
 import type { DashboardTokenPositionDto, PortfolioSummaryDto } from "@/services/dashboard/types";
 
@@ -25,15 +27,39 @@ function truncateAddress(addr: string): string {
 }
 
 export function AssetHoldingsScreen() {
+  // useSearchParams requires a Suspense boundary for static rendering — same
+  // pattern as the dashboard and HexMining screens.
+  return (
+    <Suspense>
+      <AssetHoldingsScreenContent />
+    </Suspense>
+  );
+}
+
+function AssetHoldingsScreenContent() {
   const [selectedWalletId, setSelectedWalletId] = useState<string | null>(null);
   const trackedWalletsQuery = useTrackedWalletsQuery();
+  const searchParams = useSearchParams();
+
+  // Validated navigation context forwarded from AppShell links. Invalid or
+  // absent params fall back to the existing default-selection behavior.
+  const urlWalletContext = parseWalletNavContext(searchParams);
 
   const wallets =
     trackedWalletsQuery.isSuccess ? trackedWalletsQuery.data.wallets : [];
 
+  // Priority: an explicit manual selection always wins (preserves the
+  // existing wallet-switch buttons); otherwise a tracked wallet matching the
+  // forwarded URL context is selected; otherwise the existing wallets[0]
+  // default applies unchanged.
+  const manuallySelectedWallet = wallets.find((w) => w.id === selectedWalletId) ?? null;
+  const urlMatchedWallet =
+    manuallySelectedWallet === null && urlWalletContext !== null
+      ? findTrackedWalletMatch(wallets, urlWalletContext.walletAddress, urlWalletContext.chainId)
+      : null;
   const selectedWallet =
     wallets.length > 0
-      ? (wallets.find((w) => w.id === selectedWalletId) ?? wallets[0])
+      ? (manuallySelectedWallet ?? urlMatchedWallet ?? wallets[0])
       : null;
 
   const dashboardQuery = useDashboardQuery({
