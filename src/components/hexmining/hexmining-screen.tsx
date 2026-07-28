@@ -81,13 +81,16 @@ function HexMiningScreenContent() {
 
   // Synchronize the wallet draft when the URL context changes while mounted
   // (e.g. browser back/forward). Keyed on the applied value so it never loops
-  // and never overwrites in-progress typing without a real param change.
+  // and never overwrites in-progress typing without a real param change. When
+  // the context is removed or rejected (absent wallet, unsupported chain),
+  // urlWallet becomes null and the previously-applied draft is cleared so it
+  // does not linger; the ref also resets so the same valid wallet can
+  // re-apply cleanly on a later navigation.
   const appliedUrlWalletRef = useRef<string | null>(urlWallet);
   useEffect(() => {
-    if (urlWallet === null) return;
     if (appliedUrlWalletRef.current === urlWallet) return;
     appliedUrlWalletRef.current = urlWallet;
-    setWalletAddress(urlWallet);
+    setWalletAddress(urlWallet ?? "");
   }, [urlWallet]);
 
   const stakesQuery = useHexMiningStakesQuery({

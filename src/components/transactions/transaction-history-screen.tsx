@@ -15,7 +15,7 @@ import { LabelBadge } from "@/components/ui/status/status-badge";
 import { ProvenanceChip } from "@/components/ui/provenance-chip";
 import { TimestampLabel } from "@/components/ui/value/timestamp-label";
 import { ApiClientError, type TransactionFilters } from "@/lib/api/transactions-client";
-import { buildWalletNavHref } from "@/lib/navigation/wallet-query-params";
+import { buildWalletNavHref, parseWalletNavContext } from "@/lib/navigation/wallet-query-params";
 import { queryKeys } from "@/lib/query/query-keys";
 import { useTransactionsQuery } from "@/lib/query/use-transactions-query";
 import { SUPPORTED_CHAINS } from "@/config/chains";
@@ -81,8 +81,15 @@ export function TransactionHistoryScreen() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const urlWalletAddress = searchParams?.get("walletAddress") ?? "";
-  const urlChainIdParam = searchParams?.get("chainId");
+  // walletAddress + chainId are read through the shared validated navigation
+  // helper (trims the address, requires chainId to be a SUPPORTED_CHAINS
+  // integer). An unsupported or malformed chainId invalidates the whole
+  // context — neither field seeds the draft and the drill-down below cannot
+  // auto-submit. assetId stays a raw, transactions-only drill-down parameter
+  // (it is not part of the shared navigation contract).
+  const urlWalletContext = parseWalletNavContext(searchParams);
+  const urlWalletAddress = urlWalletContext?.walletAddress ?? "";
+  const urlChainIdParam = urlWalletContext !== null ? String(urlWalletContext.chainId) : null;
   const urlAssetId = searchParams?.get("assetId") ?? "";
   // One key per distinct URL context — the sync/drill-down effect below runs
   // at most once per key, so it can never loop or resubmit the same context.

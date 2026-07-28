@@ -127,6 +127,68 @@ describe("TransactionHistoryScreen — drill-down contract with assetId", () => 
   });
 });
 
+// ── Validated navigation helper for URL seeding ──────────────────────────────
+
+describe("TransactionHistoryScreen — walletAddress/chainId seeding uses the validated helper", () => {
+  it("an unsupported chainId cannot auto-submit the drill-down", () => {
+    nav.search = `walletAddress=${WALLET}&chainId=1&assetId=${encodeURIComponent(ASSET_ID)}`;
+    renderScreen();
+    expect(enabledCalls()).toHaveLength(0);
+  });
+
+  it("an unsupported chainId does not seed the wallet or chain draft", () => {
+    nav.search = `walletAddress=${WALLET}&chainId=1`;
+    renderScreen();
+    expect(screen.getByLabelText("Wallet address")).toHaveValue("");
+    expect(screen.getByLabelText("Chain ID")).toHaveValue("369");
+  });
+
+  it("a malformed chainId cannot seed the draft", () => {
+    nav.search = `walletAddress=${WALLET}&chainId=abc`;
+    renderScreen();
+    expect(screen.getByLabelText("Wallet address")).toHaveValue("");
+    expect(screen.getByLabelText("Chain ID")).toHaveValue("369");
+  });
+
+  it("a malformed chainId cannot auto-submit even with assetId present", () => {
+    nav.search = `walletAddress=${WALLET}&chainId=abc&assetId=${encodeURIComponent(ASSET_ID)}`;
+    renderScreen();
+    expect(enabledCalls()).toHaveLength(0);
+    expect(screen.getByText("No query submitted")).toBeInTheDocument();
+  });
+
+  it("a valid supported chainId still seeds the draft and auto-submits with assetId", () => {
+    nav.search = `walletAddress=${WALLET}&chainId=369&assetId=${encodeURIComponent(ASSET_ID)}`;
+    renderScreen();
+    expect(screen.getByLabelText("Wallet address")).toHaveValue(WALLET);
+    expect(screen.getByLabelText("Chain ID")).toHaveValue("369");
+    const enabled = enabledCalls();
+    expect(enabled.length).toBeGreaterThan(0);
+    expect(enabled.at(-1)![0]).toMatchObject({
+      walletAddress: WALLET,
+      chainId: 369,
+      filters: { assetId: ASSET_ID },
+    });
+  });
+
+  it("a same-route change from valid to unsupported chain clears the draft, without looping", () => {
+    nav.search = `walletAddress=${WALLET}&chainId=369`;
+    const { rerender } = renderScreen();
+    expect(screen.getByLabelText("Wallet address")).toHaveValue(WALLET);
+
+    nav.search = `walletAddress=${WALLET}&chainId=1`;
+    rerender(<TransactionHistoryScreen />);
+    expect(screen.getByLabelText("Wallet address")).toHaveValue("");
+    expect(enabledCalls()).toHaveLength(0);
+
+    // The same valid context re-applies cleanly afterward
+    nav.search = `walletAddress=${WALLET}&chainId=369`;
+    rerender(<TransactionHistoryScreen />);
+    expect(screen.getByLabelText("Wallet address")).toHaveValue(WALLET);
+    expect(enabledCalls()).toHaveLength(0);
+  });
+});
+
 // ── Same-route URL synchronization ───────────────────────────────────────────
 
 describe("TransactionHistoryScreen — same-route search-param changes", () => {

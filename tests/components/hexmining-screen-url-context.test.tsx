@@ -179,4 +179,41 @@ describe("HexMiningScreen — same-route URL changes", () => {
     expect(stakesEnabledCalls()).toHaveLength(0);
     expect(nav.replace).not.toHaveBeenCalled();
   });
+
+  it("clears the draft when the URL context becomes absent, unsupported, or invalid, then re-seeds from the same valid wallet", () => {
+    nav.search = `walletAddress=${URL_WALLET}&chainId=369`;
+    const { rerender } = renderScreen();
+    expect(screen.getByLabelText("Wallet address")).toHaveValue(URL_WALLET);
+
+    // Absent context
+    nav.search = "";
+    rerender(<HexMiningScreen />);
+    expect(screen.getByLabelText("Wallet address")).toHaveValue("");
+
+    // Re-seed, then reject via unsupported chain
+    nav.search = `walletAddress=${URL_WALLET}&chainId=369`;
+    rerender(<HexMiningScreen />);
+    expect(screen.getByLabelText("Wallet address")).toHaveValue(URL_WALLET);
+
+    nav.search = `walletAddress=${URL_WALLET}&chainId=1`;
+    rerender(<HexMiningScreen />);
+    expect(screen.getByLabelText("Wallet address")).toHaveValue("");
+
+    // Re-seed, then reject via malformed chain
+    nav.search = `walletAddress=${URL_WALLET}&chainId=369`;
+    rerender(<HexMiningScreen />);
+    expect(screen.getByLabelText("Wallet address")).toHaveValue(URL_WALLET);
+
+    nav.search = `walletAddress=${URL_WALLET}&chainId=abc`;
+    rerender(<HexMiningScreen />);
+    expect(screen.getByLabelText("Wallet address")).toHaveValue("");
+
+    // The same valid wallet re-applies cleanly
+    nav.search = `walletAddress=${URL_WALLET}&chainId=369`;
+    rerender(<HexMiningScreen />);
+    expect(screen.getByLabelText("Wallet address")).toHaveValue(URL_WALLET);
+
+    expect(stakesEnabledCalls()).toHaveLength(0);
+    expect(nav.replace).not.toHaveBeenCalled();
+  });
 });

@@ -254,4 +254,52 @@ describe("DashboardScreen — same-route URL changes", () => {
     expect(dashboardQueryEnabledCalls()).toHaveLength(0);
     expect(nav.replace).not.toHaveBeenCalled();
   });
+
+  it("clears the URL-derived draft when the context becomes invalid, then re-applies the same valid context", () => {
+    // No tracked wallets, so the first-tracked-wallet auto-load cannot
+    // interfere with the clear/re-apply assertions below.
+    mockUseTrackedWalletsQuery.mockReturnValue(trackedWalletsSuccess([]) as never);
+
+    nav.search = `walletAddress=${URL_WALLET}&chainId=369`;
+    const { rerender } = renderScreen();
+    expect(screen.getByLabelText("Wallet address")).toHaveValue(URL_WALLET);
+    expect(screen.getByLabelText("Chain ID")).toHaveValue("369");
+
+    // Context becomes invalid (unsupported chain) — draft must clear to defaults
+    nav.search = `walletAddress=${URL_WALLET}&chainId=1`;
+    rerender(<DashboardScreen />);
+    expect(screen.getByLabelText("Wallet address")).toHaveValue("");
+    expect(screen.getByLabelText("Chain ID")).toHaveValue("369");
+
+    // Context becomes absent entirely — draft stays cleared
+    nav.search = "";
+    rerender(<DashboardScreen />);
+    expect(screen.getByLabelText("Wallet address")).toHaveValue("");
+    expect(screen.getByLabelText("Chain ID")).toHaveValue("369");
+
+    // The same valid context re-applies cleanly
+    nav.search = `walletAddress=${URL_WALLET}&chainId=369`;
+    rerender(<DashboardScreen />);
+    expect(screen.getByLabelText("Wallet address")).toHaveValue(URL_WALLET);
+    expect(screen.getByLabelText("Chain ID")).toHaveValue("369");
+
+    // Never auto-submitted and never rewrote the URL throughout
+    expect(dashboardQueryEnabledCalls()).toHaveLength(0);
+    expect(nav.replace).not.toHaveBeenCalled();
+  });
+
+  it("does not loop when the context toggles between valid and invalid repeatedly", () => {
+    mockUseTrackedWalletsQuery.mockReturnValue(trackedWalletsSuccess([]) as never);
+
+    nav.search = `walletAddress=${URL_WALLET}&chainId=369`;
+    const { rerender } = renderScreen();
+    for (let i = 0; i < 3; i++) {
+      nav.search = "";
+      rerender(<DashboardScreen />);
+      nav.search = `walletAddress=${URL_WALLET}&chainId=369`;
+      rerender(<DashboardScreen />);
+    }
+    expect(screen.getByLabelText("Wallet address")).toHaveValue(URL_WALLET);
+    expect(dashboardQueryEnabledCalls()).toHaveLength(0);
+  });
 });

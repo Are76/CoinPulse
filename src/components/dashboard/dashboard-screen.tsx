@@ -104,15 +104,22 @@ function DashboardScreenContent() {
   // mounted (e.g. browser back/forward). Keyed on the applied context so it
   // never loops and never overwrites in-progress typing without a real
   // search-param change. Submitted state is untouched — no auto-submit.
+  // When the context disappears or becomes invalid (urlContextKey === null),
+  // the previously-applied URL-derived draft is cleared back to defaults so
+  // stale wallet/chain values don't linger, and the ref resets so the same
+  // valid context can re-apply cleanly on a later navigation.
   const appliedUrlContextKeyRef = useRef<string | null>(urlContextKey);
   useEffect(() => {
-    if (urlWallet === null || urlChainId === null) return;
-    const key = `${urlWallet}|${urlChainId}`;
-    if (appliedUrlContextKeyRef.current === key) return;
-    appliedUrlContextKeyRef.current = key;
-    setWalletAddress(urlWallet);
+    if (appliedUrlContextKeyRef.current === urlContextKey) return;
+    appliedUrlContextKeyRef.current = urlContextKey;
+    if (urlContextKey === null) {
+      setWalletAddress("");
+      setChainId(DEFAULT_CHAIN_ID);
+      return;
+    }
+    setWalletAddress(urlWallet!);
     setChainId(String(urlChainId));
-  }, [urlWallet, urlChainId]);
+  }, [urlContextKey, urlWallet, urlChainId]);
 
   // Auto-load first tracked wallet on initial page view, but not after the user
   // has started editing the form — hasInteracted guards against overwriting
