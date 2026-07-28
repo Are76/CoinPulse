@@ -24,6 +24,7 @@ import { findTrackedWalletMatch } from "@/components/dashboard/dashboard-screen-
 import type {
   DashboardLedgerCoverageDto,
   DashboardLpPositionDto,
+  DashboardMaterializationDto,
   DashboardMaterializationFreshnessDto,
   DashboardPnlCoverageDto,
   DashboardPnlCoverageReason,
@@ -310,6 +311,115 @@ export function MaterializationFreshnessSection({ freshness }: { freshness: Dash
           View pricing status →
         </Link>
       </div>
+    </SurfaceCard>
+  );
+}
+
+/* ── Materialization integrity ───────────────────────────────────────────── */
+
+export function MaterializationIntegritySection({
+  materialization,
+}: {
+  materialization: DashboardMaterializationDto;
+}) {
+  const hasStatusConcern =
+    materialization.status === "FAILED" ||
+    materialization.status === "RUNNING" ||
+    materialization.completedSuccessfully === false;
+
+  const hasErrorMessage = materialization.errorMessage != null && materialization.errorMessage !== "";
+  const hasWarnings = materialization.warnings.length > 0;
+  const hasNegativeBalanceSignal =
+    materialization.hasNegativeBalances || materialization.negativeBalances.length > 0;
+
+  if (!hasStatusConcern && !hasErrorMessage && !hasWarnings && !hasNegativeBalanceSignal) {
+    return null;
+  }
+
+  return (
+    <SurfaceCard className="flex flex-col gap-4">
+      <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: "#586070", letterSpacing: "0.08em" }}>
+        Materialization integrity
+      </span>
+
+      {hasStatusConcern ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <LabelBadge
+            label={formatMaterializationStatus(materialization.status)}
+            tone={materializationStatusTone(materialization.status, materialization.completedSuccessfully)}
+            size="sm"
+          />
+          <span className="text-xs" style={{ color: "#a0a8c0" }}>
+            Completed successfully: {formatCompletedSuccessfully(materialization.completedSuccessfully)}
+          </span>
+          {materialization.lastAttemptedAt != null ? (
+            <TimestampLabel label="Last attempted:" value={materialization.lastAttemptedAt} />
+          ) : null}
+        </div>
+      ) : null}
+
+      {hasErrorMessage ? (
+        <WarningBanner tone="danger" title="Materialization error">
+          {materialization.errorMessage}
+        </WarningBanner>
+      ) : null}
+
+      {hasWarnings ? (
+        <div className="flex flex-col gap-2">
+          <span className="text-xs" style={{ color: "#586070" }}>
+            Warning count (backend): {materialization.warningCount}
+            {materialization.warningCount !== materialization.warnings.length
+              ? ` (${materialization.warnings.length} shown)`
+              : ""}
+          </span>
+          <ul className="space-y-1.5 text-xs leading-5" style={{ color: "#a0a8c0" }}>
+            {materialization.warnings.map((warning) => (
+              <li key={`${warning.code}:${warning.message}`} className="flex items-start gap-1.5">
+                <span style={{ color: "#f59e0b" }} className="mt-0.5 flex-shrink-0">·</span>
+                <span className="break-words">
+                  <span className="cp-data" style={{ color: "#e4e6f0" }}>{warning.code}</span>
+                  {": "}
+                  {warning.message}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {hasNegativeBalanceSignal ? (
+        <div className="flex flex-col gap-2">
+          {materialization.hasNegativeBalances ? (
+            <WarningBanner tone="danger" title="Negative materialized balances detected">
+              Backend-materialized token balances include negative quantities. Review before trusting portfolio totals.
+            </WarningBanner>
+          ) : (
+            <WarningBanner tone="warn" title="Negative balance entries present without integrity flag">
+              The backend returned negative balance entries while hasNegativeBalances is false. Preserving as reported.
+            </WarningBanner>
+          )}
+          {materialization.negativeBalances.length > 0 ? (
+            <ul className="space-y-1.5 text-xs leading-5" style={{ color: "#a0a8c0" }}>
+              {materialization.negativeBalances.map((negativeBalance) => (
+                <li
+                  key={`${negativeBalance.assetId}:${negativeBalance.assetAddress ?? "no-address"}:${negativeBalance.balanceQuantity}`}
+                  className="flex flex-col gap-0.5"
+                >
+                  <span className="cp-data break-all" style={{ color: "#e4e6f0" }}>
+                    {negativeBalance.assetAddress ?? negativeBalance.assetId}
+                  </span>
+                  <span className="cp-data" style={{ color: "#f87171" }}>
+                    Quantity: {negativeBalance.balanceQuantity}
+                  </span>
+                  {negativeBalance.decimals != null ? (
+                    <span style={{ color: "#586070" }}>Decimals: {negativeBalance.decimals}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
     </SurfaceCard>
   );
 }
@@ -686,6 +796,25 @@ function LabeledField({ label, children }: { label: string; children: ReactNode 
 }
 
 /* ── Formatters ──────────────────────────────────────────────────────────── */
+
+function formatMaterializationStatus(status: DashboardMaterializationDto["status"]) {
+  return status ?? "No materialization record";
+}
+
+function formatCompletedSuccessfully(value: boolean | null) {
+  if (value === null) return "unknown";
+  return value ? "yes" : "no";
+}
+
+function materializationStatusTone(
+  status: DashboardMaterializationDto["status"],
+  completedSuccessfully: boolean | null,
+): BadgeTone {
+  if (status === "FAILED" || completedSuccessfully === false) return "danger";
+  if (status === "RUNNING") return "warn";
+  if (status === "COMPLETED" && completedSuccessfully === true) return "fresh";
+  return "neutral";
+}
 
 function formatPnlCoverageStatus(status: DashboardPnlCoverageStatus): { label: string; tone: BadgeTone } {
   switch (status) {

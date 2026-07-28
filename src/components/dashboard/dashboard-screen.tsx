@@ -13,6 +13,7 @@ import {
   LoadingStateCard,
   LpPositionsTable,
   MaterializationFreshnessSection,
+  MaterializationIntegritySection,
   PnlCoverageSection,
   PortfolioSummarySection,
   StakePositionsTable,
@@ -198,6 +199,9 @@ export function DashboardScreen() {
           <PortfolioSummarySection dashboard={dashboardQuery.data} />
           <MaterializationFreshnessSection
             freshness={dashboardQuery.data.materialization.freshness}
+          />
+          <MaterializationIntegritySection
+            materialization={dashboardQuery.data.materialization}
           />
           <LedgerCoverageSection
             ledgerCoverage={dashboardQuery.data.ledgerCoverage}
