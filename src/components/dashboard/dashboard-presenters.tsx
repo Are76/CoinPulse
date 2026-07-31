@@ -38,6 +38,7 @@ import type {
   DashboardTokenPositionDto,
   PortfolioDashboardDto,
 } from "@/services/dashboard/types";
+import type { PriceObservationRejectReason } from "@/services/pricing/types";
 
 /* ── Top-level hero ──────────────────────────────────────────────────────── */
 
@@ -554,7 +555,7 @@ export function TokenPositionsTable({ positions }: { positions: DashboardTokenPo
                 // in the Pricing column above; avoid duplicating the raw
                 // backend enum here.
                 ...position.pricing.rejectedReasons.filter(
-                  (reason) => getPricingRejectionExplanation([reason]) === null,
+                  (reason) => !hasReviewedRejectionExplanation(reason),
                 ),
                 ...position.pnl.warnings.map((w) => w.detail),
               ]} />
@@ -764,38 +765,58 @@ function MetadataProvenanceDetails({ provenance }: { provenance: DashboardTokenM
   );
 }
 
-// Backend rejection-reason enums (src/services/pricing/types.ts
-// PriceObservationRejectReason) that have a known, reviewed user-facing
+// Backend rejection-reason enums (PriceObservationRejectReason from
+// src/services/pricing/types.ts) that have a known, reviewed user-facing
 // explanation. Any reason not listed here is never shown raw — it falls
-// back to the existing generic unavailable/warning presentation.
+// back to the existing generic unavailable/warning presentation. Typed
+// against the backend enum (rather than plain string keys) so a renamed or
+// removed reason fails to compile here instead of silently going stale.
 const PRICING_REJECTION_EXPLANATIONS: Partial<
-  Record<string, { title: string; message: string }>
+  Record<PriceObservationRejectReason, { title: string; message: string }>
 > = {
   UNVERIFIED_QUOTE_ASSUMPTION: {
     title: "USD price unavailable",
     message:
-      "The available PulseX route is priced in pDAI. CoinPulse does not currently have independent evidence that pDAI equals USD, so no USD valuation or PnL is shown.",
+      "A pDAI-based observation was rejected because CoinPulse does not have independent evidence that pDAI equals USD. Current USD valuation and unrealized PnL are therefore unavailable.",
   },
 };
 
 /**
- * Maps a backend pricing.rejectedReasons entry to a reviewed, user-facing
- * explanation. Returns null for reasons without a reviewed explanation so
- * callers can fall back to the existing generic presentation instead of
- * fabricating copy or leaking the raw backend enum.
+ * Maps a position's backend pricing state to a reviewed, user-facing
+ * explanation. Only returns an explanation when the backend itself reports
+ * pricing as unavailable — a rejected reason can be present alongside a
+ * successfully selected, available price (the resolver keeps rejected
+ * candidates for provenance even when another observation was accepted),
+ * and this must never override or contradict that accepted value. Returns
+ * null for unavailable prices with no reviewed reason so callers can fall
+ * back to the existing generic presentation instead of fabricating copy or
+ * leaking the raw backend enum.
  */
 export function getPricingRejectionExplanation(
-  rejectedReasons: string[],
+  pricing: Pick<DashboardPricingDto, "status" | "rejectedReasons">,
 ): { title: string; message: string } | null {
-  for (const reason of rejectedReasons) {
-    const explanation = PRICING_REJECTION_EXPLANATIONS[reason];
+  if (pricing.status !== "unavailable") return null;
+  for (const reason of pricing.rejectedReasons) {
+    const explanation = PRICING_REJECTION_EXPLANATIONS[reason as PriceObservationRejectReason];
     if (explanation) return explanation;
   }
   return null;
 }
 
+/**
+ * Whether a raw rejectedReasons entry has a reviewed explanation at all
+ * (independent of pricing.status). Used to keep the raw backend enum out of
+ * the generic warnings list even in the "available" case, where the
+ * reviewed explanation itself is intentionally not shown (see
+ * getPricingRejectionExplanation) because it would contradict an accepted,
+ * displayed price.
+ */
+function hasReviewedRejectionExplanation(reason: string): boolean {
+  return PRICING_REJECTION_EXPLANATIONS[reason as PriceObservationRejectReason] !== undefined;
+}
+
 function PricingDetails({ pricing }: { pricing: DashboardPricingDto }) {
-  const rejectionExplanation = getPricingRejectionExplanation(pricing.rejectedReasons);
+  const rejectionExplanation = getPricingRejectionExplanation(pricing);
   return (
     <div className="flex flex-col gap-1">
       <StatusBadge status={pricing.status} />

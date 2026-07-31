@@ -38,6 +38,10 @@ vi.mock("@/lib/query/use-tracked-wallets-query", () => ({
 const mockUseDashboardQuery = vi.mocked(useDashboardQuery);
 const mockUseTrackedWalletsQuery = vi.mocked(useTrackedWalletsQuery);
 
+const EXPLANATION_TITLE = "USD price unavailable";
+const EXPLANATION_MESSAGE =
+  "A pDAI-based observation was rejected because CoinPulse does not have independent evidence that pDAI equals USD. Current USD valuation and unrealized PnL are therefore unavailable.";
+
 const WALLET_A: TrackedWalletDto = {
   id: "wallet-a",
   address: "0x1111111111111111111111111111111111111111",
@@ -185,12 +189,8 @@ describe("AssetHoldingsScreen pricing rejection presentation — affected positi
 
     renderScreen();
 
-    expect(screen.getByText("USD price unavailable")).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "The available PulseX route is priced in pDAI. CoinPulse does not currently have independent evidence that pDAI equals USD, so no USD valuation or PnL is shown.",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText(EXPLANATION_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(EXPLANATION_MESSAGE)).toBeInTheDocument();
     expect(screen.queryByText("UNVERIFIED_QUOTE_ASSUMPTION")).not.toBeInTheDocument();
   });
 
@@ -239,6 +239,41 @@ describe("AssetHoldingsScreen pricing rejection presentation — unaffected posi
 
     renderScreen();
 
-    expect(screen.queryByText("USD price unavailable")).not.toBeInTheDocument();
+    expect(screen.queryByText(EXPLANATION_TITLE)).not.toBeInTheDocument();
+  });
+});
+
+describe("AssetHoldingsScreen pricing rejection presentation — available price with a rejected pDAI candidate", () => {
+  it("does not show the explanation, and keeps displaying the accepted price, when pricing.status is available", () => {
+    const dto = baseDashboardDto();
+    dto.tokenPositions = [
+      makeTokenPosition({
+        pricing: {
+          status: "available",
+          sourceType: "ORACLE",
+          sourceId: "manual:verified-fiat-usd",
+          confidence: "high",
+          observedAt: "2026-07-31T12:00:00.000Z",
+          staleAfterSeconds: 300,
+          rejectedReasons: ["UNVERIFIED_QUOTE_ASSUMPTION"],
+        },
+        valuation: { status: "available", valueQuote: "42.50" },
+      }),
+    ];
+
+    mockUseDashboardQuery.mockReturnValue({
+      data: dto,
+      error: null,
+      isError: false,
+      isFetching: false,
+      isPending: false,
+    } as ReturnType<typeof useDashboardQuery>);
+
+    renderScreen();
+
+    expect(screen.queryByText(EXPLANATION_TITLE)).not.toBeInTheDocument();
+    expect(screen.queryByText("UNVERIFIED_QUOTE_ASSUMPTION")).not.toBeInTheDocument();
+    expect(screen.getByText("42.50")).toBeInTheDocument();
+    expect(screen.getAllByText("available").length).toBeGreaterThan(0);
   });
 });

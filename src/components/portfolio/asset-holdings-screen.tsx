@@ -371,7 +371,7 @@ function PositionRow({ position, walletAddress, chainId }: { position: Dashboard
             </span>
           )}
           {(() => {
-            const rejectionExplanation = getPricingRejectionExplanation(position.pricing.rejectedReasons);
+            const rejectionExplanation = getPricingRejectionExplanation(position.pricing);
             if (!rejectionExplanation) return null;
             return (
               <div className="flex flex-col gap-0.5 max-w-[220px]">
