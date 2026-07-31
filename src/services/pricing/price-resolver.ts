@@ -19,6 +19,26 @@ type PriceResolverClient = {
 
 const DEFAULT_MINIMUM_CONFIDENCE = "0.5";
 const DISALLOWED_PRIMARY_SOURCES = new Set<PriceSourceType>(["DEXSCREENER"]);
+
+/**
+ * PulseX routes are pDAI-denominated. `routeMetadata.pdaiParAssumption: true`
+ * marks an observation whose USD equivalence is an unverified assumption, not
+ * an independently observed pDAI/USD parity. Such an observation must never
+ * be selected as canonical truth for a fiat quote asset.
+ */
+function isFiatQuoteAsset(quoteAsset: string): boolean {
+  return quoteAsset.toLowerCase().startsWith("fiat:");
+}
+
+function hasUnverifiedPdaiParAssumption(
+  routeMetadata: PersistedPriceObservation["routeMetadata"],
+): boolean {
+  return (
+    routeMetadata !== null &&
+    typeof routeMetadata === "object" &&
+    (routeMetadata as Record<string, unknown>).pdaiParAssumption === true
+  );
+}
 const SOURCE_PRIORITY: Record<PriceSourceType, number> = {
   ONCHAIN_POOL: 5,
   ONCHAIN_ROUTE: 4,
@@ -50,6 +70,14 @@ export function resolveBestPriceObservation(args: {
 
     if (DISALLOWED_PRIMARY_SOURCES.has(observation.sourceType)) {
       rejected.push({ id: observation.id, reason: "SOURCE_DISABLED" });
+      continue;
+    }
+
+    if (
+      isFiatQuoteAsset(observation.quoteAsset) &&
+      hasUnverifiedPdaiParAssumption(observation.routeMetadata)
+    ) {
+      rejected.push({ id: observation.id, reason: "UNVERIFIED_QUOTE_ASSUMPTION" });
       continue;
     }
 

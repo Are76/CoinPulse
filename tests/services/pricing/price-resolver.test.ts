@@ -231,6 +231,105 @@ describe("resolveBestPriceObservation", () => {
     ]);
   });
 
+  it("rejects a pDAI-routed observation as verified fiat:usd truth", () => {
+    const result = resolveBestPriceObservation({
+      chainId: CHAIN_ID,
+      assetId: PHEX_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      observedAt: new Date("2026-05-08T12:01:00.000Z"),
+      observations: [
+        createObservation({
+          id: "pulsex-pdai-routed",
+          routeMetadata: {
+            router: "pulsex_v2",
+            path: [PHEX_ASSET, "wpls", PDAI_ASSET],
+            pdaiParAssumption: true,
+          },
+        }),
+      ],
+    });
+
+    expect(result.selected).toBeNull();
+    expect(result.rejected).toEqual([
+      expect.objectContaining({
+        id: "pulsex-pdai-routed",
+        reason: "UNVERIFIED_QUOTE_ASSUMPTION",
+      }),
+    ]);
+  });
+
+  it("prefers an independently verified fiat:usd observation over a pDAI-routed one", () => {
+    const result = resolveBestPriceObservation({
+      chainId: CHAIN_ID,
+      assetId: PHEX_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      observedAt: new Date("2026-05-08T12:01:00.000Z"),
+      observations: [
+        createObservation({
+          id: "pulsex-pdai-routed",
+          confidence: "0.95",
+          routeMetadata: { router: "pulsex_v1", pdaiParAssumption: true },
+        }),
+        createObservation({
+          id: "verified-oracle",
+          sourceType: "ORACLE",
+          sourceId: "oracle:usd:1",
+          confidence: "0.80",
+          routeMetadata: null,
+        }),
+      ],
+    });
+
+    expect(result.selected?.id).toBe("verified-oracle");
+    expect(result.rejected).toEqual([
+      expect.objectContaining({
+        id: "pulsex-pdai-routed",
+        reason: "UNVERIFIED_QUOTE_ASSUMPTION",
+      }),
+    ]);
+  });
+
+  it("does not reject a pDAI-routed observation when the requested quote asset is not fiat", () => {
+    const pdaiQuoteAsset = PDAI_ASSET;
+
+    const result = resolveBestPriceObservation({
+      chainId: CHAIN_ID,
+      assetId: PHEX_ASSET,
+      quoteAsset: pdaiQuoteAsset,
+      observedAt: new Date("2026-05-08T12:01:00.000Z"),
+      observations: [
+        createObservation({
+          id: "pulsex-pdai-quoted",
+          quoteAsset: pdaiQuoteAsset,
+          routeMetadata: { router: "pulsex_v2", pdaiParAssumption: true },
+        }),
+      ],
+    });
+
+    expect(result.selected?.id).toBe("pulsex-pdai-quoted");
+    expect(result.rejected).toEqual([]);
+  });
+
+  it("still selects pDAI's own volatile price — pDAI is not forcibly pegged to 1 even under the new eligibility check", () => {
+    const result = resolveBestPriceObservation({
+      chainId: CHAIN_ID,
+      assetId: PDAI_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      observedAt: new Date("2026-05-08T12:01:00.000Z"),
+      observations: [
+        createObservation({
+          id: "pdai-direct",
+          assetId: PDAI_ASSET,
+          price: "0.73",
+          routeMetadata: null,
+        }),
+      ],
+    });
+
+    expect(result.selected?.id).toBe("pdai-direct");
+    expect(result.selected?.price).toBe("0.73");
+  });
+
   it("uses Decimal comparison for liquidityUsd tiebreaker — preserves precision beyond float53 range", () => {
     // These two values differ only in their last digit but both exceed Number.MAX_SAFE_INTEGER,
     // so Number() coercion would make them indistinguishable and produce a non-deterministic sort.
