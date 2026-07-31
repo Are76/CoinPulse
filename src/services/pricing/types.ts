@@ -30,7 +30,8 @@ export type PersistedPriceObservation = PriceObservationDraft & {
 export type PriceObservationRejectReason =
   | "STALE"
   | "LOW_CONFIDENCE"
-  | "SOURCE_DISABLED";
+  | "SOURCE_DISABLED"
+  | "UNVERIFIED_QUOTE_ASSUMPTION";
 
 export type RejectedPriceObservation = {
   id: string;

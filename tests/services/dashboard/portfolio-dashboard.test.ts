@@ -967,6 +967,60 @@ describe("assemblePortfolioDashboard", () => {
     expect(result.tokenPositions[0]?.pricing.status).toBe("low_confidence_price");
   });
 
+  it("does not surface a pDAI-routed observation as verified USD valuation or PnL mark price", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            assetId: TOKEN_ASSET,
+            assetAddress: TOKEN_ADDRESS,
+            balanceQuantity: "5",
+            decimals: 18,
+            updatedFromBlock: null,
+            updatedToBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => ({
+        selected: null,
+        rejected: [{ id: "obs-pdai-routed", reason: "UNVERIFIED_QUOTE_ASSUMPTION" }],
+      }),
+      calculatePnl: async (pnlArgs) => {
+        // Exercise the same resolvePrice path the dashboard wires into PnL,
+        // rather than asserting a hardcoded fixture, so this test proves the
+        // PnL path receives the same unavailable resolver truth as pricing.
+        const resolved = await pnlArgs.resolvePrice({
+          chainId: pnlArgs.chainId,
+          assetId: pnlArgs.assetId,
+          quoteAsset: pnlArgs.quoteAsset,
+          at: pnlArgs.asOf,
+        });
+
+        return createPnlResult({
+          unrealizedPnl: null,
+          markPrice: resolved.selected?.price ?? null,
+          warnings: [createPnlWarning()],
+        });
+      },
+    });
+
+    expect(result.tokenPositions[0]?.pricing.status).toBe("unavailable");
+    expect(result.tokenPositions[0]?.pricing.rejectedReasons).toEqual([
+      "UNVERIFIED_QUOTE_ASSUMPTION",
+    ]);
+    expect(result.tokenPositions[0]?.valuation).toEqual({
+      status: "unavailable",
+      valueQuote: null,
+    });
+    expect(result.tokenPositions[0]?.pnl.markPrice).toBeNull();
+  });
+
   it("propagates stale mark price conditions to token pnl status without zero coercion", async () => {
     const result = await assemblePortfolioDashboard({
       wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
