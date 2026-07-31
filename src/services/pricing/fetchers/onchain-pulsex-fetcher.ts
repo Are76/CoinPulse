@@ -2,15 +2,17 @@ import "server-only";
 
 import type { Address, PublicClient } from "viem";
 
+import { PDAI_ADDRESS as CANONICAL_PDAI_ADDRESS, PDAI_DECIMALS } from "@/config/assets";
 import { Decimal } from "@/lib/decimal";
 import { logError, logInfo } from "@/lib/logger";
 import type { PriceObservationDraft } from "@/services/pricing/types";
 
 // Wrapped PLS — used by PulseX router for native PLS routing
 export const WPLS_ADDRESS: Address = "0xA1077a294dDE1B09bB078844df40758a5D0f9a27";
-// Bridged DAI on PulseChain — USD reference asset
-export const PDAI_ADDRESS: Address = "0xefD766cCb38EaF1dfd701853BFCe31359239F305";
-const PDAI_DECIMALS = 18;
+// Bridged DAI on PulseChain — USD reference asset. Re-exported from the
+// canonical registry in src/config/assets.ts so the resolver's quote
+// eligibility check and this fetcher's routing target can never drift apart.
+export const PDAI_ADDRESS: Address = CANONICAL_PDAI_ADDRESS;
 
 export const PULSEX_V1_ROUTER_ADDRESS: Address =
   "0x98bf93ebf5c380C0e6Ae8e192A7e2AE08edAcc02";

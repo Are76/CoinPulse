@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getDb } from "@/lib/db";
+import { isUnverifiedPulseXQuoteAssumption } from "@/services/pricing/price-resolver";
 import type { PriceSourceType } from "@/services/pricing/types";
 
 // PulseChain is the only supported chain in V1
@@ -43,6 +44,8 @@ type PriceObservationRow = {
   observedAt: Date;
   staleAfterSeconds: number;
   confidence: string;
+  sourceId: string;
+  quoteAsset: string;
 };
 
 type PricingStatusDbClient = {
@@ -57,6 +60,8 @@ type PricingStatusDbClient = {
         observedAt: true;
         staleAfterSeconds: true;
         confidence: true;
+        sourceId: true;
+        quoteAsset: true;
       };
       orderBy?: { observedAt: "asc" | "desc" };
     }): Promise<PriceObservationRow[]>;
@@ -87,6 +92,8 @@ export async function getPricingStatusReport(
       observedAt: true,
       staleAfterSeconds: true,
       confidence: true,
+      sourceId: true,
+      quoteAsset: true,
     },
     orderBy: { observedAt: "desc" },
   });
@@ -166,11 +173,30 @@ function buildSourceItem(
     const staleAt = obs.observedAt.getTime() + obs.staleAfterSeconds * 1000;
     const isStale = staleAt < now.getTime();
     const isLowConfidence = Number(obs.confidence) < DEFAULT_MINIMUM_CONFIDENCE;
-    return isStale || isLowConfidence;
+    const isQuoteIneligible = isUnverifiedPulseXQuoteAssumption(obs);
+    return isStale || isLowConfidence || isQuoteIneligible;
   }).length;
 
   const latestStaleAt = latest.observedAt.getTime() + latest.staleAfterSeconds * 1000;
   const latestIsStale = latestStaleAt < now.getTime();
+  // Same eligibility rule the resolver applies (src/services/pricing/price-resolver.ts)
+  // — a fresh, high-confidence ONCHAIN_POOL row can still be unusable for
+  // canonical quote truth (unverified pDAI-routing assumption, or legacy
+  // fabricated pDAI-par provenance). Status must reflect resolver reality,
+  // not just freshness/confidence.
+  const latestIsQuoteIneligible = isUnverifiedPulseXQuoteAssumption(latest);
+
+  if (latestIsQuoteIneligible) {
+    return {
+      sourceType,
+      status: "degraded",
+      latestObservedAt,
+      staleAfterSeconds,
+      observationsCount,
+      rejectedCount,
+      reason: "latest_observation_quote_ineligible",
+    };
+  }
 
   if (latestIsStale) {
     return {

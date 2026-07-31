@@ -7,6 +7,11 @@ type PriceObservationRow = {
   observedAt: Date;
   staleAfterSeconds: number;
   confidence: string;
+  // Optional: existing tests below don't exercise quote-eligibility, so a
+  // harmless default (never matches the PulseX sourceId pattern) is applied
+  // in createDb when omitted.
+  sourceId?: string;
+  quoteAsset?: string;
 };
 
 // Mirrors the where clause shape used by getPricingStatusReport
@@ -19,9 +24,14 @@ function createDb(observations: PriceObservationRow[]) {
     priceObservation: {
       async findMany(args: FindManyArgs) {
         const cutoff = args.where?.observedAt?.gte;
+        const normalized = observations.map((o) => ({
+          sourceId: "test:observation",
+          quoteAsset: "fiat:usd",
+          ...o,
+        }));
         const filtered = cutoff
-          ? observations.filter((o) => o.observedAt >= cutoff)
-          : observations;
+          ? normalized.filter((o) => o.observedAt >= cutoff)
+          : normalized;
         return filtered.slice().sort(
           (a, b) => b.observedAt.getTime() - a.observedAt.getTime(),
         );
@@ -496,5 +506,110 @@ describe("getPricingStatusReport — bounded lookback window", () => {
     });
 
     expect(report.status).toBe("degraded");
+  });
+});
+
+describe("getPricingStatusReport — pDAI-routed quote eligibility", () => {
+  it("does not report ok when every ONCHAIN_POOL candidate is a pDAI-routed observation quoted as fiat", async () => {
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([
+        {
+          sourceType: "ONCHAIN_POOL",
+          observedAt: new Date("2026-05-11T11:59:30.000Z"), // fresh
+          staleAfterSeconds: 120,
+          confidence: "0.95", // high confidence
+          sourceId: "pulsex:pulsex_v2:route:0xtoken-0xwpls-0xpdai",
+          quoteAsset: "fiat:usd",
+        },
+      ]) as never,
+    });
+
+    const onchain = report.sources.find((s) => s.sourceType === "ONCHAIN_POOL");
+    expect(onchain?.status).not.toBe("ok");
+    expect(onchain?.status).toBe("degraded");
+    expect(onchain?.reason).toBe("latest_observation_quote_ineligible");
+    expect(report.status).not.toBe("ok");
+  });
+
+  it("counts a legacy PulseX-routed row without the pdaiParAssumption marker as rejected", async () => {
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([
+        {
+          sourceType: "ONCHAIN_POOL",
+          observedAt: new Date("2026-05-11T11:59:30.000Z"),
+          staleAfterSeconds: 120,
+          confidence: "0.95",
+          sourceId: "pulsex:pulsex_v1:route:0xtoken-0xwpls-0xpdai",
+          quoteAsset: "fiat:usd",
+        },
+      ]) as never,
+    });
+
+    const onchain = report.sources.find((s) => s.sourceType === "ONCHAIN_POOL");
+    expect(onchain?.rejectedCount).toBe(1);
+    expect(onchain?.status).toBe("degraded");
+  });
+
+  it("counts the legacy fabricated pDAI-par observation as rejected under an ORACLE bucket", async () => {
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([
+        {
+          sourceType: "ORACLE",
+          observedAt: new Date("2026-05-11T11:59:30.000Z"),
+          staleAfterSeconds: 120,
+          confidence: "1",
+          sourceId: "pulsex:pdai:par",
+          quoteAsset: "fiat:usd",
+        },
+      ]) as never,
+    });
+
+    const oracle = report.sources.find((s) => s.sourceType === "ORACLE");
+    expect(oracle?.rejectedCount).toBe(1);
+    expect(oracle?.status).toBe("degraded");
+    expect(oracle?.reason).toBe("latest_observation_quote_ineligible");
+  });
+
+  it("still reports ok when the ONCHAIN_POOL candidate is quoted in the canonical pDAI identity", async () => {
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([
+        {
+          sourceType: "ONCHAIN_POOL",
+          observedAt: new Date("2026-05-11T11:59:30.000Z"),
+          staleAfterSeconds: 120,
+          confidence: "0.95",
+          sourceId: "pulsex:pulsex_v2:route:0xtoken-0xwpls-0xpdai",
+          quoteAsset: "chain:369:erc20:0xefD766cCb38EaF1dfd701853BFCe31359239F305",
+        },
+      ]) as never,
+    });
+
+    const onchain = report.sources.find((s) => s.sourceType === "ONCHAIN_POOL");
+    expect(onchain?.status).toBe("ok");
+    expect(onchain?.rejectedCount).toBe(0);
+    expect(report.status).toBe("ok");
+  });
+
+  it("does not affect a genuinely independent ONCHAIN_POOL observation with an unrelated sourceId", async () => {
+    const report = await getPricingStatusReport({
+      now: NOW,
+      db: createDb([
+        {
+          sourceType: "ONCHAIN_POOL",
+          observedAt: new Date("2026-05-11T11:59:30.000Z"),
+          staleAfterSeconds: 120,
+          confidence: "0.95",
+          sourceId: "pulsex:pair:0xsomepair", // not the routed/par shape
+          quoteAsset: "fiat:usd",
+        },
+      ]) as never,
+    });
+
+    const onchain = report.sources.find((s) => s.sourceType === "ONCHAIN_POOL");
+    expect(onchain?.status).toBe("ok");
   });
 });

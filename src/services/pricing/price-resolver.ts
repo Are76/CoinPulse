@@ -1,5 +1,6 @@
 import "server-only";
 
+import { CORE_ASSETS } from "@/config/assets";
 import { Decimal } from "@/lib/decimal";
 import { listPriceObservations } from "@/services/pricing/price-store";
 import type {
@@ -20,25 +21,51 @@ type PriceResolverClient = {
 const DEFAULT_MINIMUM_CONFIDENCE = "0.5";
 const DISALLOWED_PRIMARY_SOURCES = new Set<PriceSourceType>(["DEXSCREENER"]);
 
-/**
- * PulseX routes are pDAI-denominated. `routeMetadata.pdaiParAssumption: true`
- * marks an observation whose USD equivalence is an unverified assumption, not
- * an independently observed pDAI/USD parity. Such an observation must never
- * be selected as canonical truth for a fiat quote asset.
- */
-function isFiatQuoteAsset(quoteAsset: string): boolean {
-  return quoteAsset.toLowerCase().startsWith("fiat:");
-}
+// Canonical, chain-aware pDAI identity — the same registry entry the
+// PulseX fetcher's routing target is derived from (src/config/assets.ts).
+// Never inferred from a symbol or ticker.
+const PDAI_QUOTE_ASSET_ID = CORE_ASSETS.pdai.assetId.toLowerCase();
 
-function hasUnverifiedPdaiParAssumption(
-  routeMetadata: PersistedPriceObservation["routeMetadata"],
-): boolean {
+// `fetchOnchainPulseXPrice` always routes token -> WPLS -> pDAI and persists
+// the resulting pDAI-denominated amount under whatever quoteAsset the caller
+// requested (src/services/pricing/fetchers/onchain-pulsex-fetcher.ts). This
+// sourceId shape has been stable since the fetcher's introduction (PR #150)
+// through the pdaiParAssumption marker added in PR #274, so — unlike that
+// marker — it also identifies pre-#274 legacy rows that never got the flag.
+const PULSEX_ROUTE_SOURCE_ID_PATTERN = /^pulsex:(pulsex_v1|pulsex_v2):route:/;
+
+// The pre-#274 producer's fabricated "pDAI is always $1" observation,
+// removed in PR #274 (`buildPdaiParDraft`, sourceId "pulsex:pdai:par",
+// price "1"). Historical rows may still be persisted and reachable by
+// average-cost PnL's historical-timestamp resolution — reject them
+// unconditionally rather than relying on freshness/confidence to exclude
+// them.
+const LEGACY_FABRICATED_PDAI_PAR_SOURCE_ID = "pulsex:pdai:par";
+
+/**
+ * An observation is an unverified pDAI-routing assumption when it was
+ * produced by the PulseX token -> WPLS -> pDAI route (or the legacy
+ * fabricated pDAI-par shortcut it replaced) and is requested/persisted under
+ * any quote asset other than the exact canonical pDAI identity. Detection is
+ * by provenance (`sourceId`), not the `routeMetadata.pdaiParAssumption` flag,
+ * so it also catches legacy rows that predate that flag. Exported so other
+ * pricing-health consumers (e.g. the operator status report) can apply the
+ * same rule without duplicating it.
+ */
+export function isUnverifiedPulseXQuoteAssumption(observation: {
+  sourceId: string;
+  quoteAsset: string;
+}): boolean {
+  if (observation.sourceId === LEGACY_FABRICATED_PDAI_PAR_SOURCE_ID) {
+    return true;
+  }
+
   return (
-    routeMetadata !== null &&
-    typeof routeMetadata === "object" &&
-    (routeMetadata as Record<string, unknown>).pdaiParAssumption === true
+    PULSEX_ROUTE_SOURCE_ID_PATTERN.test(observation.sourceId) &&
+    observation.quoteAsset.toLowerCase() !== PDAI_QUOTE_ASSET_ID
   );
 }
+
 const SOURCE_PRIORITY: Record<PriceSourceType, number> = {
   ONCHAIN_POOL: 5,
   ONCHAIN_ROUTE: 4,
@@ -73,10 +100,7 @@ export function resolveBestPriceObservation(args: {
       continue;
     }
 
-    if (
-      isFiatQuoteAsset(observation.quoteAsset) &&
-      hasUnverifiedPdaiParAssumption(observation.routeMetadata)
-    ) {
+    if (isUnverifiedPulseXQuoteAssumption(observation)) {
       rejected.push({ id: observation.id, reason: "UNVERIFIED_QUOTE_ASSUMPTION" });
       continue;
     }

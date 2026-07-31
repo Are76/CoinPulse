@@ -991,12 +991,23 @@ describe("assemblePortfolioDashboard", () => {
         selected: null,
         rejected: [{ id: "obs-pdai-routed", reason: "UNVERIFIED_QUOTE_ASSUMPTION" }],
       }),
-      calculatePnl: async () =>
-        createPnlResult({
+      calculatePnl: async (pnlArgs) => {
+        // Exercise the same resolvePrice path the dashboard wires into PnL,
+        // rather than asserting a hardcoded fixture, so this test proves the
+        // PnL path receives the same unavailable resolver truth as pricing.
+        const resolved = await pnlArgs.resolvePrice({
+          chainId: pnlArgs.chainId,
+          assetId: pnlArgs.assetId,
+          quoteAsset: pnlArgs.quoteAsset,
+          at: pnlArgs.asOf,
+        });
+
+        return createPnlResult({
           unrealizedPnl: null,
-          markPrice: null,
+          markPrice: resolved.selected?.price ?? null,
           warnings: [createPnlWarning()],
-        }),
+        });
+      },
     });
 
     expect(result.tokenPositions[0]?.pricing.status).toBe("unavailable");
