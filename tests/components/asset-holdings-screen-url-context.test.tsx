@@ -18,11 +18,12 @@ import type { TrackedWalletDto } from "@/lib/api/debug-client";
 import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
 import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
 
-const nav = vi.hoisted(() => ({ search: "", push: vi.fn() }));
+const nav = vi.hoisted(() => ({ search: "", push: vi.fn(), replace: vi.fn() }));
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
-  useRouter: () => ({ push: nav.push, replace: vi.fn() }),
+  usePathname: () => "/portfolio/assets",
+  useRouter: () => ({ push: nav.push, replace: nav.replace }),
 }));
 
 vi.mock("@/lib/query/use-dashboard-query", () => ({
@@ -84,6 +85,7 @@ function dashboardCallArgs() {
 beforeEach(() => {
   nav.search = "";
   nav.push.mockReset();
+  nav.replace.mockReset();
   mockUseDashboardQuery.mockReturnValue(dashboardIdle() as never);
   mockUseTrackedWalletsQuery.mockReturnValue(trackedWalletsSuccess([WALLET_A, WALLET_B]) as never);
 });
@@ -155,5 +157,36 @@ describe("AssetHoldingsScreen — manual wallet-switch behavior preserved", () =
     fireEvent.click(screen.getByRole("button", { name: WALLET_B.label! }));
     const lastCall = dashboardCallArgs().at(-1)!;
     expect(lastCall).toMatchObject({ walletAddress: WALLET_B.address });
+  });
+});
+
+describe("AssetHoldingsScreen — manual wallet switch syncs URL navigation context", () => {
+  it("updates the URL with the newly selected wallet's address and chainId", () => {
+    nav.search = `walletAddress=${WALLET_A.address}&chainId=369`;
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: WALLET_B.label! }));
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/portfolio/assets?walletAddress=${WALLET_B.address}&chainId=369`,
+      { scroll: false },
+    );
+  });
+
+  it("does not touch the URL on initial render with no manual switch", () => {
+    nav.search = `walletAddress=${WALLET_A.address}&chainId=369`;
+    renderScreen();
+    expect(nav.replace).not.toHaveBeenCalled();
+  });
+
+  it("switching wallets does not trigger a duplicate dashboard query call beyond the wallet-driven refetch", () => {
+    nav.search = `walletAddress=${WALLET_A.address}&chainId=369`;
+    renderScreen();
+    const callsBeforeSwitch = dashboardCallArgs().length;
+    fireEvent.click(screen.getByRole("button", { name: WALLET_B.label! }));
+    const callsAfterSwitch = dashboardCallArgs().length;
+    // Exactly one additional render/call is expected from the wallet-id
+    // state update — the URL replace must not cause an extra render.
+    expect(callsAfterSwitch).toBe(callsBeforeSwitch + 1);
+    expect(dashboardCallArgs().at(-1)).toMatchObject({ walletAddress: WALLET_B.address });
   });
 });
