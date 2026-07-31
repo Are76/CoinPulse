@@ -38,6 +38,7 @@ import type {
   DashboardTokenPositionDto,
   PortfolioDashboardDto,
 } from "@/services/dashboard/types";
+import type { PriceObservationRejectReason } from "@/services/pricing/types";
 
 /* ── Top-level hero ──────────────────────────────────────────────────────── */
 
@@ -550,7 +551,12 @@ export function TokenPositionsTable({ positions }: { positions: DashboardTokenPo
             </td>
             <td>
               <WarningList warnings={[
-                ...position.pricing.rejectedReasons,
+                // Reasons with a reviewed explanation are already presented
+                // in the Pricing column above; avoid duplicating the raw
+                // backend enum here.
+                ...position.pricing.rejectedReasons.filter(
+                  (reason) => !hasReviewedRejectionExplanation(reason),
+                ),
                 ...position.pnl.warnings.map((w) => w.detail),
               ]} />
             </td>
@@ -759,7 +765,58 @@ function MetadataProvenanceDetails({ provenance }: { provenance: DashboardTokenM
   );
 }
 
+// Backend rejection-reason enums (PriceObservationRejectReason from
+// src/services/pricing/types.ts) that have a known, reviewed user-facing
+// explanation. Any reason not listed here is never shown raw — it falls
+// back to the existing generic unavailable/warning presentation. Typed
+// against the backend enum (rather than plain string keys) so a renamed or
+// removed reason fails to compile here instead of silently going stale.
+const PRICING_REJECTION_EXPLANATIONS: Partial<
+  Record<PriceObservationRejectReason, { title: string; message: string }>
+> = {
+  UNVERIFIED_QUOTE_ASSUMPTION: {
+    title: "USD price unavailable",
+    message:
+      "A pDAI-based observation was rejected because CoinPulse does not have independent evidence that pDAI equals USD. Current USD valuation and unrealized PnL are therefore unavailable.",
+  },
+};
+
+/**
+ * Maps a position's backend pricing state to a reviewed, user-facing
+ * explanation. Only returns an explanation when the backend itself reports
+ * pricing as unavailable — a rejected reason can be present alongside a
+ * successfully selected, available price (the resolver keeps rejected
+ * candidates for provenance even when another observation was accepted),
+ * and this must never override or contradict that accepted value. Returns
+ * null for unavailable prices with no reviewed reason so callers can fall
+ * back to the existing generic presentation instead of fabricating copy or
+ * leaking the raw backend enum.
+ */
+export function getPricingRejectionExplanation(
+  pricing: Pick<DashboardPricingDto, "status" | "rejectedReasons">,
+): { title: string; message: string } | null {
+  if (pricing.status !== "unavailable") return null;
+  for (const reason of pricing.rejectedReasons) {
+    const explanation = PRICING_REJECTION_EXPLANATIONS[reason as PriceObservationRejectReason];
+    if (explanation) return explanation;
+  }
+  return null;
+}
+
+/**
+ * Whether a raw rejectedReasons entry has a reviewed explanation at all
+ * (independent of pricing.status). Used to keep the raw backend enum out of
+ * the generic warnings list even in the "available" case, where the
+ * reviewed explanation itself is intentionally not shown (see
+ * getPricingRejectionExplanation) because it would contradict an accepted,
+ * displayed price.
+ */
+function hasReviewedRejectionExplanation(reason: string): boolean {
+  return PRICING_REJECTION_EXPLANATIONS[reason as PriceObservationRejectReason] !== undefined;
+}
+
 function PricingDetails({ pricing }: { pricing: DashboardPricingDto }) {
+  const rejectionExplanation = getPricingRejectionExplanation(pricing);
   return (
     <div className="flex flex-col gap-1">
       <StatusBadge status={pricing.status} />
@@ -769,6 +826,16 @@ function PricingDetails({ pricing }: { pricing: DashboardPricingDto }) {
         {pricing.sourceId ? ` · ${pricing.sourceId}` : ""}
       </span>
       <TimestampLabel label="observed" value={pricing.observedAt} fallback="Unavailable" />
+      {rejectionExplanation ? (
+        <div className="mt-1 flex flex-col gap-0.5">
+          <span className="text-xs font-semibold" style={{ color: "#f59e0b" }}>
+            {rejectionExplanation.title}
+          </span>
+          <span className="text-xs leading-relaxed" style={{ color: "#a0a8c0" }}>
+            {rejectionExplanation.message}
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }

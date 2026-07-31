@@ -7,6 +7,7 @@ import { findTrackedWalletMatch } from "@/components/dashboard/dashboard-screen-
 import {
   MaterializationFreshnessSection,
   MaterializationIntegritySection,
+  getPricingRejectionExplanation,
 } from "@/components/dashboard/dashboard-presenters";
 import { EmptyState } from "@/components/ui/data-state/empty-state";
 import { ErrorState } from "@/components/ui/data-state/error-state";
@@ -369,6 +370,20 @@ function PositionRow({ position, walletAddress, chainId }: { position: Dashboard
               {position.pricing.sourceType}
             </span>
           )}
+          {(() => {
+            const rejectionExplanation = getPricingRejectionExplanation(position.pricing);
+            if (!rejectionExplanation) return null;
+            return (
+              <div className="flex flex-col gap-0.5 max-w-[220px]">
+                <span className="text-[10px] font-semibold" style={{ color: "#f59e0b" }}>
+                  {rejectionExplanation.title}
+                </span>
+                <span className="text-[10px] leading-relaxed" style={{ color: "#586070" }}>
+                  {rejectionExplanation.message}
+                </span>
+              </div>
+            );
+          })()}
         </div>
       </td>
     </tr>
