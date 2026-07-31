@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 
 import { findTrackedWalletMatch } from "@/components/dashboard/dashboard-screen-helpers";
 import {
@@ -54,6 +54,8 @@ function AssetHoldingsScreenContent() {
   // Validated navigation context forwarded from AppShell links. Invalid or
   // absent params fall back to the existing default-selection behavior.
   const urlWalletContext = parseWalletNavContext(searchParams);
+  const urlContextKey =
+    urlWalletContext !== null ? `${urlWalletContext.walletAddress}|${urlWalletContext.chainId}` : null;
 
   const wallets =
     trackedWalletsQuery.isSuccess ? trackedWalletsQuery.data.wallets : [];
@@ -79,12 +81,28 @@ function AssetHoldingsScreenContent() {
     enabled: selectedWallet !== null,
   });
 
+  // Clear a manual selection when the URL navigation context changes to a
+  // different value while mounted (browser back/forward, or another
+  // in-mount navigation) so it can take effect again — otherwise a prior
+  // manual switch would permanently shadow the URL for the life of the
+  // mount. Keyed on the applied context (same pattern as Dashboard's
+  // URL-sync effect) so it never loops: handleWalletSwitch pre-sets the ref
+  // before calling router.replace, so the URL update that switch itself
+  // causes is not mistaken for an external context change.
+  const appliedUrlContextKeyRef = useRef<string | null>(urlContextKey);
+  useEffect(() => {
+    if (appliedUrlContextKeyRef.current === urlContextKey) return;
+    appliedUrlContextKeyRef.current = urlContextKey;
+    setSelectedWalletId(null);
+  }, [urlContextKey]);
+
   // Manual wallet switch: update the selected wallet and reflect it in the
   // URL navigation context (same helper/pattern as Dashboard's explicit
   // submit), so AppShell links and back/forward carry the new wallet instead
   // of stale context.
   function handleWalletSwitch(wallet: TrackedWalletDto) {
     setSelectedWalletId(wallet.id);
+    appliedUrlContextKeyRef.current = `${wallet.address}|${wallet.chainId}`;
     router.replace(
       buildWalletNavHref(pathname ?? "/", {
         walletAddress: wallet.address,

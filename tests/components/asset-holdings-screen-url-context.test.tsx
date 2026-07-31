@@ -190,3 +190,51 @@ describe("AssetHoldingsScreen — manual wallet switch syncs URL navigation cont
     expect(dashboardCallArgs().at(-1)).toMatchObject({ walletAddress: WALLET_B.address });
   });
 });
+
+describe("AssetHoldingsScreen — URL context regains control after a manual switch", () => {
+  it("re-applies a new forwarded URL context after a manual switch, without a navigation loop", () => {
+    // 1. Render with URL context for wallet A.
+    nav.search = `walletAddress=${WALLET_A.address}&chainId=369`;
+    const { rerender } = renderScreen();
+    expect(dashboardCallArgs().at(-1)).toMatchObject({ walletAddress: WALLET_A.address });
+
+    // 2. Manually switch to wallet B.
+    fireEvent.click(screen.getByRole("button", { name: WALLET_B.label! }));
+
+    // 3. Confirm wallet B query and URL replacement.
+    expect(dashboardCallArgs().at(-1)).toMatchObject({ walletAddress: WALLET_B.address });
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/portfolio/assets?walletAddress=${WALLET_B.address}&chainId=369`,
+      { scroll: false },
+    );
+
+    // The manual switch's own router.replace echoes wallet B back into
+    // searchParams while still mounted — this must not be mistaken for an
+    // external context change and must not reset the manual selection.
+    nav.search = `walletAddress=${WALLET_B.address}&chainId=369`;
+    rerender(<AssetHoldingsScreen />);
+    expect(dashboardCallArgs().at(-1)).toMatchObject({ walletAddress: WALLET_B.address });
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+
+    // 4. Change the mocked searchParams to wallet A while keeping the
+    //    component mounted (simulates browser back/forward or another
+    //    in-mount navigation to a different URL context).
+    nav.search = `walletAddress=${WALLET_A.address}&chainId=369`;
+
+    // 5. Rerender.
+    rerender(<AssetHoldingsScreen />);
+
+    // 6. Confirm wallet A becomes selected and the latest dashboard query
+    //    uses wallet A.
+    expect(dashboardCallArgs().at(-1)).toMatchObject({ walletAddress: WALLET_A.address });
+    expect(screen.getByRole("button", { name: WALLET_A.label! })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // 7. Confirm no navigation loop or unexpected additional router.replace
+    //    occurred — only the single replace from the manual switch in step 3.
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+  });
+});
