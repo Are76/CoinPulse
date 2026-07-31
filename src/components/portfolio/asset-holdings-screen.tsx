@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 
 import { findTrackedWalletMatch } from "@/components/dashboard/dashboard-screen-helpers";
 import {
@@ -18,8 +18,12 @@ import { StatusBadge } from "@/components/ui/status/status-badge";
 import { SurfaceCard } from "@/components/ui/surface-card";
 import { ValueDisplay } from "@/components/ui/value/value-display";
 import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
-import { parseWalletNavContext } from "@/lib/navigation/wallet-query-params";
+import {
+  buildWalletNavHref,
+  parseWalletNavContext,
+} from "@/lib/navigation/wallet-query-params";
 import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
+import type { TrackedWalletDto } from "@/lib/api/debug-client";
 import type { DashboardTokenPositionDto, PortfolioSummaryDto } from "@/services/dashboard/types";
 
 const DEFAULT_CHAIN_ID = 369;
@@ -43,11 +47,15 @@ export function AssetHoldingsScreen() {
 function AssetHoldingsScreenContent() {
   const [selectedWalletId, setSelectedWalletId] = useState<string | null>(null);
   const trackedWalletsQuery = useTrackedWalletsQuery();
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
 
   // Validated navigation context forwarded from AppShell links. Invalid or
   // absent params fall back to the existing default-selection behavior.
   const urlWalletContext = parseWalletNavContext(searchParams);
+  const urlContextKey =
+    urlWalletContext !== null ? `${urlWalletContext.walletAddress}|${urlWalletContext.chainId}` : null;
 
   const wallets =
     trackedWalletsQuery.isSuccess ? trackedWalletsQuery.data.wallets : [];
@@ -72,6 +80,37 @@ function AssetHoldingsScreenContent() {
     quoteAsset: DEFAULT_QUOTE_ASSET,
     enabled: selectedWallet !== null,
   });
+
+  // Clear a manual selection when the URL navigation context changes to a
+  // different value while mounted (browser back/forward, or another
+  // in-mount navigation) so it can take effect again — otherwise a prior
+  // manual switch would permanently shadow the URL for the life of the
+  // mount. Keyed on the applied context (same pattern as Dashboard's
+  // URL-sync effect) so it never loops: handleWalletSwitch pre-sets the ref
+  // before calling router.replace, so the URL update that switch itself
+  // causes is not mistaken for an external context change.
+  const appliedUrlContextKeyRef = useRef<string | null>(urlContextKey);
+  useEffect(() => {
+    if (appliedUrlContextKeyRef.current === urlContextKey) return;
+    appliedUrlContextKeyRef.current = urlContextKey;
+    setSelectedWalletId(null);
+  }, [urlContextKey]);
+
+  // Manual wallet switch: update the selected wallet and reflect it in the
+  // URL navigation context (same helper/pattern as Dashboard's explicit
+  // submit), so AppShell links and back/forward carry the new wallet instead
+  // of stale context.
+  function handleWalletSwitch(wallet: TrackedWalletDto) {
+    setSelectedWalletId(wallet.id);
+    appliedUrlContextKeyRef.current = `${wallet.address}|${wallet.chainId}`;
+    router.replace(
+      buildWalletNavHref(pathname ?? "/", {
+        walletAddress: wallet.address,
+        chainId: wallet.chainId,
+      }),
+      { scroll: false },
+    );
+  }
 
   if (trackedWalletsQuery.isPending) {
     return (
@@ -132,7 +171,7 @@ function AssetHoldingsScreenContent() {
                   key={w.id}
                   type="button"
                   aria-pressed={isActive}
-                  onClick={() => setSelectedWalletId(w.id)}
+                  onClick={() => handleWalletSwitch(w)}
                   title={w.address}
                   className="cp-data text-xs transition"
                   style={{

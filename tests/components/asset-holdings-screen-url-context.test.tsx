@@ -18,11 +18,12 @@ import type { TrackedWalletDto } from "@/lib/api/debug-client";
 import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
 import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
 
-const nav = vi.hoisted(() => ({ search: "", push: vi.fn() }));
+const nav = vi.hoisted(() => ({ search: "", push: vi.fn(), replace: vi.fn() }));
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
-  useRouter: () => ({ push: nav.push, replace: vi.fn() }),
+  usePathname: () => "/portfolio/assets",
+  useRouter: () => ({ push: nav.push, replace: nav.replace }),
 }));
 
 vi.mock("@/lib/query/use-dashboard-query", () => ({
@@ -84,6 +85,7 @@ function dashboardCallArgs() {
 beforeEach(() => {
   nav.search = "";
   nav.push.mockReset();
+  nav.replace.mockReset();
   mockUseDashboardQuery.mockReturnValue(dashboardIdle() as never);
   mockUseTrackedWalletsQuery.mockReturnValue(trackedWalletsSuccess([WALLET_A, WALLET_B]) as never);
 });
@@ -155,5 +157,84 @@ describe("AssetHoldingsScreen — manual wallet-switch behavior preserved", () =
     fireEvent.click(screen.getByRole("button", { name: WALLET_B.label! }));
     const lastCall = dashboardCallArgs().at(-1)!;
     expect(lastCall).toMatchObject({ walletAddress: WALLET_B.address });
+  });
+});
+
+describe("AssetHoldingsScreen — manual wallet switch syncs URL navigation context", () => {
+  it("updates the URL with the newly selected wallet's address and chainId", () => {
+    nav.search = `walletAddress=${WALLET_A.address}&chainId=369`;
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: WALLET_B.label! }));
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/portfolio/assets?walletAddress=${WALLET_B.address}&chainId=369`,
+      { scroll: false },
+    );
+  });
+
+  it("does not touch the URL on initial render with no manual switch", () => {
+    nav.search = `walletAddress=${WALLET_A.address}&chainId=369`;
+    renderScreen();
+    expect(nav.replace).not.toHaveBeenCalled();
+  });
+
+  it("switching wallets does not trigger a duplicate dashboard query call beyond the wallet-driven refetch", () => {
+    nav.search = `walletAddress=${WALLET_A.address}&chainId=369`;
+    renderScreen();
+    const callsBeforeSwitch = dashboardCallArgs().length;
+    fireEvent.click(screen.getByRole("button", { name: WALLET_B.label! }));
+    const callsAfterSwitch = dashboardCallArgs().length;
+    // Exactly one additional render/call is expected from the wallet-id
+    // state update — the URL replace must not cause an extra render.
+    expect(callsAfterSwitch).toBe(callsBeforeSwitch + 1);
+    expect(dashboardCallArgs().at(-1)).toMatchObject({ walletAddress: WALLET_B.address });
+  });
+});
+
+describe("AssetHoldingsScreen — URL context regains control after a manual switch", () => {
+  it("re-applies a new forwarded URL context after a manual switch, without a navigation loop", () => {
+    // 1. Render with URL context for wallet A.
+    nav.search = `walletAddress=${WALLET_A.address}&chainId=369`;
+    const { rerender } = renderScreen();
+    expect(dashboardCallArgs().at(-1)).toMatchObject({ walletAddress: WALLET_A.address });
+
+    // 2. Manually switch to wallet B.
+    fireEvent.click(screen.getByRole("button", { name: WALLET_B.label! }));
+
+    // 3. Confirm wallet B query and URL replacement.
+    expect(dashboardCallArgs().at(-1)).toMatchObject({ walletAddress: WALLET_B.address });
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+    expect(nav.replace).toHaveBeenCalledWith(
+      `/portfolio/assets?walletAddress=${WALLET_B.address}&chainId=369`,
+      { scroll: false },
+    );
+
+    // The manual switch's own router.replace echoes wallet B back into
+    // searchParams while still mounted — this must not be mistaken for an
+    // external context change and must not reset the manual selection.
+    nav.search = `walletAddress=${WALLET_B.address}&chainId=369`;
+    rerender(<AssetHoldingsScreen />);
+    expect(dashboardCallArgs().at(-1)).toMatchObject({ walletAddress: WALLET_B.address });
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+
+    // 4. Change the mocked searchParams to wallet A while keeping the
+    //    component mounted (simulates browser back/forward or another
+    //    in-mount navigation to a different URL context).
+    nav.search = `walletAddress=${WALLET_A.address}&chainId=369`;
+
+    // 5. Rerender.
+    rerender(<AssetHoldingsScreen />);
+
+    // 6. Confirm wallet A becomes selected and the latest dashboard query
+    //    uses wallet A.
+    expect(dashboardCallArgs().at(-1)).toMatchObject({ walletAddress: WALLET_A.address });
+    expect(screen.getByRole("button", { name: WALLET_A.label! })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // 7. Confirm no navigation loop or unexpected additional router.replace
+    //    occurred — only the single replace from the manual switch in step 3.
+    expect(nav.replace).toHaveBeenCalledTimes(1);
   });
 });
