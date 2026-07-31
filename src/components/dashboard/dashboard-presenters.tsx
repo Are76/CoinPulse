@@ -550,7 +550,12 @@ export function TokenPositionsTable({ positions }: { positions: DashboardTokenPo
             </td>
             <td>
               <WarningList warnings={[
-                ...position.pricing.rejectedReasons,
+                // Reasons with a reviewed explanation are already presented
+                // in the Pricing column above; avoid duplicating the raw
+                // backend enum here.
+                ...position.pricing.rejectedReasons.filter(
+                  (reason) => getPricingRejectionExplanation([reason]) === null,
+                ),
                 ...position.pnl.warnings.map((w) => w.detail),
               ]} />
             </td>
@@ -759,7 +764,38 @@ function MetadataProvenanceDetails({ provenance }: { provenance: DashboardTokenM
   );
 }
 
+// Backend rejection-reason enums (src/services/pricing/types.ts
+// PriceObservationRejectReason) that have a known, reviewed user-facing
+// explanation. Any reason not listed here is never shown raw — it falls
+// back to the existing generic unavailable/warning presentation.
+const PRICING_REJECTION_EXPLANATIONS: Partial<
+  Record<string, { title: string; message: string }>
+> = {
+  UNVERIFIED_QUOTE_ASSUMPTION: {
+    title: "USD price unavailable",
+    message:
+      "The available PulseX route is priced in pDAI. CoinPulse does not currently have independent evidence that pDAI equals USD, so no USD valuation or PnL is shown.",
+  },
+};
+
+/**
+ * Maps a backend pricing.rejectedReasons entry to a reviewed, user-facing
+ * explanation. Returns null for reasons without a reviewed explanation so
+ * callers can fall back to the existing generic presentation instead of
+ * fabricating copy or leaking the raw backend enum.
+ */
+export function getPricingRejectionExplanation(
+  rejectedReasons: string[],
+): { title: string; message: string } | null {
+  for (const reason of rejectedReasons) {
+    const explanation = PRICING_REJECTION_EXPLANATIONS[reason];
+    if (explanation) return explanation;
+  }
+  return null;
+}
+
 function PricingDetails({ pricing }: { pricing: DashboardPricingDto }) {
+  const rejectionExplanation = getPricingRejectionExplanation(pricing.rejectedReasons);
   return (
     <div className="flex flex-col gap-1">
       <StatusBadge status={pricing.status} />
@@ -769,6 +805,16 @@ function PricingDetails({ pricing }: { pricing: DashboardPricingDto }) {
         {pricing.sourceId ? ` · ${pricing.sourceId}` : ""}
       </span>
       <TimestampLabel label="observed" value={pricing.observedAt} fallback="Unavailable" />
+      {rejectionExplanation ? (
+        <div className="mt-1 flex flex-col gap-0.5">
+          <span className="text-xs font-semibold" style={{ color: "#f59e0b" }}>
+            {rejectionExplanation.title}
+          </span>
+          <span className="text-xs leading-relaxed" style={{ color: "#a0a8c0" }}>
+            {rejectionExplanation.message}
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }
