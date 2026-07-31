@@ -4,6 +4,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
 import { findTrackedWalletMatch } from "@/components/dashboard/dashboard-screen-helpers";
+import {
+  MaterializationFreshnessSection,
+  MaterializationIntegritySection,
+} from "@/components/dashboard/dashboard-presenters";
 import { EmptyState } from "@/components/ui/data-state/empty-state";
 import { ErrorState } from "@/components/ui/data-state/error-state";
 import { LoadingState } from "@/components/ui/data-state/loading-state";
@@ -176,11 +180,15 @@ function AssetHoldingsScreenContent() {
       ) : null}
 
       {dashboard !== undefined ? (
-        <AssetHoldingsTable
-          positions={dashboard.tokenPositions}
-          chainId={dashboard.wallet.chainId}
-          walletAddress={dashboard.wallet.address}
-        />
+        <>
+          <MaterializationFreshnessSection freshness={dashboard.materialization.freshness} />
+          <MaterializationIntegritySection materialization={dashboard.materialization} />
+          <AssetHoldingsTable
+            positions={dashboard.tokenPositions}
+            chainId={dashboard.wallet.chainId}
+            walletAddress={dashboard.wallet.address}
+          />
+        </>
       ) : null}
     </PageContainer>
   );
