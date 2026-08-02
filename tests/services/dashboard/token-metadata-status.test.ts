@@ -13,6 +13,10 @@ import {
   detectDecimalsConflict,
   isMetadataStale,
 } from "@/services/dashboard/token-metadata-status";
+import type {
+  DashboardMetadataProvenanceSource,
+  DashboardMetadataProvenanceStatus,
+} from "@/services/dashboard/types";
 
 // ─── isMetadataStale ──────────────────────────────────────────────────────────
 
@@ -301,5 +305,109 @@ describe("computeTokenMetadataStatus — purity and determinism", () => {
 
     expect(asOf.getTime()).toBe(asOfBefore);
     expect(latestObservedAt.getTime()).toBe(observedBefore);
+  });
+});
+
+// ─── Canonical runtime status vocabulary ─────────────────────────────────────
+//
+// `DashboardMetadataProvenanceStatus` (src/services/dashboard/types.ts) declares
+// five members: "verified", "observed", "conflicting", "stale", "unknown".
+// `computeTokenMetadataStatus` is the only branching source of that status in
+// production (the sole other producer, `UNKNOWN_METADATA_PROVENANCE` in
+// portfolio-dashboard.ts, is a hardcoded "unknown" literal). Its return
+// statements only ever produce four of the five declared members — "verified"
+// has no reachable code path today.
+//
+// The tests above prove specific behaviors per scenario; none of them assert
+// the *closed set* of reachable outputs. This block adds that guard: it sweeps
+// the input space and asserts every result stays inside the reachable set, so
+// a future change that quietly adds a "verified"-producing branch fails a test
+// instead of silently expanding the runtime contract.
+
+describe("computeTokenMetadataStatus — canonical runtime vocabulary", () => {
+  const REACHABLE_STATUSES: readonly DashboardMetadataProvenanceStatus[] = [
+    "observed",
+    "conflicting",
+    "stale",
+    "unknown",
+  ];
+
+  const ALL_SOURCES: readonly DashboardMetadataProvenanceSource[] = [
+    "chain",
+    "scanner",
+    "manual",
+    "derived",
+    "unknown",
+  ];
+
+  const OBSERVED_AT_CASES: ReadonlyArray<Date | null> = [
+    null,
+    RECENT,
+    STALE,
+    new Date(AS_OF.getTime() + 24 * 60 * 60 * 1_000), // future-timestamped
+  ];
+
+  const ALL_SOURCES_EVIDENCE_CASES: ReadonlyArray<ReadonlyArray<{ decimals?: number | null }>> = [
+    [],
+    [{ decimals: 18 }],
+    [{ decimals: 18 }, { decimals: 18 }],
+    [{ decimals: 18 }, { decimals: 8 }],
+    [{ decimals: null }, { decimals: null }],
+    [{ decimals: 18 }, { decimals: null }],
+  ];
+
+  it("never returns a status outside the reachable canonical set, across the full branch matrix", () => {
+    for (const source of ALL_SOURCES) {
+      for (const latestObservedAt of OBSERVED_AT_CASES) {
+        for (const allSources of ALL_SOURCES_EVIDENCE_CASES) {
+          const { status } = computeTokenMetadataStatus({
+            source,
+            latestObservedAt,
+            asOf: AS_OF,
+            allSources,
+          });
+          expect(REACHABLE_STATUSES).toContain(status);
+        }
+      }
+    }
+  });
+
+  it("never returns 'verified', though the type declares it as a valid status", () => {
+    for (const source of ALL_SOURCES) {
+      for (const latestObservedAt of OBSERVED_AT_CASES) {
+        for (const allSources of ALL_SOURCES_EVIDENCE_CASES) {
+          const { status } = computeTokenMetadataStatus({
+            source,
+            latestObservedAt,
+            asOf: AS_OF,
+            allSources,
+          });
+          expect(status).not.toBe("verified");
+        }
+      }
+    }
+  });
+
+  it("documents the declared-vs-reachable gap: the type union has five members, only four are reachable", () => {
+    // A plain array annotated as `DashboardMetadataProvenanceStatus[]` is not
+    // exhaustive: TypeScript accepts any subset, so adding or removing a union
+    // member would leave this array (and its `toHaveLength` assertion) silently
+    // stale. A `Record` keyed by every union member is exhaustive instead —
+    // TypeScript requires exactly one entry per declared member, so this object
+    // literal fails to compile the moment the union changes without a matching
+    // update here.
+    const declaredVocabulary: Record<DashboardMetadataProvenanceStatus, true> = {
+      verified: true,
+      observed: true,
+      conflicting: true,
+      stale: true,
+      unknown: true,
+    };
+    const declaredKeys = Object.keys(declaredVocabulary);
+
+    expect(declaredKeys).toHaveLength(5);
+    expect(REACHABLE_STATUSES).toHaveLength(4);
+    expect(declaredKeys).toContain("verified");
+    expect(REACHABLE_STATUSES).not.toContain("verified");
   });
 });
