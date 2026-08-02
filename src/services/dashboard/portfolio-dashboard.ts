@@ -31,8 +31,12 @@ import type {
 /**
  * Conservative threshold after which a materialization is considered stale.
  * 15 minutes gives one full sync cycle headroom for most wallets.
+ *
+ * Exported so other materialization-health consumers (e.g. the pricing
+ * candidate preview) apply the same canonical threshold rather than
+ * inventing a second one.
  */
-const MATERIALIZATION_STALE_AFTER_SECONDS = 15 * 60; // 900 seconds
+export const MATERIALIZATION_STALE_AFTER_SECONDS = 15 * 60; // 900 seconds
 
 const ZERO = new Decimal(0);
 
@@ -551,10 +555,20 @@ function toMaterializationDto(
   };
 }
 
-function computeMaterializationFreshness(
-  materializationState: Awaited<
-    ReturnType<NonNullable<DashboardDbClient["portfolioMaterializationState"]>["findUnique"]>
-  >,
+/**
+ * Structural subset of a persisted `PortfolioMaterializationState` row
+ * sufficient to compute freshness. Kept narrower than the full Prisma
+ * row shape so other services (e.g. the pricing candidate preview) can
+ * call this with their own independently-typed query result.
+ */
+export type MaterializationFreshnessInput = {
+  status: "RUNNING" | "FAILED" | "COMPLETED";
+  latestMaterializedAt: Date | null;
+  errorMessage: string | null;
+} | null;
+
+export function computeMaterializationFreshness(
+  materializationState: MaterializationFreshnessInput,
   now: Date,
 ): DashboardMaterializationFreshnessDto {
   if (!materializationState) {
