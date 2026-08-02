@@ -644,7 +644,7 @@ A future pDAI→USD implementation decision must establish, for any proposed sou
 - Manipulation and liquidity assumptions.
 - Independence from PulseX pDAI routing (per §2).
 - Historical availability required for PnL resolution.
-- Outage/depeg behavior (per §5).
+- Outage/depeg behavior (per §7).
 - Provenance fields to persist on `PriceObservation`.
 - Deterministic resolver eligibility rule.
 - Auditability and required test coverage.
