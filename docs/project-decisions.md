@@ -663,7 +663,7 @@ This decision does not select a provider, a numeric threshold, a minimum liquidi
 
 - The current `UNVERIFIED_QUOTE_ASSUMPTION` rejection in `resolveBestPriceObservation` remains authoritative and must not be weakened by this decision.
 - A future source must not bypass this rejection merely by changing `quoteAsset`, `sourceId`, or route metadata shape. Any resolver change touching pDAI/USD eligibility requires review against `isUnverifiedPulseXQuoteAssumption`'s intent, not just its current pattern match.
-- Resolver eligibility for pDAI-derived USD pricing may change only after a future independent-evidence decision is accepted and implemented with test coverage proving the independence and failure-mode requirements in §2 and §5.
+- Resolver eligibility for pDAI-derived USD pricing may change only after a future independent-evidence decision is accepted and implemented with test coverage proving the independence, resolver-policy, and failure-mode requirements in §§2, 5, and 7.
 - The legacy fabricated `pulsex:pdai:par` observation (`price: "1"`, removed as a producer in PR #274) remains permanently ineligible, including for historical/average-cost PnL resolution.
 - Historical PnL price resolution must apply the same evidence policy as current-mark valuation — no separate, weaker historical-only exemption.
 
