@@ -389,17 +389,25 @@ describe("computeTokenMetadataStatus — canonical runtime vocabulary", () => {
   });
 
   it("documents the declared-vs-reachable gap: the type union has five members, only four are reachable", () => {
-    const declaredVocabulary: readonly DashboardMetadataProvenanceStatus[] = [
-      "verified",
-      "observed",
-      "conflicting",
-      "stale",
-      "unknown",
-    ];
+    // A plain array annotated as `DashboardMetadataProvenanceStatus[]` is not
+    // exhaustive: TypeScript accepts any subset, so adding or removing a union
+    // member would leave this array (and its `toHaveLength` assertion) silently
+    // stale. A `Record` keyed by every union member is exhaustive instead —
+    // TypeScript requires exactly one entry per declared member, so this object
+    // literal fails to compile the moment the union changes without a matching
+    // update here.
+    const declaredVocabulary: Record<DashboardMetadataProvenanceStatus, true> = {
+      verified: true,
+      observed: true,
+      conflicting: true,
+      stale: true,
+      unknown: true,
+    };
+    const declaredKeys = Object.keys(declaredVocabulary);
 
-    expect(declaredVocabulary).toHaveLength(5);
+    expect(declaredKeys).toHaveLength(5);
     expect(REACHABLE_STATUSES).toHaveLength(4);
-    expect(declaredVocabulary).toContain("verified");
+    expect(declaredKeys).toContain("verified");
     expect(REACHABLE_STATUSES).not.toContain("verified");
   });
 });
