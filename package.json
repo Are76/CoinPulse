@@ -16,6 +16,7 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "prices:seed": "tsx --conditions react-server scripts/seed-prices.ts",
+    "preview:price-ingest-candidates": "tsx --conditions react-server scripts/preview-price-ingest-candidates.ts",
     "repair:fabricated-transfers": "tsx --conditions react-server scripts/repair-fabricated-token-transfers.ts",
     "backfill:transfers": "tsx --conditions react-server scripts/transfer-backfill-runner.ts",
     "recover:ended-stake-evidence": "tsx --conditions react-server scripts/hexmining-ended-stake-historical-state-recovery.ts"
