@@ -602,3 +602,106 @@ Phase 1 **does not include** (later phases — deferred scope, not dropped funct
 **Implications:** Remaining HexMining roadmap work is later-phase scope only: HSI public exposure/UI/live verification, HTT, eHEX, and pricing/valuation/PnL (Phase 7). Phase 1 is closed and must not be reopened by later-phase work. Future roadmap scope is unchanged by this record.
 
 **Do not:** Treat this record as introducing any functionality — it documents completed, merged, evidence-backed work only. Do not read Phase 1 completion as HSI/HTT/eHEX or pricing/valuation/PnL progress. Do not claim HSI live verification passed (D-030 stands). Do not commit or modify the operator evidence JSONL files.
+
+---
+
+## D-034: Stablecoin (pDAI-to-USD) Pricing Evidence Policy
+
+**Status:** Accepted (2026-08-02) — governance decision only; no functional change
+
+**Evidence:** [E2] Merged PRs #351 (`fix(pricing): correct quote truth for pDAI-routed observations`), #352 (`feat(pricing): explain unavailable USD pricing from pDAI routes`), #354 (`feat(pricing): add wallet-scoped ingest candidate preview`). [E3] `src/services/pricing/price-resolver.ts` (`isUnverifiedPulseXQuoteAssumption`, `DISALLOWED_PRIMARY_SOURCES`, `PriceObservationRejectReason`), `src/services/pricing/types.ts` (`PriceSourceType`), `src/services/pricing/fetchers/onchain-pulsex-fetcher.ts`, `src/config/assets.ts` (`CORE_ASSETS.pdai`), `src/components/dashboard/dashboard-presenters.tsx`, `src/components/portfolio/asset-holdings-screen.tsx`. [E1] `docs/pulsechain-authoritative-data-sources.md` (Tier 1/2/3 source model); D-006 (no Tier 3 aggregator as primary pricing truth).
+
+### 1. Current enforced behavior (verified, unchanged by this decision)
+
+- pDAI is treated as a volatile crypto asset, never as USD. CoinPulse does not hardcode or infer `1 pDAI = 1 USD`.
+- `ONCHAIN_POOL` via PulseX (`fetchOnchainPulseXPrice`, token → WPLS → pDAI) is the only implemented live pricing fetcher. Its output is pDAI-denominated.
+- `resolveBestPriceObservation` rejects any observation identified by `isUnverifiedPulseXQuoteAssumption` with reason `UNVERIFIED_QUOTE_ASSUMPTION`: a PulseX-route `sourceId` requested/persisted under any quote asset other than the exact canonical pDAI `assetId`, or the legacy fabricated `pulsex:pdai:par` `sourceId` unconditionally, regardless of quote asset. A pDAI-denominated observation is never treated as a USD-denominated observation.
+- `ORACLE`, `MANUAL`, and `ONCHAIN_ROUTE` exist as `PriceSourceType` enum values but have no implemented ingestion path today. Declaring them does not mean they are implemented or approved sources.
+- Chainlink, Pyth, RedStone, DIA, and Chronicle are not implemented, partially implemented, or approved for CoinPulse.
+- No independently verified pDAI→USD source currently exists anywhere in the codebase.
+- Where USD pricing is unavailable, `pricing.status`/`valuation.status` surface `unavailable`/`unsupported` (D-008); the Dashboard and Asset Holdings screens explain this only when `pricing.status === "unavailable"`, using reviewed copy that names no route or guarantee the backend does not make (PR #352). Missing USD evidence never produces zero or a fabricated USD value (D-007).
+
+### 2. Required independence (governs any future pDAI→USD evidence proposal)
+
+Any future pDAI→USD evidence must be independent of the PulseX token→WPLS→pDAI route already used to price portfolio assets. The following are explicitly rejected as independence, and any future implementation proposal that relies on them must be rejected at design review:
+
+- Using the same PulseX route as both the token price and the USD anchor.
+- Pricing pDAI through a route that terminates back in pDAI.
+- Treating pool labels, token names, symbols, or an asset's intended peg as evidence of USD parity.
+- Treating multiple observations drawn from one underlying liquidity source or route family as independent corroboration.
+- Using frontend calculations, UI display values, or third-party aggregator display values (Tier 3 per `docs/pulsechain-authoritative-data-sources.md`) as backend pricing truth.
+
+### 3. Minimum source requirement categories (deferred — not defined here)
+
+A future pDAI→USD implementation decision must establish, for any proposed source, at minimum:
+
+- Source identity and operator.
+- Chain and contract/feed address.
+- Quoted asset and unit.
+- Update mechanism.
+- Freshness/staleness policy.
+- Confidence and failure behavior.
+- Manipulation and liquidity assumptions.
+- Independence from PulseX pDAI routing (per §2).
+- Historical availability required for PnL resolution.
+- Outage/depeg behavior (per §7).
+- Provenance fields to persist on `PriceObservation`.
+- Deterministic resolver eligibility rule.
+- Auditability and required test coverage.
+
+This decision does not select a provider, a numeric threshold, a minimum liquidity figure, a source count, a confidence value, or an acceptable deviation bound. Those require a separate, evidence-backed decision citing verified sources — not general knowledge of what providers exist.
+
+### 4. Oracle/source governance
+
+- Declaring `ORACLE`, `MANUAL`, or `ONCHAIN_ROUTE` in the `PriceSourceType` enum does not mean the source is implemented or approved for use.
+- Any third-party oracle integration (Chainlink, Pyth, RedStone, DIA, Chronicle, or otherwise) requires a separate governance and implementation decision that extends D-034 — or supersedes only its "no provider approved" conclusion — while remaining bound by the independence (§2), provenance, historical-PnL, and fail-closed (§7) requirements this decision establishes.
+- Provider adoption must verify, per `docs/pulsechain-authoritative-data-sources.md`'s Tier model: PulseChain deployment, feed ownership, contract identity, update behavior, historical availability, and operational risk — using Tier 1 verification, not vendor claims.
+- DexScreener and other Tier 3 commercial aggregators remain unsuitable as primary valuation truth (D-006). This decision does not weaken D-006.
+- A `MANUAL` observation must not be introduced as an undocumented operator override; any manual-source policy requires its own decision with persisted provenance and audit trail.
+
+### 5. Resolver policy
+
+- The current `UNVERIFIED_QUOTE_ASSUMPTION` rejection in `resolveBestPriceObservation` remains authoritative and must not be weakened by this decision.
+- A future source must not bypass this rejection merely by changing `quoteAsset`, `sourceId`, or route metadata shape. Any resolver change touching pDAI/USD eligibility requires review against `isUnverifiedPulseXQuoteAssumption`'s intent, not just its current pattern match.
+- Resolver eligibility for pDAI-derived USD pricing may change only after a future independent-evidence decision is accepted and implemented with test coverage proving the independence, resolver-policy, and failure-mode requirements in §§2, 5, and 7.
+- The legacy fabricated `pulsex:pdai:par` observation (`price: "1"`, removed as a producer in PR #274) remains permanently ineligible, including for historical/average-cost PnL resolution.
+- Historical PnL price resolution must apply the same evidence policy as current-mark valuation — no separate, weaker historical-only exemption.
+
+### 6. DTO and UI policy
+
+- Frontend continues to render backend DTO truth only (D-003); it must not convert pDAI to USD itself.
+- Current unavailable/null valuation behavior (PR #351, #352) remains correct and is not changed by this decision.
+- This decision does not require a new DTO status, field, or enum value. Whether the existing `pricing.status`/`valuation.status`/`PriceObservationRejectReason` vocabulary is sufficient for a future pDAI→USD source is a question for the future implementation design, not this policy.
+- Any breaking change to DTO vocabulary (new status value, renamed field, changed enum) requires its own separate, bounded contract decision with tests (D-008, D-012).
+
+### 7. Depeg and failure behavior (binding on any future implementation)
+
+A future pDAI→USD implementation must fail closed:
+
+- Stale, missing, conflicting, unsupported, or unhealthy evidence must not produce a USD valuation.
+- A depeg must not be hidden by forcing a value of `1`.
+- No fallback source may silently replace the canonical source without recorded provenance identifying which source produced the value.
+- Valuation and unrealized PnL must become unavailable — not zero, not stale-frozen — when required USD evidence is unavailable.
+- Realized PnL must not be erased or nulled merely because current mark pricing is unavailable; realized and unrealized PnL have independent evidence requirements.
+
+### 8. Implementation gate
+
+No pDAI→USD implementation PR may begin until a separate, evidence-backed decision documents:
+
+- The exact source or sources proposed, with Tier 1 verification.
+- Exact canonical identities/contracts involved.
+- Proof of independence from the PulseX pDAI route (per §2).
+- Freshness rules.
+- Confidence rules.
+- Persistence-model compatibility with `PriceObservation`.
+- Resolver eligibility behavior.
+- Historical PnL resolution behavior.
+- Failure/depeg behavior (per §7).
+- Required test coverage.
+- Operator observability requirements.
+
+**Rationale:** PR #351 closed a real gap — PulseX pDAI-routed prices were being persisted and could be selected under `quoteAsset: "fiat:usd"` with no independent USD evidence, backed only by an unread `routeMetadata` flag. The fix is provenance-based and correct, but the audit that produced this decision found no durable project record of *why* pDAI routing is insufficient USD evidence, nor of what evidence would be sufficient in the future. Without this record, a future PR could reintroduce the same gap under different field names, or treat PR #354's `quoteAsset` correction (canonical pDAI identity, never `"fiat:usd"`) as an invitation to build a pDAI→USD bridge without evidence. This decision closes that gap in writing only — it changes no code, no resolver behavior, and no DTO contract.
+
+**Implications:** Future pDAI→USD proposals must be evaluated against §§2–8 above before any implementation work starts. The absence of a concrete provider or threshold in this decision is intentional, not an oversight — see §3.
+
+**Do not:** Treat this decision as approving any pricing provider, oracle, or pDAI→USD bridge. Do not treat it as making USD valuation available for pDAI-routed assets. Do not treat PR #354's canonical pDAI `quoteAsset` correction as evidence toward USD parity — it corrects identity only, per PR #354's own commit message ("does not by itself increase Dashboard USD valuation coverage"). Do not weaken D-006 or the `UNVERIFIED_QUOTE_ASSUMPTION` resolver rejection based on this decision. Do not read "sufficient evidence," "reliable source," or "stable enough" anywhere in this decision as a defined threshold — none is defined here; a separate evidence-backed decision is required.
