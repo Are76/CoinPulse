@@ -40,6 +40,14 @@
 
 import { fileURLToPath } from "url";
 
+// Type-only import: erased at compile time, so it does not load the
+// server-only module graph and does not affect the deferred-import pattern.
+import type {
+  DiscoverIngestCandidatesResult,
+  EligibleIngestCandidate,
+  ExcludedIngestCandidate,
+} from "@/services/pricing/discover-ingest-candidates";
+
 const PULSECHAIN_CHAIN_ID = 369 as const;
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const REQUIRED_ENV_VARS = ["DATABASE_URL", "REDIS_URL"] as const;
@@ -123,8 +131,8 @@ export type PreviewReport = {
   totalExcluded: number;
   cap: number;
   truncated: boolean;
-  eligible: unknown[];
-  excluded: unknown[];
+  eligible: EligibleIngestCandidate[];
+  excluded: ExcludedIngestCandidate[];
   warnings: readonly string[];
 };
 
@@ -136,76 +144,96 @@ function safeStringify(value: unknown): string {
   );
 }
 
-// ─── CLI entrypoint ────────────────────────────────────────────────────────────
+/** Never includes err.message — Prisma errors can embed connection strings. */
+function describeError(err: unknown): string {
+  if (!(err instanceof Error)) return typeof err;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? `${err.name} (${code})` : err.name;
+}
 
-async function main(): Promise<void> {
-  const parsed = parseInput(process.argv.slice(2));
+// ─── Orchestration (testable) ──────────────────────────────────────────────────
+
+export type TrackedWallet = { id: string; address: string; chainId: number };
+
+export type PreviewCliDependencies = {
+  /**
+   * Deferred loader for server-only services. Only called after argument
+   * and environment validation both pass, so an invalid invocation never
+   * loads the server-only module graph.
+   */
+  loadServices: () => Promise<{
+    resolveTrackedWallet: (args: {
+      walletAddress: string;
+      chainId: number;
+    }) => Promise<TrackedWallet | null>;
+    discoverCandidates: (args: {
+      chainId: number;
+      walletId: string;
+      walletAddress: string;
+    }) => Promise<DiscoverIngestCandidatesResult>;
+  }>;
+  now: () => Date;
+  stdout: (line: string) => void;
+  stderr: (line: string) => void;
+};
+
+export type PreviewCliRunResult = { exitCode: number };
+
+export async function runPreviewCli(
+  argv: readonly string[],
+  env: Record<string, string | undefined>,
+  deps: PreviewCliDependencies,
+): Promise<PreviewCliRunResult> {
+  const parsed = parseInput(argv);
   if (!parsed.ok) {
-    console.error(`preview-price-ingest-candidates: ${parsed.error}`);
-    console.error(PREVIEW_CLI_USAGE);
-    process.exitCode = 1;
-    return;
+    deps.stderr(`preview-price-ingest-candidates: ${parsed.error}`);
+    deps.stderr(PREVIEW_CLI_USAGE);
+    return { exitCode: 1 };
   }
 
-  const envCheck = checkEnv(process.env as Record<string, string | undefined>);
+  const envCheck = checkEnv(env);
   if (!envCheck.ok) {
-    console.error(
+    deps.stderr(
       `preview-price-ingest-candidates: missing required environment variables: ${envCheck.missing.join(", ")}`,
     );
-    process.exitCode = 1;
-    return;
+    return { exitCode: 1 };
   }
 
   const { wallet, chainId } = parsed.input;
+  const { resolveTrackedWallet, discoverCandidates } = await deps.loadServices();
 
-  // Deferred imports so argument/env validation always runs first and the
-  // server-only service modules never load for an invalid invocation.
-  const { resolveTrackedWalletByAddress } = await import("@/services/api/wallets");
-  const { discoverPriceIngestCandidates } = await import(
-    "@/services/pricing/discover-ingest-candidates"
-  );
-
-  let trackedWallet: Awaited<ReturnType<typeof resolveTrackedWalletByAddress>>;
+  let trackedWallet: TrackedWallet | null;
   try {
-    trackedWallet = await resolveTrackedWalletByAddress({ walletAddress: wallet, chainId });
+    trackedWallet = await resolveTrackedWallet({ walletAddress: wallet, chainId });
   } catch (err) {
-    console.error(
-      `preview-price-ingest-candidates: database read failed while resolving wallet — ${
-        err instanceof Error ? err.name : typeof err
-      }`,
+    deps.stderr(
+      `preview-price-ingest-candidates: database read failed while resolving wallet — ${describeError(err)}`,
     );
-    process.exitCode = 1;
-    return;
+    return { exitCode: 1 };
   }
 
   if (!trackedWallet) {
-    console.error(
+    deps.stderr(
       `preview-price-ingest-candidates: wallet ${wallet} is not tracked on chainId ${chainId}. Import it first via POST /api/wallets/import.`,
     );
-    process.exitCode = 1;
-    return;
+    return { exitCode: 1 };
   }
 
-  let result: Awaited<ReturnType<typeof discoverPriceIngestCandidates>>;
+  let result: DiscoverIngestCandidatesResult;
   try {
-    result = await discoverPriceIngestCandidates({
+    result = await discoverCandidates({
       chainId: trackedWallet.chainId,
       walletId: trackedWallet.id,
       walletAddress: trackedWallet.address,
     });
   } catch (err) {
-    console.error(
-      `preview-price-ingest-candidates: discovery failed — ${
-        err instanceof Error ? err.name : typeof err
-      }`,
-    );
-    process.exitCode = 1;
-    return;
+    deps.stderr(`preview-price-ingest-candidates: discovery failed — ${describeError(err)}`);
+    return { exitCode: 1 };
   }
 
   const report: PreviewReport = {
     schemaVersion: "v1",
-    generatedAt: new Date().toISOString(),
+    generatedAt: deps.now().toISOString(),
     chainId: result.chainId,
     walletAddress: result.walletAddress,
     trackedWalletId: trackedWallet.id,
@@ -220,7 +248,33 @@ async function main(): Promise<void> {
     warnings: PREVIEW_WARNINGS,
   };
 
-  console.log(safeStringify(report));
+  deps.stdout(safeStringify(report));
+  return { exitCode: 0 };
+}
+
+// ─── CLI entrypoint ────────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const result = await runPreviewCli(
+    process.argv.slice(2),
+    process.env as Record<string, string | undefined>,
+    {
+      loadServices: async () => {
+        const { resolveTrackedWalletByAddress } = await import("@/services/api/wallets");
+        const { discoverPriceIngestCandidates } = await import(
+          "@/services/pricing/discover-ingest-candidates"
+        );
+        return {
+          resolveTrackedWallet: resolveTrackedWalletByAddress,
+          discoverCandidates: discoverPriceIngestCandidates,
+        };
+      },
+      now: () => new Date(),
+      stdout: (line) => console.log(line),
+      stderr: (line) => console.error(line),
+    },
+  );
+  process.exitCode = result.exitCode;
 }
 
 // Run only when executed directly as CLI, not when imported by tests.

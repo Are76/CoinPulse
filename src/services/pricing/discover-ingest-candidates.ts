@@ -34,7 +34,7 @@ const QUOTE_ASSET = "fiat:usd";
 // src/services/pricing/price-resolver.ts PDAI_QUOTE_ASSET_ID.
 const PDAI_ASSET_ID = CORE_ASSETS.pdai.assetId.toLowerCase();
 
-const CANONICAL_ASSET_ID_PATTERN = /^chain:(\d+):(erc20|native):0x[0-9a-f]{40}$/;
+const CANONICAL_ASSET_ID_PATTERN = /^chain:(\d+):(erc20|native):(0x[0-9a-f]{40})$/;
 const ZERO_DECIMAL_STRING_PATTERN = /^-?0(\.0+)?$/;
 
 export type IngestCandidateExclusionReason =
@@ -113,9 +113,11 @@ export type DiscoveryDbClient = {
       where: { walletId: string; chainId: number };
     }): Promise<BalanceRow[]>;
   };
+  // Scoped to the wallet's own discovered assetIds (never a chain-wide scan) —
+  // see the `assetId: { in: ... }` narrowing in discoverPriceIngestCandidates.
   token: {
     findMany(args: {
-      where: { chainId: number };
+      where: { chainId: number; assetId: { in: string[] } };
     }): Promise<TokenRow[]>;
   };
   tokenMetadataSource: {
@@ -127,11 +129,6 @@ export type DiscoveryDbClient = {
     findMany(args: {
       where: { walletId: string; chainId: number };
     }): Promise<Array<{ lpAssetId: string }>>;
-  };
-  portfolioStakePosition: {
-    findMany(args: {
-      where: { walletId: string; chainId: number };
-    }): Promise<Array<{ tokenAssetId: string }>>;
   };
 };
 
@@ -155,6 +152,67 @@ function excludeRow(
   excluded.push(args);
 }
 
+type CanonicalIdentityValidation =
+  | { ok: true; tokenAddress: string }
+  | { ok: false; detail: string };
+
+/**
+ * Pure canonical-identity validator. Proves — never guesses — that a
+ * balance row's assetId is internally consistent and matches the requested
+ * chain and the row's own persisted assetAddress. This never rewrites a
+ * contradictory persisted identity into an eligible one; contradictions are
+ * always reported as INVALID_CANONICAL_IDENTITY.
+ */
+function validateCanonicalIdentity(args: {
+  assetId: string;
+  requestedChainId: number;
+  assetAddress: string | null;
+}): CanonicalIdentityValidation {
+  const match = CANONICAL_ASSET_ID_PATTERN.exec(args.assetId);
+  if (!match) {
+    return {
+      ok: false,
+      detail: "assetId does not match the canonical chain:<id>:(erc20|native):0x... format.",
+    };
+  }
+
+  const [, chainIdSegment, kind, embeddedAddress] = match;
+  const embeddedChainId = Number(chainIdSegment);
+  if (embeddedChainId !== args.requestedChainId) {
+    return {
+      ok: false,
+      detail: `assetId embeds chainId ${embeddedChainId}, which does not match the requested chainId ${args.requestedChainId}.`,
+    };
+  }
+
+  if (kind === "native") {
+    if (args.assetId !== PULSECHAIN_NATIVE_ASSET_ID || embeddedAddress !== PULSECHAIN_NATIVE_TOKEN_ADDRESS) {
+      return {
+        ok: false,
+        detail: "native assetId does not match the canonical PulseChain native asset identity.",
+      };
+    }
+    return { ok: true, tokenAddress: PULSECHAIN_NATIVE_TOKEN_ADDRESS };
+  }
+
+  // kind === "erc20"
+  if (!args.assetAddress) {
+    return {
+      ok: false,
+      detail: "ERC-20 assetId has no persisted assetAddress to validate against.",
+    };
+  }
+
+  if (embeddedAddress !== args.assetAddress.toLowerCase()) {
+    return {
+      ok: false,
+      detail: "assetId token address does not match the persisted assetAddress for this row.",
+    };
+  }
+
+  return { ok: true, tokenAddress: args.assetAddress };
+}
+
 /**
  * Discovers wallet-scoped, chain-369-scoped price-ingestion candidates from
  * current non-zero canonical `PortfolioTokenBalance` state.
@@ -172,18 +230,29 @@ export async function discoverPriceIngestCandidates(
 
   const db = args.db ?? (getDb() as unknown as DiscoveryDbClient);
 
-  const [balances, tokens, lpPositions, stakePositions] = await Promise.all([
+  // Balances and LP positions are both wallet-scoped queries that do not
+  // depend on each other, so they run in parallel. Token and
+  // TokenMetadataSource lookups are deliberately NOT run in parallel with
+  // balances: they must be narrowed to the wallet's own discovered assetIds
+  // (never a chain-wide registry scan), so they can only run after the
+  // balance rows are known.
+  const [balances, lpPositions] = await Promise.all([
     db.portfolioTokenBalance.findMany({
       where: { walletId: args.walletId, chainId: args.chainId },
     }),
-    db.token.findMany({ where: { chainId: args.chainId } }),
     db.portfolioLpPosition.findMany({
       where: { walletId: args.walletId, chainId: args.chainId },
     }),
-    db.portfolioStakePosition.findMany({
-      where: { walletId: args.walletId, chainId: args.chainId },
-    }),
   ]);
+
+  const walletAssetIds = Array.from(new Set(balances.map((balance) => balance.assetId)));
+
+  const tokens =
+    walletAssetIds.length > 0
+      ? await db.token.findMany({
+          where: { chainId: args.chainId, assetId: { in: walletAssetIds } },
+        })
+      : [];
 
   const tokenByAssetId = new Map(tokens.map((token) => [token.assetId, token]));
   const tokenIds = tokens.map((token) => token.id);
@@ -200,7 +269,6 @@ export async function discoverPriceIngestCandidates(
   }
 
   const lpAssetIds = new Set(lpPositions.map((position) => position.lpAssetId));
-  const stakeTokenAssetIds = new Set(stakePositions.map((position) => position.tokenAssetId));
 
   const eligible: EligibleIngestCandidate[] = [];
   const excluded: ExcludedIngestCandidate[] = [];
@@ -214,16 +282,11 @@ export async function discoverPriceIngestCandidates(
   );
 
   for (const balance of sortedBalances) {
-    const tokenAddress =
-      balance.assetId === PULSECHAIN_NATIVE_ASSET_ID
-        ? PULSECHAIN_NATIVE_TOKEN_ADDRESS
-        : balance.assetAddress;
-
     if (seenAssetIds.has(balance.assetId)) {
       excludeRow(excluded, {
         assetId: balance.assetId,
         chainId: args.chainId,
-        tokenAddress,
+        tokenAddress: balance.assetAddress,
         reason: "DUPLICATE_ASSET",
         detail: "Duplicate assetId collapsed after the first canonical occurrence.",
       });
@@ -231,16 +294,24 @@ export async function discoverPriceIngestCandidates(
     }
     seenAssetIds.add(balance.assetId);
 
-    if (!CANONICAL_ASSET_ID_PATTERN.test(balance.assetId)) {
+    const identity = validateCanonicalIdentity({
+      assetId: balance.assetId,
+      requestedChainId: args.chainId,
+      assetAddress: balance.assetAddress,
+    });
+
+    if (!identity.ok) {
       excludeRow(excluded, {
         assetId: balance.assetId,
         chainId: args.chainId,
-        tokenAddress,
+        tokenAddress: balance.assetAddress,
         reason: "INVALID_CANONICAL_IDENTITY",
-        detail: "assetId does not match the canonical chain:<id>:(erc20|native):0x... format.",
+        detail: identity.detail,
       });
       continue;
     }
+
+    const tokenAddress = identity.tokenAddress;
 
     if (ZERO_DECIMAL_STRING_PATTERN.test(balance.balanceQuantity.toString())) {
       excludeRow(excluded, {
@@ -249,17 +320,6 @@ export async function discoverPriceIngestCandidates(
         tokenAddress,
         reason: "ZERO_BALANCE",
         detail: "Persisted balanceQuantity is zero.",
-      });
-      continue;
-    }
-
-    if (!tokenAddress) {
-      excludeRow(excluded, {
-        assetId: balance.assetId,
-        chainId: args.chainId,
-        tokenAddress: null,
-        reason: "INVALID_CANONICAL_IDENTITY",
-        detail: "No token address is available for this non-native asset.",
       });
       continue;
     }
@@ -286,13 +346,13 @@ export async function discoverPriceIngestCandidates(
       continue;
     }
 
-    if (lpAssetIds.has(balance.assetId) || stakeTokenAssetIds.has(balance.assetId)) {
+    if (lpAssetIds.has(balance.assetId)) {
       excludeRow(excluded, {
         assetId: balance.assetId,
         chainId: args.chainId,
         tokenAddress,
         reason: "UNSUPPORTED_ASSET_CLASS",
-        detail: "assetId matches a canonical LP or stake position identity for this wallet.",
+        detail: "assetId matches a canonical LP position identity for this wallet.",
       });
       continue;
     }
