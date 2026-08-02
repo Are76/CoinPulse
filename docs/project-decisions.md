@@ -615,7 +615,7 @@ Phase 1 **does not include** (later phases — deferred scope, not dropped funct
 
 - pDAI is treated as a volatile crypto asset, never as USD. CoinPulse does not hardcode or infer `1 pDAI = 1 USD`.
 - `ONCHAIN_POOL` via PulseX (`fetchOnchainPulseXPrice`, token → WPLS → pDAI) is the only implemented live pricing fetcher. Its output is pDAI-denominated.
-- `resolveBestPriceObservation` rejects any observation identified by `isUnverifiedPulseXQuoteAssumption` — a PulseX-route or legacy `pulsex:pdai:par` `sourceId` requested/persisted under any quote asset other than the exact canonical pDAI `assetId` — with reason `UNVERIFIED_QUOTE_ASSUMPTION`. A pDAI-denominated observation is never treated as a USD-denominated observation.
+- `resolveBestPriceObservation` rejects any observation identified by `isUnverifiedPulseXQuoteAssumption` with reason `UNVERIFIED_QUOTE_ASSUMPTION`: a PulseX-route `sourceId` requested/persisted under any quote asset other than the exact canonical pDAI `assetId`, or the legacy fabricated `pulsex:pdai:par` `sourceId` unconditionally, regardless of quote asset. A pDAI-denominated observation is never treated as a USD-denominated observation.
 - `ORACLE`, `MANUAL`, and `ONCHAIN_ROUTE` exist as `PriceSourceType` enum values but have no implemented ingestion path today. Declaring them does not mean they are implemented or approved sources.
 - Chainlink, Pyth, RedStone, DIA, and Chronicle are not implemented, partially implemented, or approved for CoinPulse.
 - No independently verified pDAI→USD source currently exists anywhere in the codebase.
@@ -654,7 +654,7 @@ This decision does not select a provider, a numeric threshold, a minimum liquidi
 ### 4. Oracle/source governance
 
 - Declaring `ORACLE`, `MANUAL`, or `ONCHAIN_ROUTE` in the `PriceSourceType` enum does not mean the source is implemented or approved for use.
-- Any third-party oracle integration (Chainlink, Pyth, RedStone, DIA, Chronicle, or otherwise) requires a separate governance and implementation decision superseding this one.
+- Any third-party oracle integration (Chainlink, Pyth, RedStone, DIA, Chronicle, or otherwise) requires a separate governance and implementation decision that extends D-034 — or supersedes only its "no provider approved" conclusion — while remaining bound by the independence (§2), provenance, historical-PnL, and fail-closed (§7) requirements this decision establishes.
 - Provider adoption must verify, per `docs/pulsechain-authoritative-data-sources.md`'s Tier model: PulseChain deployment, feed ownership, contract identity, update behavior, historical availability, and operational risk — using Tier 1 verification, not vendor claims.
 - DexScreener and other Tier 3 commercial aggregators remain unsuitable as primary valuation truth (D-006). This decision does not weaken D-006.
 - A `MANUAL` observation must not be introduced as an undocumented operator override; any manual-source policy requires its own decision with persisted provenance and audit trail.
