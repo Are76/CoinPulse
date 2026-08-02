@@ -6,6 +6,11 @@ import {
   PULSECHAIN_NATIVE_TOKEN_ADDRESS,
 } from "@/config/assets";
 import { getDb } from "@/lib/db";
+import {
+  computeMaterializationFreshness,
+  type MaterializationFreshnessInput,
+} from "@/services/dashboard/portfolio-dashboard";
+import type { DashboardMaterializationFreshnessDto } from "@/services/dashboard/types";
 import { detectDecimalsConflict } from "@/services/dashboard/token-metadata-status";
 
 /**
@@ -18,14 +23,30 @@ import { detectDecimalsConflict } from "@/services/dashboard/token-metadata-stat
  * ingestion, and never mutates the database — it only reads already-persisted
  * canonical backend state.
  *
+ * Deterministic given the same persisted database state and the same `asOf`
+ * timestamp (used only to evaluate materialization freshness against the
+ * repository's existing staleness threshold — never for pricing math).
+ *
  * Eligibility does not prove priceability, a valid PulseX route, or a
  * verified USD price. See docs/project-decisions.md D-004/D-006 — the
  * existing pricing resolver remains the sole authority on quote truth.
+ *
+ * `quoteAsset` on every eligible candidate is the canonical pDAI asset
+ * identity, not `"fiat:usd"`. The existing PulseX fetcher
+ * (`fetchOnchainPulseXPrice`) always routes token → WPLS → pDAI, and
+ * `isUnverifiedPulseXQuoteAssumption` (src/services/pricing/price-resolver.ts,
+ * PR #351) rejects every PulseX-routed observation unless it was persisted
+ * under the exact canonical pDAI quote identity. Emitting `"fiat:usd"` here
+ * would produce an ingest payload whose resulting observation the resolver
+ * can never select. A future pDAI-denominated observation is not a verified
+ * USD price and does not increase Dashboard USD valuation coverage — see
+ * `PREVIEW_WARNINGS` in scripts/preview-price-ingest-candidates.ts.
  */
 
 const SUPPORTED_CHAIN_ID = 369;
 const CANDIDATE_CAP = 50;
-const QUOTE_ASSET = "fiat:usd";
+const MIN_ACCEPTED_DECIMALS = 0;
+const MAX_ACCEPTED_DECIMALS = 18; // matches tokenDecimalsSchema in src/services/api/validation.ts
 
 // Real persisted assetId strings embed a lowercased token address (see
 // src/services/sync/sync-common.ts buildAssetId equivalent). CORE_ASSETS.pdai
@@ -34,12 +55,26 @@ const QUOTE_ASSET = "fiat:usd";
 // src/services/pricing/price-resolver.ts PDAI_QUOTE_ASSET_ID.
 const PDAI_ASSET_ID = CORE_ASSETS.pdai.assetId.toLowerCase();
 
+// The only quoteAsset value under which the resolver will ever select a
+// PulseX-routed observation (see isUnverifiedPulseXQuoteAssumption). Every
+// eligible candidate's price would, if actually ingested, be pDAI-routed —
+// so this is the only safe quoteAsset to advertise.
+const QUOTE_ASSET = PDAI_ASSET_ID;
+
+// Canonical assets that must remain reachable ahead of the 50-item cap, in
+// this explicit stable order. Currently just native PLS — the only core
+// asset whose canonical assetId this service special-cases (for its
+// zero-address tokenAddress derivation). Matched by exact canonical assetId,
+// never by symbol.
+const PRIORITY_ASSET_IDS: readonly string[] = [PULSECHAIN_NATIVE_ASSET_ID];
+
 const CANONICAL_ASSET_ID_PATTERN = /^chain:(\d+):(erc20|native):(0x[0-9a-f]{40})$/;
 const ZERO_DECIMAL_STRING_PATTERN = /^-?0(\.0+)?$/;
 
 export type IngestCandidateExclusionReason =
   | "ZERO_BALANCE"
   | "MISSING_DECIMALS"
+  | "INVALID_DECIMALS"
   | "CONFLICTING_DECIMALS"
   | "IGNORED_ASSET"
   | "PDAI_ROUTING_REFERENCE"
@@ -51,6 +86,7 @@ export type EligibleIngestCandidate = {
   assetId: string;
   tokenAddress: string;
   tokenDecimals: number;
+  /** Canonical pDAI asset identity — never "fiat:usd". See module docstring. */
   quoteAsset: string;
   walletAddress: string;
   chainId: number;
@@ -66,6 +102,25 @@ export type ExcludedIngestCandidate = {
   detail: string;
 };
 
+export type MaterializationHealth = {
+  /**
+   * True only when the persisted `PortfolioMaterializationState` row for
+   * this wallet+chain is COMPLETED, `completedSuccessfully`, carries zero
+   * persisted warnings, and is fresh under the existing
+   * `MATERIALIZATION_STALE_AFTER_SECONDS` repository threshold
+   * (src/services/dashboard/portfolio-dashboard.ts). When false, the
+   * service refuses to classify any candidate as eligible.
+   */
+  healthy: boolean;
+  status: "RUNNING" | "FAILED" | "COMPLETED" | null;
+  completedSuccessfully: boolean | null;
+  freshnessStatus: DashboardMaterializationFreshnessDto["status"];
+  freshnessReason: string | null;
+  latestMaterializedAt: string | null;
+  warningCount: number;
+  errorMessage: string | null;
+};
+
 export type DiscoverIngestCandidatesResult = {
   chainId: number;
   walletAddress: string;
@@ -77,6 +132,7 @@ export type DiscoverIngestCandidatesResult = {
   truncated: boolean;
   eligible: EligibleIngestCandidate[];
   excluded: ExcludedIngestCandidate[];
+  materializationHealth: MaterializationHealth;
 };
 
 export class UnsupportedIngestDiscoveryChainError extends Error {
@@ -107,6 +163,14 @@ type MetadataSourceRow = {
   decimals: number | null;
 };
 
+type MaterializationStateRow = {
+  status: "RUNNING" | "FAILED" | "COMPLETED";
+  completedSuccessfully: boolean;
+  latestMaterializedAt: Date | null;
+  warningCount: number;
+  errorMessage: string | null;
+};
+
 export type DiscoveryDbClient = {
   portfolioTokenBalance: {
     findMany(args: {
@@ -130,12 +194,25 @@ export type DiscoveryDbClient = {
       where: { walletId: string; chainId: number };
     }): Promise<Array<{ lpAssetId: string }>>;
   };
+  // Canonical materialization-health source — see MaterializationHealth doc.
+  portfolioMaterializationState: {
+    findUnique(args: {
+      where: { walletId_chainId: { walletId: string; chainId: number } };
+    }): Promise<MaterializationStateRow | null>;
+  };
 };
 
 export type DiscoverIngestCandidatesArgs = {
   chainId: number;
   walletId: string;
   walletAddress: string;
+  /**
+   * Evaluation timestamp for materialization freshness only (never used for
+   * pricing math). Defaults to the current time when omitted; callers that
+   * need a deterministic result (e.g. the CLI, or tests) should pass an
+   * explicit value.
+   */
+  asOf?: Date;
   db?: DiscoveryDbClient;
 };
 
@@ -203,23 +280,73 @@ function validateCanonicalIdentity(args: {
     };
   }
 
-  if (embeddedAddress !== args.assetAddress.toLowerCase()) {
+  const normalizedAddress = args.assetAddress.toLowerCase();
+  if (embeddedAddress !== normalizedAddress) {
     return {
       ok: false,
       detail: "assetId token address does not match the persisted assetAddress for this row.",
     };
   }
 
-  return { ok: true, tokenAddress: args.assetAddress };
+  // Return the normalized (lowercase) address — matching the embedded
+  // assetId casing exactly — rather than the persisted row's original
+  // casing, since operators submit this value directly to
+  // POST /api/prices/ingest.
+  return { ok: true, tokenAddress: normalizedAddress };
+}
+
+/**
+ * Computes materialization health for one wallet+chain from the canonical
+ * `PortfolioMaterializationState` row, reusing the exact freshness rule and
+ * staleness threshold already used by the portfolio dashboard
+ * (src/services/dashboard/portfolio-dashboard.ts) rather than inventing a
+ * second one. A wallet with no persisted row is never healthy — absence of
+ * evidence is not evidence of health.
+ */
+function buildMaterializationHealth(
+  row: MaterializationStateRow | null,
+  asOf: Date,
+): MaterializationHealth {
+  const freshnessInput: MaterializationFreshnessInput = row
+    ? {
+        status: row.status,
+        latestMaterializedAt: row.latestMaterializedAt,
+        errorMessage: row.errorMessage,
+      }
+    : null;
+  const freshness = computeMaterializationFreshness(freshnessInput, asOf);
+
+  const healthy =
+    row !== null &&
+    row.status === "COMPLETED" &&
+    row.completedSuccessfully === true &&
+    row.warningCount === 0 &&
+    freshness.status === "fresh";
+
+  return {
+    healthy,
+    status: row?.status ?? null,
+    completedSuccessfully: row?.completedSuccessfully ?? null,
+    freshnessStatus: freshness.status,
+    freshnessReason: freshness.reason,
+    latestMaterializedAt: row?.latestMaterializedAt?.toISOString() ?? null,
+    warningCount: row?.warningCount ?? 0,
+    errorMessage: row?.errorMessage ?? null,
+  };
 }
 
 /**
  * Discovers wallet-scoped, chain-369-scoped price-ingestion candidates from
  * current non-zero canonical `PortfolioTokenBalance` state.
  *
- * Pure with respect to time: takes no wall-clock dependency and always
- * returns a deterministic result for the same persisted database state.
- * Strictly read-only — issues no writes and calls no RPC.
+ * Deterministic given the same persisted database state and `asOf` (or the
+ * omitted-default current time). Strictly read-only — issues no writes and
+ * calls no RPC.
+ *
+ * Refuses to classify any candidate as eligible when the wallet's canonical
+ * `PortfolioMaterializationState` is missing, not COMPLETED, not
+ * `completedSuccessfully`, stale under the existing repository threshold, or
+ * carries any persisted warning — see `MaterializationHealth`.
  */
 export async function discoverPriceIngestCandidates(
   args: DiscoverIngestCandidatesArgs,
@@ -229,21 +356,43 @@ export async function discoverPriceIngestCandidates(
   }
 
   const db = args.db ?? (getDb() as unknown as DiscoveryDbClient);
+  const asOf = args.asOf ?? new Date();
 
-  // Balances and LP positions are both wallet-scoped queries that do not
-  // depend on each other, so they run in parallel. Token and
-  // TokenMetadataSource lookups are deliberately NOT run in parallel with
-  // balances: they must be narrowed to the wallet's own discovered assetIds
-  // (never a chain-wide registry scan), so they can only run after the
-  // balance rows are known.
-  const [balances, lpPositions] = await Promise.all([
+  // Balances, LP positions, and materialization state are all wallet-scoped
+  // queries that do not depend on each other, so they run in parallel.
+  // Token and TokenMetadataSource lookups are deliberately NOT run in
+  // parallel with balances: they must be narrowed to the wallet's own
+  // discovered assetIds (never a chain-wide registry scan), so they can
+  // only run after the balance rows are known.
+  const [balances, lpPositions, materializationStateRow] = await Promise.all([
     db.portfolioTokenBalance.findMany({
       where: { walletId: args.walletId, chainId: args.chainId },
     }),
     db.portfolioLpPosition.findMany({
       where: { walletId: args.walletId, chainId: args.chainId },
     }),
+    db.portfolioMaterializationState.findUnique({
+      where: { walletId_chainId: { walletId: args.walletId, chainId: args.chainId } },
+    }),
   ]);
+
+  const materializationHealth = buildMaterializationHealth(materializationStateRow, asOf);
+
+  if (!materializationHealth.healthy) {
+    return {
+      chainId: args.chainId,
+      walletAddress: args.walletAddress,
+      totalBalanceRowsInspected: balances.length,
+      totalEligibleBeforeCap: 0,
+      totalReturned: 0,
+      totalExcluded: 0,
+      cap: CANDIDATE_CAP,
+      truncated: false,
+      eligible: [],
+      excluded: [],
+      materializationHealth,
+    };
+  }
 
   const walletAssetIds = Array.from(new Set(balances.map((balance) => balance.assetId)));
 
@@ -335,6 +484,21 @@ export async function discoverPriceIngestCandidates(
       continue;
     }
 
+    if (
+      !Number.isInteger(balance.decimals) ||
+      balance.decimals < MIN_ACCEPTED_DECIMALS ||
+      balance.decimals > MAX_ACCEPTED_DECIMALS
+    ) {
+      excludeRow(excluded, {
+        assetId: balance.assetId,
+        chainId: args.chainId,
+        tokenAddress,
+        reason: "INVALID_DECIMALS",
+        detail: `Persisted decimals ${balance.decimals} is outside the range [${MIN_ACCEPTED_DECIMALS}, ${MAX_ACCEPTED_DECIMALS}] accepted by POST /api/prices/ingest.`,
+      });
+      continue;
+    }
+
     if (balance.assetId === PDAI_ASSET_ID) {
       excludeRow(excluded, {
         assetId: balance.assetId,
@@ -372,13 +536,17 @@ export async function discoverPriceIngestCandidates(
 
     if (token) {
       const sources = sourcesByTokenId.get(token.id) ?? [];
-      if (detectDecimalsConflict(sources)) {
+      // Include the persisted balance's own decimals in the comparison —
+      // a balance row that disagrees with every metadata source is just as
+      // much a conflict as metadata sources disagreeing with each other.
+      if (detectDecimalsConflict([...sources, { decimals: balance.decimals }])) {
         excludeRow(excluded, {
           assetId: balance.assetId,
           chainId: args.chainId,
           tokenAddress,
           reason: "CONFLICTING_DECIMALS",
-          detail: "TokenMetadataSource rows disagree on decimals for this token.",
+          detail:
+            "Persisted PortfolioTokenBalance.decimals and TokenMetadataSource decimals evidence disagree for this token.",
         });
         continue;
       }
@@ -395,9 +563,22 @@ export async function discoverPriceIngestCandidates(
     });
   }
 
-  const totalEligibleBeforeCap = eligible.length;
+  // `eligible` is currently in plain ascending assetId order (the loop
+  // processed sortedBalances in that order). Reorder so PRIORITY_ASSET_IDS
+  // (currently just native PLS) are placed first, in their documented
+  // stable order, ahead of the 50-item cap — otherwise a wallet with 50+
+  // eligible ERC-20 balances would always push native PLS past the cap.
+  // Matched by exact canonical assetId only, never by symbol.
+  const priorityEligible = PRIORITY_ASSET_IDS.map((id) =>
+    eligible.find((candidate) => candidate.assetId === id),
+  ).filter((candidate): candidate is EligibleIngestCandidate => candidate !== undefined);
+  const priorityAssetIdSet = new Set(priorityEligible.map((candidate) => candidate.assetId));
+  const restEligible = eligible.filter((candidate) => !priorityAssetIdSet.has(candidate.assetId));
+  const orderedEligible = [...priorityEligible, ...restEligible];
+
+  const totalEligibleBeforeCap = orderedEligible.length;
   const truncated = totalEligibleBeforeCap > CANDIDATE_CAP;
-  const cappedEligible = eligible.slice(0, CANDIDATE_CAP);
+  const cappedEligible = orderedEligible.slice(0, CANDIDATE_CAP);
 
   return {
     chainId: args.chainId,
@@ -410,5 +591,6 @@ export async function discoverPriceIngestCandidates(
     truncated,
     eligible: cappedEligible,
     excluded,
+    materializationHealth,
   };
 }

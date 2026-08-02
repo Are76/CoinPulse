@@ -46,6 +46,7 @@ import type {
   DiscoverIngestCandidatesResult,
   EligibleIngestCandidate,
   ExcludedIngestCandidate,
+  MaterializationHealth,
 } from "@/services/pricing/discover-ingest-candidates";
 
 const PULSECHAIN_CHAIN_ID = 369 as const;
@@ -116,6 +117,8 @@ export const PREVIEW_WARNINGS = [
   "No price ingestion was executed and no POST /api/prices/ingest call was made.",
   "No PriceObservation record was written.",
   "Candidate inclusion does not prove priceability or a verified USD price.",
+  "Every candidate's quoteAsset is the canonical pDAI asset identity, not fiat:usd — the existing PulseX fetcher always routes token -> WPLS -> pDAI, and a future observation from these candidates would be pDAI-denominated, not a verified USD price.",
+  "Ingesting these candidates does not by itself increase Dashboard USD valuation coverage — pDAI is treated as volatile, never assumed equal to $1.",
   "Manual operator review is required before submitting any candidate to POST /api/prices/ingest.",
 ] as const;
 
@@ -133,6 +136,7 @@ export type PreviewReport = {
   truncated: boolean;
   eligible: EligibleIngestCandidate[];
   excluded: ExcludedIngestCandidate[];
+  materializationHealth: MaterializationHealth;
   warnings: readonly string[];
 };
 
@@ -159,7 +163,10 @@ export type PreviewCliDependencies = {
   /**
    * Deferred loader for server-only services. Only called after argument
    * and environment validation both pass, so an invalid invocation never
-   * loads the server-only module graph.
+   * loads the server-only module graph. The returned `cleanup` is always
+   * invoked exactly once (success or failure) after this point, via
+   * `finally` — e.g. to close the shared Prisma client's connection pool,
+   * which a one-shot script would otherwise leave open.
    */
   loadServices: () => Promise<{
     resolveTrackedWallet: (args: {
@@ -170,7 +177,9 @@ export type PreviewCliDependencies = {
       chainId: number;
       walletId: string;
       walletAddress: string;
+      asOf: Date;
     }) => Promise<DiscoverIngestCandidatesResult>;
+    cleanup: () => Promise<void>;
   }>;
   now: () => Date;
   stdout: (line: string) => void;
@@ -178,6 +187,18 @@ export type PreviewCliDependencies = {
 };
 
 export type PreviewCliRunResult = { exitCode: number };
+
+/** Never throws — a cleanup failure is logged (redacted) but never changes the run's outcome. */
+async function safeCleanup(
+  cleanup: () => Promise<void>,
+  stderr: (line: string) => void,
+): Promise<void> {
+  try {
+    await cleanup();
+  } catch (err) {
+    stderr(`preview-price-ingest-candidates: cleanup failed — ${describeError(err)}`);
+  }
+}
 
 export async function runPreviewCli(
   argv: readonly string[],
@@ -200,56 +221,62 @@ export async function runPreviewCli(
   }
 
   const { wallet, chainId } = parsed.input;
-  const { resolveTrackedWallet, discoverCandidates } = await deps.loadServices();
+  const { resolveTrackedWallet, discoverCandidates, cleanup } = await deps.loadServices();
 
-  let trackedWallet: TrackedWallet | null;
   try {
-    trackedWallet = await resolveTrackedWallet({ walletAddress: wallet, chainId });
-  } catch (err) {
-    deps.stderr(
-      `preview-price-ingest-candidates: database read failed while resolving wallet — ${describeError(err)}`,
-    );
-    return { exitCode: 1 };
+    let trackedWallet: TrackedWallet | null;
+    try {
+      trackedWallet = await resolveTrackedWallet({ walletAddress: wallet, chainId });
+    } catch (err) {
+      deps.stderr(
+        `preview-price-ingest-candidates: database read failed while resolving wallet — ${describeError(err)}`,
+      );
+      return { exitCode: 1 };
+    }
+
+    if (!trackedWallet) {
+      deps.stderr(
+        `preview-price-ingest-candidates: wallet ${wallet} is not tracked on chainId ${chainId}. Import it first via POST /api/wallets/import.`,
+      );
+      return { exitCode: 1 };
+    }
+
+    let result: DiscoverIngestCandidatesResult;
+    try {
+      result = await discoverCandidates({
+        chainId: trackedWallet.chainId,
+        walletId: trackedWallet.id,
+        walletAddress: trackedWallet.address,
+        asOf: deps.now(),
+      });
+    } catch (err) {
+      deps.stderr(`preview-price-ingest-candidates: discovery failed — ${describeError(err)}`);
+      return { exitCode: 1 };
+    }
+
+    const report: PreviewReport = {
+      schemaVersion: "v1",
+      generatedAt: deps.now().toISOString(),
+      chainId: result.chainId,
+      walletAddress: result.walletAddress,
+      trackedWalletId: trackedWallet.id,
+      totalBalanceRowsInspected: result.totalBalanceRowsInspected,
+      totalEligibleBeforeCap: result.totalEligibleBeforeCap,
+      totalReturned: result.totalReturned,
+      totalExcluded: result.totalExcluded,
+      cap: result.cap,
+      truncated: result.truncated,
+      eligible: result.eligible,
+      excluded: result.excluded,
+      materializationHealth: result.materializationHealth,
+      warnings: PREVIEW_WARNINGS,
+    };
+
+    deps.stdout(safeStringify(report));
+    return { exitCode: 0 };
+  } finally {
+    await safeCleanup(cleanup, deps.stderr);
   }
-
-  if (!trackedWallet) {
-    deps.stderr(
-      `preview-price-ingest-candidates: wallet ${wallet} is not tracked on chainId ${chainId}. Import it first via POST /api/wallets/import.`,
-    );
-    return { exitCode: 1 };
-  }
-
-  let result: DiscoverIngestCandidatesResult;
-  try {
-    result = await discoverCandidates({
-      chainId: trackedWallet.chainId,
-      walletId: trackedWallet.id,
-      walletAddress: trackedWallet.address,
-    });
-  } catch (err) {
-    deps.stderr(`preview-price-ingest-candidates: discovery failed — ${describeError(err)}`);
-    return { exitCode: 1 };
-  }
-
-  const report: PreviewReport = {
-    schemaVersion: "v1",
-    generatedAt: deps.now().toISOString(),
-    chainId: result.chainId,
-    walletAddress: result.walletAddress,
-    trackedWalletId: trackedWallet.id,
-    totalBalanceRowsInspected: result.totalBalanceRowsInspected,
-    totalEligibleBeforeCap: result.totalEligibleBeforeCap,
-    totalReturned: result.totalReturned,
-    totalExcluded: result.totalExcluded,
-    cap: result.cap,
-    truncated: result.truncated,
-    eligible: result.eligible,
-    excluded: result.excluded,
-    warnings: PREVIEW_WARNINGS,
-  };
-
-  deps.stdout(safeStringify(report));
-  return { exitCode: 0 };
 }
 
 // ─── CLI entrypoint ────────────────────────────────────────────────────────────
@@ -260,6 +287,7 @@ async function main(): Promise<void> {
     process.env as Record<string, string | undefined>,
     {
       loadServices: async () => {
+        const { getDb } = await import("@/lib/db");
         const { resolveTrackedWalletByAddress } = await import("@/services/api/wallets");
         const { discoverPriceIngestCandidates } = await import(
           "@/services/pricing/discover-ingest-candidates"
@@ -267,6 +295,12 @@ async function main(): Promise<void> {
         return {
           resolveTrackedWallet: resolveTrackedWalletByAddress,
           discoverCandidates: discoverPriceIngestCandidates,
+          // getDb() is the same shared singleton resolveTrackedWalletByAddress
+          // and discoverPriceIngestCandidates use internally (neither service
+          // is given an injected `db` here). This CLI is a one-shot process,
+          // so releasing the pg pool lets Node exit promptly instead of
+          // waiting out the pool's idle timeout.
+          cleanup: () => getDb().$disconnect(),
         };
       },
       now: () => new Date(),

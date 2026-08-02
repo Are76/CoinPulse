@@ -11,6 +11,7 @@ import {
   discoverPriceIngestCandidates,
   UnsupportedIngestDiscoveryChainError,
   type DiscoveryDbClient,
+  type DiscoverIngestCandidatesArgs,
 } from "@/services/pricing/discover-ingest-candidates";
 
 const CHAIN_ID = 369;
@@ -27,9 +28,35 @@ const LP_ASSET_ID = `chain:369:erc20:${LP_TOKEN_ADDRESS}`;
 const UNRELATED_ADDRESS = "0x9999999999999999999999999999999999999999";
 const UNRELATED_ASSET_ID = `chain:369:erc20:${UNRELATED_ADDRESS}`;
 
+// The one and only safe quoteAsset value — see the service's module
+// docstring and Finding 1 of the blocker fix pass. Never "fiat:usd".
+const EXPECTED_QUOTE_ASSET = PDAI_ASSET_ID;
+
+const ASOF = new Date("2026-08-02T00:00:00.000Z");
+// 60s before ASOF — well inside the 900s freshness threshold.
+const FRESH_MATERIALIZED_AT = new Date(ASOF.getTime() - 60_000);
+// 2000s before ASOF — outside the 900s freshness threshold.
+const STALE_MATERIALIZED_AT = new Date(ASOF.getTime() - 2_000_000);
+
+const HEALTHY_MATERIALIZATION_STATE = {
+  status: "COMPLETED" as const,
+  completedSuccessfully: true,
+  latestMaterializedAt: FRESH_MATERIALIZED_AT,
+  warningCount: 0,
+  errorMessage: null,
+};
+
 function decimal(value: string): { toString(): string } {
   return { toString: () => value };
 }
+
+type MaterializationStateOverride = {
+  status: "RUNNING" | "FAILED" | "COMPLETED";
+  completedSuccessfully: boolean;
+  latestMaterializedAt: Date | null;
+  warningCount: number;
+  errorMessage: string | null;
+} | null;
 
 function makeDb(overrides?: {
   balances?: Array<{
@@ -46,24 +73,32 @@ function makeDb(overrides?: {
   }>;
   metadataSources?: Array<{ tokenId: string; decimals: number | null }>;
   lpPositions?: Array<{ lpAssetId: string }>;
+  /** Defaults to a healthy COMPLETED/fresh/zero-warning row. Pass null for "no record". */
+  materializationState?: MaterializationStateOverride;
 }): DiscoveryDbClient & {
   calls: {
     portfolioTokenBalance: unknown[];
     token: unknown[];
     tokenMetadataSource: unknown[];
     portfolioLpPosition: unknown[];
+    portfolioMaterializationState: unknown[];
   };
 } {
   const balances = overrides?.balances ?? [];
   const tokens = overrides?.tokens ?? [];
   const metadataSources = overrides?.metadataSources ?? [];
   const lpPositions = overrides?.lpPositions ?? [];
+  const materializationState =
+    overrides?.materializationState === undefined
+      ? HEALTHY_MATERIALIZATION_STATE
+      : overrides.materializationState;
 
   const calls = {
     portfolioTokenBalance: [] as unknown[],
     token: [] as unknown[],
     tokenMetadataSource: [] as unknown[],
     portfolioLpPosition: [] as unknown[],
+    portfolioMaterializationState: [] as unknown[],
   };
 
   return {
@@ -96,10 +131,38 @@ function makeDb(overrides?: {
     portfolioLpPosition: {
       findMany: vi.fn(async (args) => {
         calls.portfolioLpPosition.push(args);
+        if (args.where.walletId !== WALLET_ID || args.where.chainId !== CHAIN_ID) return [];
         return lpPositions;
       }),
     },
+    portfolioMaterializationState: {
+      findUnique: vi.fn(async (args) => {
+        calls.portfolioMaterializationState.push(args);
+        if (
+          args.where.walletId_chainId.walletId !== WALLET_ID ||
+          args.where.walletId_chainId.chainId !== CHAIN_ID
+        ) {
+          return null;
+        }
+        return materializationState;
+      }),
+    },
   };
+}
+
+/** Wraps discoverPriceIngestCandidates with the shared default args + fixed asOf. */
+function discover(
+  db: DiscoveryDbClient,
+  overrides?: Partial<DiscoverIngestCandidatesArgs>,
+) {
+  return discoverPriceIngestCandidates({
+    chainId: CHAIN_ID,
+    walletId: WALLET_ID,
+    walletAddress: WALLET_ADDRESS,
+    asOf: ASOF,
+    db,
+    ...overrides,
+  });
 }
 
 describe("discoverPriceIngestCandidates", () => {
@@ -118,19 +181,14 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.eligible).toEqual([
       {
         assetId: PHEX_ASSET_ID,
         tokenAddress: PHEX_ADDRESS,
         tokenDecimals: 8,
-        quoteAsset: "fiat:usd",
+        quoteAsset: EXPECTED_QUOTE_ASSET,
         walletAddress: WALLET_ADDRESS,
         chainId: CHAIN_ID,
         decimalsSource: "seed:phex",
@@ -141,6 +199,7 @@ describe("discoverPriceIngestCandidates", () => {
     expect(result.totalEligibleBeforeCap).toBe(1);
     expect(result.totalReturned).toBe(1);
     expect(result.truncated).toBe(false);
+    expect(result.materializationHealth.healthy).toBe(true);
   });
 
   it("scopes results to the requested wallet only", async () => {
@@ -150,12 +209,7 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    await discover(db);
 
     expect(db.calls.portfolioTokenBalance[0]).toEqual({
       where: { walletId: WALLET_ID, chainId: CHAIN_ID },
@@ -165,14 +219,9 @@ describe("discoverPriceIngestCandidates", () => {
   it("rejects an unsupported chainId", async () => {
     const db = makeDb();
 
-    await expect(
-      discoverPriceIngestCandidates({
-        chainId: 1,
-        walletId: WALLET_ID,
-        walletAddress: WALLET_ADDRESS,
-        db,
-      }),
-    ).rejects.toThrow(UnsupportedIngestDiscoveryChainError);
+    await expect(discover(db, { chainId: 1 })).rejects.toThrow(
+      UnsupportedIngestDiscoveryChainError,
+    );
   });
 
   it("excludes zero balances with ZERO_BALANCE", async () => {
@@ -182,12 +231,7 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.eligible).toEqual([]);
     expect(result.excluded).toEqual([
@@ -208,12 +252,7 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.excluded[0]?.reason).toBe("MISSING_DECIMALS");
   });
@@ -232,12 +271,7 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.excluded[0]?.reason).toBe("CONFLICTING_DECIMALS");
   });
@@ -254,12 +288,7 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.excluded).toEqual([
       {
@@ -282,12 +311,7 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.excluded[0]?.reason).toBe("IGNORED_ASSET");
   });
@@ -300,12 +324,7 @@ describe("discoverPriceIngestCandidates", () => {
       lpPositions: [{ lpAssetId: LP_ASSET_ID }],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.eligible).toEqual([]);
     expect(result.excluded).toEqual([
@@ -336,19 +355,14 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.eligible).toEqual([
       {
         assetId: PHEX_ASSET_ID,
         tokenAddress: PHEX_ADDRESS,
         tokenDecimals: 8,
-        quoteAsset: "fiat:usd",
+        quoteAsset: EXPECTED_QUOTE_ASSET,
         walletAddress: WALLET_ADDRESS,
         chainId: CHAIN_ID,
         decimalsSource: "seed:phex",
@@ -368,19 +382,14 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.eligible).toEqual([
       {
         assetId: PLS_ASSET_ID,
         tokenAddress: "0x0000000000000000000000000000000000000000",
         tokenDecimals: 18,
-        quoteAsset: "fiat:usd",
+        quoteAsset: EXPECTED_QUOTE_ASSET,
         walletAddress: WALLET_ADDRESS,
         chainId: CHAIN_ID,
         decimalsSource: null,
@@ -396,12 +405,7 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.eligible).toHaveLength(1);
     expect(result.excluded).toEqual([
@@ -425,12 +429,7 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.eligible.map((c) => c.assetId)).toEqual([
       `chain:369:erc20:${aAddress}`,
@@ -450,12 +449,7 @@ describe("discoverPriceIngestCandidates", () => {
     });
     const db = makeDb({ balances });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.totalEligibleBeforeCap).toBe(60);
     expect(result.totalReturned).toBe(50);
@@ -467,12 +461,7 @@ describe("discoverPriceIngestCandidates", () => {
   it("produces a successful report with zero eligible candidates", async () => {
     const db = makeDb({ balances: [] });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.eligible).toEqual([]);
     expect(result.excluded).toEqual([]);
@@ -489,18 +478,14 @@ describe("discoverPriceIngestCandidates", () => {
 
     // The service accepts only a DiscoveryDbClient — there is no publicClient,
     // fetchPrice, or runPriceIngestion dependency to inject or call.
-    await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    await discover(db);
 
     // Behavioral, not insertion-order: exactly the expected read-only calls
     // happened, and nothing RPC/ingestion-shaped exists on the client at all.
     expect(db.portfolioTokenBalance.findMany).toHaveBeenCalledTimes(1);
     expect(db.token.findMany).toHaveBeenCalledTimes(1);
     expect(db.portfolioLpPosition.findMany).toHaveBeenCalledTimes(1);
+    expect(db.portfolioMaterializationState.findUnique).toHaveBeenCalledTimes(1);
     expect(db).not.toHaveProperty("publicClient");
     expect(db).not.toHaveProperty("runPriceIngestion");
   });
@@ -519,12 +504,7 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     expect(result.eligible).toHaveLength(1);
     expect(result.excluded).toEqual([]);
@@ -537,15 +517,27 @@ describe("discoverPriceIngestCandidates", () => {
       ],
     });
 
-    const result = await discoverPriceIngestCandidates({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      walletAddress: WALLET_ADDRESS,
-      db,
-    });
+    const result = await discover(db);
 
     const serialized = JSON.stringify(result).toLowerCase();
     expect(serialized).not.toMatch(/verified|trusted|priced|usdvalue/);
+  });
+
+  it("never emits fiat:usd as a quoteAsset for a pDAI-routed ingestion candidate", async () => {
+    const db = makeDb({
+      balances: [
+        { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8, balanceQuantity: decimal("1") },
+        { assetId: PLS_ASSET_ID, assetAddress: null, decimals: 18, balanceQuantity: decimal("1") },
+      ],
+    });
+
+    const result = await discover(db);
+
+    expect(result.eligible.length).toBeGreaterThan(0);
+    for (const candidate of result.eligible) {
+      expect(candidate.quoteAsset).toBe(EXPECTED_QUOTE_ASSET);
+      expect(candidate.quoteAsset).not.toBe("fiat:usd");
+    }
   });
 
   describe("wallet-scoped Token/TokenMetadataSource queries (never a chain-wide registry scan)", () => {
@@ -561,12 +553,7 @@ describe("discoverPriceIngestCandidates", () => {
         ],
       });
 
-      await discoverPriceIngestCandidates({
-        chainId: CHAIN_ID,
-        walletId: WALLET_ID,
-        walletAddress: WALLET_ADDRESS,
-        db,
-      });
+      await discover(db);
 
       expect(db.calls.token).toEqual([
         { where: { chainId: CHAIN_ID, assetId: { in: [PHEX_ASSET_ID] } } },
@@ -588,12 +575,7 @@ describe("discoverPriceIngestCandidates", () => {
         ],
       });
 
-      const result = await discoverPriceIngestCandidates({
-        chainId: CHAIN_ID,
-        walletId: WALLET_ID,
-        walletAddress: WALLET_ADDRESS,
-        db,
-      });
+      const result = await discover(db);
 
       // Unrelated token never queried, so its metadata source could not have
       // been fetched or consumed either.
@@ -603,7 +585,7 @@ describe("discoverPriceIngestCandidates", () => {
           assetId: PHEX_ASSET_ID,
           tokenAddress: PHEX_ADDRESS,
           tokenDecimals: 8,
-          quoteAsset: "fiat:usd",
+          quoteAsset: EXPECTED_QUOTE_ASSET,
           walletAddress: WALLET_ADDRESS,
           chainId: CHAIN_ID,
           decimalsSource: "seed:phex",
@@ -614,12 +596,7 @@ describe("discoverPriceIngestCandidates", () => {
     it("skips Token and TokenMetadataSource queries entirely when the wallet has no balance rows", async () => {
       const db = makeDb({ balances: [] });
 
-      await discoverPriceIngestCandidates({
-        chainId: CHAIN_ID,
-        walletId: WALLET_ID,
-        walletAddress: WALLET_ADDRESS,
-        db,
-      });
+      await discover(db);
 
       expect(db.token.findMany).not.toHaveBeenCalled();
       expect(db.tokenMetadataSource.findMany).not.toHaveBeenCalled();
@@ -639,12 +616,7 @@ describe("discoverPriceIngestCandidates", () => {
         ],
       });
 
-      const result = await discoverPriceIngestCandidates({
-        chainId: CHAIN_ID,
-        walletId: WALLET_ID,
-        walletAddress: WALLET_ADDRESS,
-        db,
-      });
+      const result = await discover(db);
 
       expect(result.eligible).toEqual([]);
       expect(result.excluded[0]?.reason).toBe("INVALID_CANONICAL_IDENTITY");
@@ -665,12 +637,7 @@ describe("discoverPriceIngestCandidates", () => {
         ],
       });
 
-      const result = await discoverPriceIngestCandidates({
-        chainId: CHAIN_ID,
-        walletId: WALLET_ID,
-        walletAddress: WALLET_ADDRESS,
-        db,
-      });
+      const result = await discover(db);
 
       expect(result.eligible).toEqual([]);
       expect(result.excluded[0]?.reason).toBe("INVALID_CANONICAL_IDENTITY");
@@ -689,12 +656,7 @@ describe("discoverPriceIngestCandidates", () => {
         ],
       });
 
-      const result = await discoverPriceIngestCandidates({
-        chainId: CHAIN_ID,
-        walletId: WALLET_ID,
-        walletAddress: WALLET_ADDRESS,
-        db,
-      });
+      const result = await discover(db);
 
       expect(result.eligible).toEqual([]);
       expect(result.excluded[0]?.reason).toBe("INVALID_CANONICAL_IDENTITY");
@@ -714,12 +676,7 @@ describe("discoverPriceIngestCandidates", () => {
         ],
       });
 
-      const result = await discoverPriceIngestCandidates({
-        chainId: CHAIN_ID,
-        walletId: WALLET_ID,
-        walletAddress: WALLET_ADDRESS,
-        db,
-      });
+      const result = await discover(db);
 
       expect(result.eligible).toEqual([]);
       expect(result.excluded[0]?.reason).toBe("INVALID_CANONICAL_IDENTITY");
@@ -733,12 +690,7 @@ describe("discoverPriceIngestCandidates", () => {
         ],
       });
 
-      const result = await discoverPriceIngestCandidates({
-        chainId: CHAIN_ID,
-        walletId: WALLET_ID,
-        walletAddress: WALLET_ADDRESS,
-        db,
-      });
+      const result = await discover(db);
 
       expect(result.excluded).toEqual([]);
       expect(result.eligible[0]?.tokenAddress).toBe(PHEX_ADDRESS);
@@ -751,17 +703,378 @@ describe("discoverPriceIngestCandidates", () => {
         ],
       });
 
-      const result = await discoverPriceIngestCandidates({
-        chainId: CHAIN_ID,
-        walletId: WALLET_ID,
-        walletAddress: WALLET_ADDRESS,
-        db,
-      });
+      const result = await discover(db);
 
       expect(result.excluded).toEqual([]);
       expect(result.eligible[0]?.tokenAddress).toBe(
         "0x0000000000000000000000000000000000000000",
       );
+    });
+
+    it("normalizes a mixed-case persisted assetAddress to lowercase in the emitted tokenAddress", async () => {
+      const mixedCaseAddress = "0x2B591E99afe9F32EAA6214f7B7629768C40Eeb39";
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: mixedCaseAddress, decimals: 8, balanceQuantity: decimal("5") },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.excluded).toEqual([]);
+      expect(result.eligible[0]?.tokenAddress).toBe(PHEX_ADDRESS);
+    });
+  });
+
+  describe("materialization health gates eligibility", () => {
+    it("healthy COMPLETED/fresh/zero-warning materialization allows normal classification", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8, balanceQuantity: decimal("5") },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.materializationHealth).toEqual({
+        healthy: true,
+        status: "COMPLETED",
+        completedSuccessfully: true,
+        freshnessStatus: "fresh",
+        freshnessReason: null,
+        latestMaterializedAt: FRESH_MATERIALIZED_AT.toISOString(),
+        warningCount: 0,
+        errorMessage: null,
+      });
+      expect(result.eligible).toHaveLength(1);
+    });
+
+    it("failed materialization refuses eligible output and returns zero candidates", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8, balanceQuantity: decimal("5") },
+        ],
+        materializationState: {
+          status: "FAILED",
+          completedSuccessfully: false,
+          latestMaterializedAt: FRESH_MATERIALIZED_AT,
+          warningCount: 0,
+          errorMessage: "sync interrupted",
+        },
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible).toEqual([]);
+      expect(result.excluded).toEqual([]);
+      expect(result.materializationHealth.healthy).toBe(false);
+      expect(result.materializationHealth.status).toBe("FAILED");
+      expect(result.materializationHealth.errorMessage).toBe("sync interrupted");
+      expect(result.totalBalanceRowsInspected).toBe(1);
+    });
+
+    it("incomplete materialization (RUNNING) refuses eligible output", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8, balanceQuantity: decimal("5") },
+        ],
+        materializationState: {
+          status: "RUNNING",
+          completedSuccessfully: false,
+          latestMaterializedAt: FRESH_MATERIALIZED_AT,
+          warningCount: 0,
+          errorMessage: null,
+        },
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible).toEqual([]);
+      expect(result.materializationHealth.healthy).toBe(false);
+      expect(result.materializationHealth.status).toBe("RUNNING");
+    });
+
+    it("stale materialization (older than the repository's 900s threshold) refuses eligible output", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8, balanceQuantity: decimal("5") },
+        ],
+        materializationState: {
+          status: "COMPLETED",
+          completedSuccessfully: true,
+          latestMaterializedAt: STALE_MATERIALIZED_AT,
+          warningCount: 0,
+          errorMessage: null,
+        },
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible).toEqual([]);
+      expect(result.materializationHealth.healthy).toBe(false);
+      expect(result.materializationHealth.freshnessStatus).toBe("stale");
+    });
+
+    it("material integrity warnings (warningCount > 0) refuse eligible output", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8, balanceQuantity: decimal("5") },
+        ],
+        materializationState: {
+          status: "COMPLETED",
+          completedSuccessfully: true,
+          latestMaterializedAt: FRESH_MATERIALIZED_AT,
+          warningCount: 1,
+          errorMessage: null,
+        },
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible).toEqual([]);
+      expect(result.materializationHealth.healthy).toBe(false);
+      expect(result.materializationHealth.warningCount).toBe(1);
+    });
+
+    it("no materialization record at all refuses eligible output", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8, balanceQuantity: decimal("5") },
+        ],
+        materializationState: null,
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible).toEqual([]);
+      expect(result.materializationHealth).toEqual({
+        healthy: false,
+        status: null,
+        completedSuccessfully: null,
+        freshnessStatus: "unknown",
+        freshnessReason: "No materialization record exists.",
+        latestMaterializedAt: null,
+        warningCount: 0,
+        errorMessage: null,
+      });
+    });
+
+    it("does not query Token/TokenMetadataSource when materialization is unhealthy", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8, balanceQuantity: decimal("5") },
+        ],
+        materializationState: null,
+      });
+
+      await discover(db);
+
+      expect(db.token.findMany).not.toHaveBeenCalled();
+      expect(db.tokenMetadataSource.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("decimals conflict includes the persisted balance decimals", () => {
+    it("balance 8 + metadata 18 is a conflict", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8, balanceQuantity: decimal("5") },
+        ],
+        tokens: [
+          { id: "token-phex", assetId: PHEX_ASSET_ID, isIgnored: false, decimalsSource: "seed:phex" },
+        ],
+        metadataSources: [{ tokenId: "token-phex", decimals: 18 }],
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible).toEqual([]);
+      expect(result.excluded[0]?.reason).toBe("CONFLICTING_DECIMALS");
+      expect(result.excluded[0]?.detail).toMatch(/PortfolioTokenBalance\.decimals/);
+    });
+
+    it("balance 18 + metadata 18 is allowed", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 18, balanceQuantity: decimal("5") },
+        ],
+        tokens: [
+          { id: "token-phex", assetId: PHEX_ASSET_ID, isIgnored: false, decimalsSource: "seed:phex" },
+        ],
+        metadataSources: [{ tokenId: "token-phex", decimals: 18 }],
+      });
+
+      const result = await discover(db);
+
+      expect(result.excluded).toEqual([]);
+      expect(result.eligible).toHaveLength(1);
+    });
+
+    it("multiple metadata values all agreeing with the balance are allowed", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8, balanceQuantity: decimal("5") },
+        ],
+        tokens: [
+          { id: "token-phex", assetId: PHEX_ASSET_ID, isIgnored: false, decimalsSource: "seed:phex" },
+        ],
+        metadataSources: [
+          { tokenId: "token-phex", decimals: 8 },
+          { tokenId: "token-phex", decimals: 8 },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.excluded).toEqual([]);
+      expect(result.eligible).toHaveLength(1);
+    });
+
+    it("metadata sources conflicting with each other remain excluded regardless of balance", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8, balanceQuantity: decimal("5") },
+        ],
+        tokens: [
+          { id: "token-phex", assetId: PHEX_ASSET_ID, isIgnored: false, decimalsSource: "seed:phex" },
+        ],
+        metadataSources: [
+          { tokenId: "token-phex", decimals: 8 },
+          { tokenId: "token-phex", decimals: 6 },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible).toEqual([]);
+      expect(result.excluded[0]?.reason).toBe("CONFLICTING_DECIMALS");
+    });
+  });
+
+  describe("accepted decimals range (matches priceIngestRequestSchema: integer 0-18)", () => {
+    it("accepts the minimum boundary (0)", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 0, balanceQuantity: decimal("5") },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.excluded).toEqual([]);
+      expect(result.eligible[0]?.tokenDecimals).toBe(0);
+    });
+
+    it("accepts the maximum boundary (18)", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 18, balanceQuantity: decimal("5") },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.excluded).toEqual([]);
+      expect(result.eligible[0]?.tokenDecimals).toBe(18);
+    });
+
+    it("excludes below the minimum (-1) with INVALID_DECIMALS", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: -1, balanceQuantity: decimal("5") },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible).toEqual([]);
+      expect(result.excluded[0]?.reason).toBe("INVALID_DECIMALS");
+    });
+
+    it("excludes above the maximum (19) with INVALID_DECIMALS", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 19, balanceQuantity: decimal("5") },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible).toEqual([]);
+      expect(result.excluded[0]?.reason).toBe("INVALID_DECIMALS");
+    });
+
+    it("excludes a non-integer decimals value with INVALID_DECIMALS", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 8.5, balanceQuantity: decimal("5") },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible).toEqual([]);
+      expect(result.excluded[0]?.reason).toBe("INVALID_DECIMALS");
+    });
+
+    it("does not silently clamp or normalize an invalid decimals value", async () => {
+      const db = makeDb({
+        balances: [
+          { assetId: PHEX_ASSET_ID, assetAddress: PHEX_ADDRESS, decimals: 19, balanceQuantity: decimal("5") },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible).toEqual([]);
+      // No eligible row with a clamped decimals value (e.g. 18) exists.
+      expect(result.eligible.some((c) => c.tokenDecimals === 18)).toBe(false);
+    });
+  });
+
+  describe("native PLS remains reachable past the 50-item cap", () => {
+    it("returns native PLS plus 49 ERC-20s (not the 50 lexicographically-first ERC-20s) when 50+ ERC-20 balances plus PLS are eligible", async () => {
+      const erc20Balances = Array.from({ length: 55 }, (_, i) => {
+        const address = `0x${(i + 1).toString(16).padStart(40, "0")}`;
+        return {
+          assetId: `chain:369:erc20:${address}`,
+          assetAddress: address,
+          decimals: 18,
+          balanceQuantity: decimal("1"),
+        };
+      });
+      const db = makeDb({
+        balances: [
+          ...erc20Balances,
+          { assetId: PLS_ASSET_ID, assetAddress: null, decimals: 18, balanceQuantity: decimal("1") },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.totalEligibleBeforeCap).toBe(56);
+      expect(result.truncated).toBe(true);
+      expect(result.eligible).toHaveLength(50);
+      expect(result.eligible[0]?.assetId).toBe(PLS_ASSET_ID);
+      expect(result.eligible.map((c) => c.assetId)).toContain(PLS_ASSET_ID);
+    });
+
+    it("keeps a pure-ascending order among non-priority assets when no priority asset is present", async () => {
+      const bAddress = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+      const aAddress = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      const db = makeDb({
+        balances: [
+          { assetId: `chain:369:erc20:${bAddress}`, assetAddress: bAddress, decimals: 18, balanceQuantity: decimal("1") },
+          { assetId: `chain:369:erc20:${aAddress}`, assetAddress: aAddress, decimals: 18, balanceQuantity: decimal("1") },
+        ],
+      });
+
+      const result = await discover(db);
+
+      expect(result.eligible.map((c) => c.assetId)).toEqual([
+        `chain:369:erc20:${aAddress}`,
+        `chain:369:erc20:${bAddress}`,
+      ]);
     });
   });
 });
