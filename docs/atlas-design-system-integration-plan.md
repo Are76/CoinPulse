@@ -29,7 +29,7 @@ Related durable records: `docs/project-decisions.md` (D-035, added alongside thi
 
 CoinPulse is **not primarily an accounting or tax program**. The canonical ledger and historical backend (raw audit → canonical ledger → materialized state → pricing → PnL, per `CLAUDE.md`) are internal strengths used to improve PnL reliability, yield attribution, historical analysis, provenance, warnings, and coverage. They exist to make the product's numbers trustworthy — they must not become a gate that blocks a useful current-portfolio view while historical evidence is still being built up.
 
-Concretely: a wallet with no ledger history yet, or with a partially-synced ledger, should still be able to see its current PLS balance, currently known token balances, and currently known positions — clearly labeled as live/current and scoped to known coverage, not PnL or historical truth — while enrichment continues in the background.
+Concretely: a wallet with no ledger history yet, or with a partially-synced ledger, should still be able to see its current PLS balance, currently known token balances, and currently known positions — clearly labeled as live/current and scoped to known coverage, not PnL or historical truth — while historical enrichment proceeds through the existing sync workflow. That workflow is **operator-triggered today, not automatic** — see §9 for the accurate description; this document does not promise background enrichment that does not currently exist.
 
 ---
 
@@ -89,17 +89,26 @@ The two axes compose freely; neither implies the other. Examples that must all b
 
 Two complementary data paths feed the frontend. Both terminate in the same place: a versioned backend DTO consumed by TanStack Query.
 
-### Fast portfolio path
+### Fast portfolio path — a deliberately approved, bounded current-state path
 
 ```text
 wallet address
-  → backend live discovery or snapshot
-  → versioned backend DTO
-  → TanStack Query
+  → backend live discovery or snapshot (RPC-backed, backend-only)
+  → versioned backend DTO (`LiveHoldingsSnapshotDto`, `GET /api/portfolio/live-snapshot`)
+  → TanStack Query (`useLiveSnapshotQuery`)
   → frontend presentation
 ```
 
-This path exists to make the current-state view fast, independent of how much historical ledger work has completed for that wallet. `src/components/dashboard/live-snapshot-card.tsx` and the live-holdings-snapshot DTO shipped in PR #356 are the first concrete instance of this path — recorded here as the pattern, not introduced by this document.
+This path exists to make the current-state view fast, independent of how much historical ledger work has completed for that wallet. It is a deliberate product/architecture decision, recorded as such in D-035 (`docs/project-decisions.md`) — not an informal or implicit exception to the backend-truth pipeline in `AGENTS.md` ("PostgreSQL persisted state is the source of truth for application data"; "Canonical ledger entries are accounting truth"). This decision explicitly supplements that pipeline for current-state UX; it does not weaken, replace, or supersede it:
+
+- **PostgreSQL and the canonical ledger remain the sole source of truth** for historical transactions, accounting-grade state, materialized portfolio truth, PnL, and yield. Nothing on this path writes to, replaces, or is treated as canonical ledger truth — `assembleLiveHoldingsSnapshot()` (`src/services/portfolio/live-holdings-snapshot.ts`) makes fresh RPC observations and returns them directly in a DTO, without raw persistence, normalization, or canonical-ledger insertion. That is this path's accepted, bounded scope, not a general license to skip persistence anywhere else in the backend — any future proposal to route live-snapshot observations into raw/ledger tables is separate bounded backend work, not authorized here.
+- **RPC stays backend-only.** `assembleLiveHoldingsSnapshot()` is a `server-only` module; the frontend never calls RPC directly, on this path or any other. This decision does not authorize direct frontend RPC calls or any other bypass of the DTO boundary elsewhere in the app.
+- **Block-pinned** — every native and token balance read is pinned to one `observedBlock` captured once at the start of assembly, so the DTO's "as of" claim is accurate rather than a mix of reads taken at different heights.
+- **Coverage-limited** — `coverage: "known_assets_only"` (§4 Axis B; precision note in §2): only tokens already registered in the backend's `Token` table are read, and a token whose balance read fails is dropped from `assets`, surfaced only via a `balance-read-failed:<assetId>` warning.
+- **Warning-bearing** — read failures and partial valuation surface through the DTO's `warnings` array; never silent, never coerced to zero.
+- **Not canonical ledger truth, not historical truth, not accounting truth, not PnL, not yield.** The DTO fixes `pnlStatus: "unsupported"` — the live path never claims otherwise, and no future Phase 4+ PR may relabel a live value as verified, accounting, or historical truth.
+
+`src/components/dashboard/live-snapshot-card.tsx` and the live-holdings-snapshot DTO shipped in PR #356 are the first concrete instance of this path — recorded here as the pattern, not introduced by this document.
 
 ### Historical enrichment path
 
@@ -114,7 +123,7 @@ RPC ingestion
   → frontend presentation
 ```
 
-This is the existing truth stack from `CLAUDE.md`, unchanged. It continues to run in the background and progressively raises coverage — it does not gate the fast path.
+This is the existing truth stack from `CLAUDE.md`, unchanged. It progressively raises coverage as it runs — it does not gate the fast path. **This path runs when an operator triggers manual sync today (`POST /api/sync/manual`), not automatically in the background** — see §9 for the accurate description of the current trigger and why this document does not promise automatic enrichment.
 
 ### What does not change
 
@@ -146,15 +155,15 @@ Mappings below were confirmed by inspecting the current repository (2026-08-03),
 
 | Atlas reference | CoinPulse purpose | Current repository state (inspected) |
 |---|---|---|
-| StatusBadge | Live, estimated, verified, stale, pending, unavailable | Implemented: [`src/components/ui/atlas-status-badge.tsx`](../src/components/ui/atlas-status-badge.tsx) (`AtlasStatusBadge`, full Atlas variant set). Legacy parallel: [`src/components/ui/status/status-badge.tsx`](../src/components/ui/status/status-badge.tsx) (`StatusBadge`/`LabelBadge`, `ProvenanceChip`-based) — the atlas-status-badge.tsx header comment says "Use this in new components. Legacy code uses ProvenanceChip + LabelBadge." Consolidation is Phase 2 work, not decided here. |
-| ProvenanceRow | Price, block, source and confidence metadata | Implemented: [`src/components/ui/atlas-provenance-row.tsx`](../src/components/ui/atlas-provenance-row.tsx) (`AtlasProvenanceRow`), composes `AtlasStatusBadge` + `TimestampLabel`. Legacy parallel: `src/components/ui/provenance-chip.tsx`. |
+| StatusBadge | Live, estimated, verified, stale, pending, unavailable | **Partial implementation — not the full target set.** [`src/components/ui/atlas-status-badge.tsx`](../src/components/ui/atlas-status-badge.tsx) (`AtlasStatusBadge`) implements `BadgeVariant`: `synced` / `pending` / `stale` / `conflicting` / `unsupported` / `unavailable` / `error` / `estimated` / `evidence-available` / `evidence-missing` — it has **no `live`, `materialized`, or `historically-verified` variant**. Mapping the plan's Axis A provenance modes (§4) onto badge variants is unbuilt; treat that gap as future Phase 2 work, not something to build in Phase 1. Legacy parallel: [`src/components/ui/status/status-badge.tsx`](../src/components/ui/status/status-badge.tsx) (`StatusBadge`/`LabelBadge`, `ProvenanceChip`-based) — the atlas-status-badge.tsx header comment says "Use this in new components. Legacy code uses ProvenanceChip + LabelBadge." Consolidation is Phase 2 work, not decided here. |
+| ProvenanceRow | Source, block, and evidence-status metadata | Implemented: [`src/components/ui/atlas-provenance-row.tsx`](../src/components/ui/atlas-provenance-row.tsx) (`AtlasProvenanceRow`), composes `AtlasStatusBadge` + `TimestampLabel`. `AtlasProvenanceRowProps` currently exposes `source`, `observedAt`, `schemaVersion`, `evidenceStatus`, `operator`, `sourceFamily`, `syncStatus`, `warningCodes` — **no `confidence` field**, and none is added here: `docs/design/atlas-design-system-v1.md` (§Restricted decisions) states `confidence` is not an Atlas-approved design concept and requires its own bounded implementation decision. Do not add confidence display to `ProvenanceRow` without that separate decision. Legacy parallel: `src/components/ui/provenance-chip.tsx`. |
 | TimestampLabel | Snapshot and observation time | Implemented: [`src/components/ui/value/timestamp-label.tsx`](../src/components/ui/value/timestamp-label.tsx). |
 | ValueDisplay | Backend-provided value rendering | Implemented: [`src/components/ui/value/value-display.tsx`](../src/components/ui/value/value-display.tsx), status-aware (`present`/`unavailable`/`unsupported`/`stale`/`pending`/`null`), never substitutes zero. |
 | WarningBanner | Partial coverage and backend warnings | Implemented: [`src/components/ui/data-state/warning-banner.tsx`](../src/components/ui/data-state/warning-banner.tsx) (`warn`/`danger`/`info` tones). |
 | MetricCard | Portfolio totals, PnL, yield and coverage | No standalone exported component yet. `AtlasMetricCard` and `AtlasSummaryCard` exist only as module-private helpers inside [`src/components/dashboard/dashboard-presenters.tsx`](../src/components/dashboard/dashboard-presenters.tsx) (lines ~659, ~700), used for dashboard status tiles and summary fields. Extracting a shared, exported `MetricCard` primitive is Phase 2 work. |
 | DataCard | Portfolio and analytics sections | Closest existing equivalents: [`src/components/ui/section-card.tsx`](../src/components/ui/section-card.tsx) (`SectionCard`, titled/subtitled container) and [`src/components/ui/surface-card.tsx`](../src/components/ui/surface-card.tsx) (`SurfaceCard`, base card surface). `SectionCard` composes `SurfaceCard`. |
 | TokenAssetRow | Token holdings and underlying assets | Closest existing equivalent: `PositionRow` (module-private, [`src/components/portfolio/asset-holdings-screen.tsx`](../src/components/portfolio/asset-holdings-screen.tsx) line ~308). Not yet a shared, reusable primitive. |
-| PositionCard | Stakes, LP positions, farms and lending | Closest existing equivalents: `StakeCard` and `EndedStakeCard` (module-private, [`src/components/hexmining/hexmining-screen.tsx`](../src/components/hexmining/hexmining-screen.tsx)). No LP/farm position card exists yet — LP/farm frontend surfaces are not built. |
+| PositionCard | Stakes, LP positions, farms and lending | Closest existing equivalents: `StakeCard`/`EndedStakeCard` (module-private, [`src/components/hexmining/hexmining-screen.tsx`](../src/components/hexmining/hexmining-screen.tsx)) for stakes, and `LpPositionsTable` ([`src/components/dashboard/dashboard-presenters.tsx`](../src/components/dashboard/dashboard-presenters.tsx) line ~570, rendered from `dashboard-screen.tsx`) for LP positions. **LP frontend presentation already exists** — `LpPositionsTable` renders LP token identity, LP quantity, underlying token0/token1 net quantities, valuation via `ValueDisplay`, PnL status via `StatusBadge`, and warnings. What's missing is a shared, reusable `PositionCard`-style primitive spanning stakes/LP/farms/lending, not an LP surface built from scratch. Farms and lending have no frontend surface at all yet. Phase 5 should extend/restyle the existing `LpPositionsTable` toward a shared primitive rather than treat liquidity UI as net-new. |
 | OperatorPanel | Sync and diagnostic controls | Closest existing equivalents: [`src/components/debug/operator-tools-nav.tsx`](../src/components/debug/operator-tools-nav.tsx) (`OperatorToolsNav`, link rail) and the diagnostic sections in [`src/components/dashboard/dashboard-presenters.tsx`](../src/components/dashboard/dashboard-presenters.tsx) (`BackendStatusPanel`, materialization/ledger/PnL coverage sections) and `src/components/debug/debug-sync-screen.tsx`. No single consolidated `OperatorPanel` primitive exists yet. |
 | ActionRail | Navigation or contextual actions | No dedicated component. Primary/operator navigation currently lives in [`src/components/layout/app-shell.tsx`](../src/components/layout/app-shell.tsx) as plain `<Link>` lists driven by `nav-config` (`PRIMARY_NAV_LINKS`, `OPERATOR_NAV_LINKS`), styled via `coin-sidebar__link` / `coin-mobile-nav__link` CSS classes — not an Atlas-named component. |
 | ButtonSystem | Buttons and form actions | No dedicated `Button` component exists. Buttons are plain `<button>` elements styled inline/per-file across several screens (dashboard, portfolio, transactions, hexmining, debug-sync, wallet-import). Introducing a shared button primitive is Phase 2 work. |
@@ -165,13 +174,28 @@ Mappings below were confirmed by inspecting the current repository (2026-08-03),
 
 ## 8. Target information architecture
 
-Unchanged from the current app shell — this document does not propose new routes or navigation restructuring. Existing pages remain the frame Atlas is applied to:
+Unchanged from the current app shell — this document does not propose new routes or navigation restructuring. This section is split into currently active routes (verified against `src/components/layout/nav-config.ts` and the `app/**/page.tsx` files that back them, inspected 2026-08-03) and target/future notes, so a later navigation PR does not duplicate what already exists.
 
-- `/` — dashboard (`src/components/dashboard/dashboard-screen.tsx`) → `GET /api/portfolio/dashboard`, now including the live-holdings-snapshot path (PR #356).
+### Current user-facing routes (`PRIMARY_NAV_LINKS`)
+
+- `/` — Dashboard (`src/components/dashboard/dashboard-screen.tsx`). This is **two separate backend requests, not one combined endpoint**:
+  - `GET /api/portfolio/dashboard` (`useDashboardQuery`) — the persisted/materialized `PortfolioDashboardDto`. Always requested first.
+  - `GET /api/portfolio/live-snapshot` (`useLiveSnapshotQuery`) — the live-holdings-snapshot DTO (PR #356). A **separate DTO and endpoint**, not a field of `PortfolioDashboardDto`. `dashboard-screen.tsx` enables this second query only when the dashboard response shows `materialization.status === null` and no materialized token/LP/stake positions exist (`shouldShowLiveSnapshotFallback`) — it is a conditional fallback rendered alongside the dashboard, not a replacement for it.
 - `/transactions` — transaction history.
-- `/debug/sync`, `/debug/wallets/import`, `/debug/wallets/tracked`, `/debug/prices/status` — operator surfaces.
+- `/hexmining` — HexMining screen (native pHEX only, per D-032/D-033).
+- `/portfolio/assets` — asset holdings screen ("Holdings" in nav).
 
-Any future information-architecture change (e.g. a distinct "Live Portfolio" route separate from the historical dashboard) is a separate, bounded decision — not decided by this document.
+### Current operator/debug routes (`OPERATOR_NAV_LINKS`)
+
+- `/debug/sync` — manual sync/rebuild trigger (`POST /api/sync/manual`, `POST /api/rebuild`).
+- `/debug/wallets/import` — wallet import.
+- `/debug/wallets/tracked` — tracked wallets.
+- `/debug/prices/status` — pricing status.
+- `/debug/hexmining/evidence/missing` — an existing page (`app/debug/hexmining/evidence/missing/page.tsx`) not currently linked from `OPERATOR_NAV_LINKS`; direct-URL access only. Recorded here so a future navigation PR does not treat it as new, and so it isn't silently duplicated.
+
+### Target/future navigation (not decided by this document)
+
+Any information-architecture change — e.g. a distinct "Live Portfolio" route separate from `/`, or linking the currently-orphaned evidence-missing page into operator nav — is a separate, bounded decision. Do not duplicate `/`, `/portfolio/assets`, `/transactions`, or `/hexmining` under new paths without an explicit decision superseding this inventory.
 
 ---
 
@@ -179,8 +203,10 @@ Any future information-architecture change (e.g. a distinct "Live Portfolio" rou
 
 The dashboard should be read, going forward, as two layers on one screen rather than one monolithic PnL view:
 
-1. A **live layer** — current balances/positions via the fast portfolio path, rendered as soon as the backend has a snapshot, independent of ledger completeness.
-2. An **enrichment layer** — coverage, warnings, PnL, yield, and historical detail, rendered from the historical enrichment path, appearing progressively as backend evidence improves.
+1. A **live layer** — current balances/positions via the fast portfolio path (`GET /api/portfolio/live-snapshot`, conditionally enabled — see §8), rendered as soon as the backend has a snapshot, independent of ledger completeness.
+2. An **enrichment layer** — coverage, warnings, PnL, yield, and historical detail, rendered from `GET /api/portfolio/dashboard`'s materialized fields, reflecting whatever the backend has processed so far.
+
+**How the enrichment layer actually advances today (stated accurately, not implied):** historical sync is **operator-triggered, not automatic**. Wallet import (`POST /api/wallets/import`) persists/tracks the wallet only — it does not itself run ingestion. Both `useDashboardQuery` and `useLiveSnapshotQuery` are read-only and never trigger sync. The only sync trigger found in the repository is the operator action on `/debug/sync` that posts to `POST /api/sync/manual`, consistent with `AGENTS.md`'s "do not add workers, queues, Redis, or background infrastructure unless explicitly requested." A wallet can remain live-only indefinitely without an operator running manual sync. A safe automatic or user-triggered persisted-sync orchestration is a separate, future bounded design and implementation task — this document does not propose or promise one.
 
 `LiveSnapshotCard` (`src/components/dashboard/live-snapshot-card.tsx`, PR #356) is the first concrete piece of the live layer. The enrichment layer is the existing `MaterializationFreshnessSection`, `LedgerCoverageSection`, and `PnlCoverageSection` in `dashboard-presenters.tsx`. No merge or redesign of these sections is proposed here; this section only names the pattern so future PRs build toward it deliberately instead of by accident.
 
@@ -222,12 +248,15 @@ Each phase is a sequence of small, bounded PRs — never one large PR per phase.
 - Current frontend component inventory (§7 above).
 - Atlas-to-CoinPulse mapping (§7 above).
 
-### Phase 1 — Foundations
+### Phase 1 — Foundation audit and gap-filling (not a from-scratch introduction)
 
-- Semantic color tokens.
-- Typography tokens.
-- Spacing/radius/elevation tokens.
-- CoinPulse status tokens, kept as two separate token groups per §4: provenance/data-mode tokens (live/estimated/materialized/historically-verified) and availability/quality-status tokens (available/partial/unavailable/unsupported/stale/conflicting/pending). Do not collapse the two groups into one flat token list.
+**This foundation already substantially exists.** PR #297 (commit `87b9e50`, "apply Atlas design system — tokens, typography, component library") already landed: Atlas hex color tokens for surfaces/borders/text/accents/status in `app/globals.css` (matching the approved indigo accent in `docs/design/atlas-design-system-v1.md`), a `--radius-*` scale, a `--space-*` scale, `--shadow-elevated`/`--shadow-card` elevation tokens, and JetBrains Mono for data values via `app/layout.tsx`. Phase 1 is therefore an audit-and-gap-fill pass, not a greenfield token introduction:
+
+- Inventory existing semantic tokens (color, typography, spacing, radius, elevation, status colors) already in `app/globals.css` / `app/layout.tsx`.
+- Compare them against the approved Atlas v1 reference (`docs/design/atlas-design-system-v1.md`).
+- Identify missing, duplicate, or incorrectly named tokens — e.g. the missing `live` / `materialized` / `historically-verified` badge variants noted in §7 — not a wholesale replacement of what already exists.
+- Migrate only the bounded gaps found; preserve existing visual behavior unless an approved discrepancy against Atlas v1 is found.
+- Keep any new status tokens split per §4's two axes (provenance/data-mode tokens vs. availability/quality-status tokens) — do not collapse them into one flat list.
 - First implementation slice — see §15.
 
 ### Phase 2 — UI primitives
@@ -284,8 +313,11 @@ For this document/PR:
 - [x] Two-axis data taxonomy is recorded: provenance/data mode (live/estimated/materialized/historically verified) kept separate from availability/quality status (available/partial/unavailable/unsupported/stale/conflicting/pending), with current live-DTO coverage/read-failure limitations described accurately rather than assumed.
 - [x] Two-path architecture (fast portfolio path, historical enrichment path) is recorded.
 - [x] Component mapping table is recorded, with every "implemented" claim tied to an inspected file path.
-- [x] Phased roadmap is recorded, each phase decomposed into bounded PRs.
-- [x] Immediate next implementation slice is named (§15).
+- [x] Phased roadmap is recorded, each phase decomposed into bounded PRs, and Phase 1/§15 are recast as an audit-and-gap-fill against the token foundation already landed in PR #297 rather than a from-scratch introduction.
+- [x] Immediate next implementation slice is named (§15) and does not duplicate already-completed foundation work.
+- [x] The fast portfolio path is recorded as an explicit, bounded architecture decision (§5, D-035) that supplements — and does not authorize bypassing — the backend-truth pipeline elsewhere.
+- [x] Live snapshot and dashboard are documented as two separate API calls/DTOs (§8), not one combined endpoint.
+- [x] Current route inventory (§8) and component-capability claims (§7) match inspected repository state, not assumption.
 - [x] No application code, CSS, schema, API, DTO, or package file changed.
 
 For each future phase's PRs, done means: one bounded scope, passing `npm run test`/`lint`/`typecheck`/`build`, no unrelated file changes, and (from Phase 4 onward) a live-portfolio surface that never labels a live/estimated value as PnL, accounting, or historical truth.
@@ -300,24 +332,26 @@ For each future phase's PRs, done means: one bounded scope, passing `npm run tes
 - **Table staleness risk:** §7's mapping reflects the repository at 2026-08-03. It will drift as Phase 2 PRs land; each Phase 2 PR that changes a mapped component should update the corresponding row rather than leaving it stale.
 - **HexMining scope risk:** Phase 5's HexMining bullet must stay bounded to native pHEX (D-032/D-033) unless a future decision explicitly reopens HSI/HTT/eHEX for frontend exposure.
 - **Axis-conflation risk:** §4's provenance/data-mode axis and availability/quality-status axis are easy to collapse back into one flat list in future edits or PR descriptions. Any change to the taxonomy must keep both axes named separately and must not claim a unified per-value `mode`/`availabilityStatus` pair exists in a DTO until that DTO is actually inspected and confirmed to carry it.
+- **Foundation-duplication risk:** PR #297 already landed a substantial Atlas token layer in `app/globals.css`/`app/layout.tsx`. A future Phase 1 PR that skips the audit step in §12 and reintroduces tokens from scratch risks duplicating or overwriting production tokens rather than closing real gaps.
+- **Enrichment-trigger overpromise risk:** it is easy to describe the historical enrichment path (§5, §9) as running automatically "in the background." Today it is operator-triggered only (`POST /api/sync/manual`); any future PR or doc edit that implies automatic background enrichment without first shipping that orchestration would misstate current behavior.
 
 ---
 
 ## 15. Immediate next implementation slice
 
-The first Atlas production-code PR should be:
+Given the token foundation already landed in PR #297 (§12 Phase 1), the first Atlas production-code PR must **not** reintroduce token infrastructure from scratch. It should be:
 
 ```text
-feat(ui): introduce Atlas semantic design tokens
+refactor(ui): audit and align existing Atlas design tokens
 ```
 
 **Scope:**
 
-- Semantic CSS variables.
-- Typography variables.
-- Spacing/radius/elevation variables.
-- CoinPulse status tokens.
-- Minimal root/background adoption.
+- Inventory existing semantic tokens, fonts, spacing, radius, elevation, and status colors already defined in `app/globals.css` and `app/layout.tsx`.
+- Compare them against the approved Atlas v1 reference (`docs/design/atlas-design-system-v1.md`).
+- Identify and document any missing, duplicate, or incorrectly named tokens (e.g. the missing `live` / `materialized` / `historically-verified` badge variants noted in §7).
+- Migrate only the bounded gaps found.
+- Preserve existing visual behavior unless an approved discrepancy against Atlas v1 is found.
 - No page redesign.
 
 **Explicit non-goals for that PR:**
@@ -329,3 +363,4 @@ feat(ui): introduce Atlas semantic design tokens
 - No DTO/API/schema changes.
 - No package changes unless strictly required.
 - No Figma-generated application code.
+- No wholesale replacement of the token layer already landed in PR #297.
