@@ -25,9 +25,11 @@ Related durable records: `docs/project-decisions.md` (D-035, added alongside thi
 
 > CoinPulse is a PulseChain-first portfolio tracker that gives users a fast view of current wallet assets and positions, then progressively enriches that portfolio with historical transactions, PnL, yield and DeFi analytics.
 
+**Precision note on "current wallet assets and positions":** this means currently known or covered assets and positions, not a guaranteed complete wallet inventory. See §4 (Data modes → Live) for the exact coverage boundary — the live path can miss unregistered/unknown tokens and can drop a token whose balance read failed, and both limitations must be represented explicitly, not implied away by this summary line.
+
 CoinPulse is **not primarily an accounting or tax program**. The canonical ledger and historical backend (raw audit → canonical ledger → materialized state → pricing → PnL, per `CLAUDE.md`) are internal strengths used to improve PnL reliability, yield attribution, historical analysis, provenance, warnings, and coverage. They exist to make the product's numbers trustworthy — they must not become a gate that blocks a useful current-portfolio view while historical evidence is still being built up.
 
-Concretely: a wallet with no ledger history yet, or with a partially-synced ledger, should still be able to see its current PLS balance, current token balances, and current known positions — clearly labeled as live/current, not PnL or historical truth — while enrichment continues in the background.
+Concretely: a wallet with no ledger history yet, or with a partially-synced ledger, should still be able to see its current PLS balance, currently known token balances, and currently known positions — clearly labeled as live/current and scoped to known coverage, not PnL or historical truth — while enrichment continues in the background.
 
 ---
 
@@ -48,29 +50,38 @@ This document, and the branch that introduces it, do not:
 
 ## 4. Data modes
 
-Every value the frontend renders belongs to exactly one of these modes. The mode determines what the UI is allowed to claim about the value, and every mode requires the backend DTO to say so explicitly — the frontend never infers a mode from the absence or shape of data.
+Every value the frontend renders is described along **two separate axes**. Conflating them is the specific mistake this section exists to prevent: "where did this come from" and "can you actually use it right now" are different questions, and a value can be `live` and still `unavailable` (a failed read), or `materialized` and still `conflicting` (an unresolved warning). Both axes require the backend DTO to say so explicitly — the frontend never infers either axis from the absence or shape of data.
 
-### Live
+This is a **target design discipline for future DTO/UI work**, not a claim that a universal per-value `mode`/`availabilityStatus` pair already exists today. It does not: today's live DTO (`LiveHoldingsSnapshotDto`, `src/services/portfolio/live-snapshot-types.ts`) carries mode and availability information only as separate, DTO-specific fields (`sourceType: "LIVE_RPC_SNAPSHOT"`, `coverage: "known_assets_only"`, `valuationStatus`, per-asset `priceStatus`), not as one uniform pair attached to every value. Exact field names for a unified pair remain future bounded implementation work, scoped one DTO at a time — this document does not invent or mandate new field names.
 
-Backend-observed current wallet or protocol state, read fresh or from a recent snapshot: PLS balance, current known-token balances, current stake state, current pool position, current farm deposit, claimable reward (where supported).
+### Axis A — provenance / data mode
 
-Required metadata per value: observed block, observed timestamp, source, coverage, warnings.
+States where a value came from and what evidence class supports it:
 
-### Estimated
+- **Live** — backend-observed current wallet or protocol state, read fresh or from a recent snapshot: PLS balance, currently known token balances, current stake state, current pool position, current farm deposit, claimable reward (where supported). Required metadata per value: observed block, observed timestamp, source.
+- **Estimated** — backend-provided estimates only — partial current valuation, estimated yield, incomplete price coverage. The frontend must never create these independently; it renders `status: "estimated"` (or equivalent) exactly as the DTO provides it, with its warnings and provenance. This mirrors the existing "Estimated badge" restriction in `docs/design/atlas-design-system-v1.md` (§Restricted decisions): estimated status may only render when the backend DTO explicitly provides it.
+- **Materialized** — derived from persisted CoinPulse backend state — ledger-derived token positions, persisted stake state, materialized portfolio state (`PortfolioTokenBalance`, `PortfolioLpPosition`, `PortfolioStakePosition`, per `CLAUDE.md`'s schema overview).
+- **Historically verified** — only when sufficient backend evidence exists — covered transaction history, supported PnL, historical yield, ended-stake evidence (e.g. the ended-stake pipeline in `docs/ai-handoff.md`'s Phase 5 entries).
 
-Backend-provided estimates only — partial current valuation, estimated yield, incomplete price coverage. The frontend must never create these independently; it renders `status: "estimated"` (or equivalent) exactly as the DTO provides it, with its warnings and provenance. This mirrors the existing "Estimated badge" restriction in `docs/design/atlas-design-system-v1.md` (§Restricted decisions): estimated status may only render when the backend DTO explicitly provides it.
+### Axis B — availability / quality status
 
-### Materialized
+States whether a value is usable right now, and what limitation applies, independent of which mode produced it:
 
-Derived from persisted CoinPulse backend state — ledger-derived token positions, persisted stake state, materialized portfolio state (`PortfolioTokenBalance`, `PortfolioLpPosition`, `PortfolioStakePosition`, per `CLAUDE.md`'s schema overview).
+- **Available** — the value is present and usable as-is.
+- **Partial** — some but not all of the expected evidence/coverage is present (e.g. `valuationStatus: "partial"` in the live DTO today).
+- **Unavailable** — no usable value exists for this cycle. Never rendered as zero, never silently omitted without a warning.
+- **Unsupported** — the backend does not support producing this value at all (distinct from a transient `unavailable`).
+- **Stale** — a value exists but has exceeded its freshness window.
+- **Conflicting** — evidence disagrees (e.g. a reorg or duplicate observation) and has not been resolved.
+- **Pending** — the backend is still working on producing the value (e.g. sync in progress).
 
-### Historically verified
+### Combining the axes
 
-Only when sufficient backend evidence exists — covered transaction history, supported PnL, historical yield, ended-stake evidence (e.g. the ended-stake pipeline in `docs/ai-handoff.md`'s Phase 5 entries).
+The two axes compose freely; neither implies the other. Examples that must all be representable: `live` + `available`, `live` + `partial`, `live` + `stale`, `live` + `unavailable`, `materialized` + `available`, `materialized` + `conflicting`, `estimated` + `available`, `historically verified` + `available`.
 
-### Unavailable, unsupported, stale, conflicting, and pending
+**Live-path coverage and read failures, stated precisely (current implementation, inspected 2026-08-03):** the live DTO's `coverage: "known_assets_only"` field means the fast path only ever reads tokens already registered in the backend's `Token` table — an unregistered/unknown token never appears in `assets` at all, and this is a real, permanent scope limit, not a transient status. Separately, `src/services/portfolio/live-holdings-snapshot.ts` catches a per-token balance-read failure, records a `balance-read-failed:<assetId>` warning string, and drops that token from `assets` entirely — today that failure is represented only as a warning string, not as a structured per-asset `unavailable` entry. Both are gaps against the target discipline above: a live read failure should reduce coverage and surface as an explicit `live` + `unavailable`/`partial` value with a warning, not a silent omission recoverable only by reading the warnings array. Closing that gap is Phase 2+ implementation work; this document records the target design, not a claim that it is already built.
 
-These are explicit, user-facing states, never a silent zero. This is not new policy — it restates `CLAUDE.md`'s "never coerce stale, unavailable, or unpriced values to zero" and the existing DTO status fields (`pricing.status`, `valuation.status`, `pnl.status`). What this document adds is that the same explicitness discipline applies to the **Live** data mode as much as to PnL: a live balance that could not be read this cycle is `stale` or `unavailable`, never a fabricated last-known-good number rendered without a label.
+**Restated policy (unchanged, not new):** unavailable values must never silently disappear or coerce to zero (`CLAUDE.md`; existing DTO status fields `pricing.status`, `valuation.status`, `pnl.status`). Warnings **supplement** provenance and status — they explain *why* — they do not **replace** either axis; a value should never be representable only as a warning string with no corresponding mode/status of its own.
 
 ---
 
@@ -216,7 +227,7 @@ Each phase is a sequence of small, bounded PRs — never one large PR per phase.
 - Semantic color tokens.
 - Typography tokens.
 - Spacing/radius/elevation tokens.
-- CoinPulse status tokens (live/estimated/materialized/verified/stale/unavailable/pending/conflicting).
+- CoinPulse status tokens, kept as two separate token groups per §4: provenance/data-mode tokens (live/estimated/materialized/historically-verified) and availability/quality-status tokens (available/partial/unavailable/unsupported/stale/conflicting/pending). Do not collapse the two groups into one flat token list.
 - First implementation slice — see §15.
 
 ### Phase 2 — UI primitives
@@ -270,7 +281,7 @@ For this document/PR:
 
 - [x] Atlas is recorded as the intended frontend design system, extending (not duplicating) `docs/design/atlas-design-system-v1.md`.
 - [x] Product direction (portfolio-tracker-first, progressive enrichment) is recorded.
-- [x] Data-mode taxonomy (live/estimated/materialized/historically verified/unavailable family) is recorded.
+- [x] Two-axis data taxonomy is recorded: provenance/data mode (live/estimated/materialized/historically verified) kept separate from availability/quality status (available/partial/unavailable/unsupported/stale/conflicting/pending), with current live-DTO coverage/read-failure limitations described accurately rather than assumed.
 - [x] Two-path architecture (fast portfolio path, historical enrichment path) is recorded.
 - [x] Component mapping table is recorded, with every "implemented" claim tied to an inspected file path.
 - [x] Phased roadmap is recorded, each phase decomposed into bounded PRs.
@@ -288,6 +299,7 @@ For each future phase's PRs, done means: one bounded scope, passing `npm run tes
 - **Data-mode mislabeling risk:** The live portfolio path (fast path, §5) is new enough that a future PR could accidentally render a live value with a status word ("verified", "accurate") that overstates what the backend actually attested. Phase 4 PRs must map exactly to the DTO's own status field.
 - **Table staleness risk:** §7's mapping reflects the repository at 2026-08-03. It will drift as Phase 2 PRs land; each Phase 2 PR that changes a mapped component should update the corresponding row rather than leaving it stale.
 - **HexMining scope risk:** Phase 5's HexMining bullet must stay bounded to native pHEX (D-032/D-033) unless a future decision explicitly reopens HSI/HTT/eHEX for frontend exposure.
+- **Axis-conflation risk:** §4's provenance/data-mode axis and availability/quality-status axis are easy to collapse back into one flat list in future edits or PR descriptions. Any change to the taxonomy must keep both axes named separately and must not claim a unified per-value `mode`/`availabilityStatus` pair exists in a DTO until that DTO is actually inspected and confirmed to carry it.
 
 ---
 
