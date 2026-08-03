@@ -36,6 +36,14 @@ export const queryKeys = {
   wallets: {
     tracked: (chainId: number) => ["wallets", "tracked", chainId] as const,
   },
+  liveSnapshot: (params: { chainId: number; walletAddress: string; quoteAsset: string }) =>
+    [
+      "portfolio",
+      "live-snapshot",
+      params.chainId,
+      params.walletAddress.trim().toLowerCase(),
+      params.quoteAsset,
+    ] as const,
   hexmining: {
     stakes: (params: { walletAddress: string; chainId: number }) =>
       ["hexmining", "stakes", { walletAddress: params.walletAddress, chainId: params.chainId }] as const,
