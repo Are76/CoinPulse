@@ -31,6 +31,7 @@ import {
   findTrackedWalletLabel,
   type SubmittedParams,
 } from "@/components/dashboard/dashboard-screen-helpers";
+import { LiveSnapshotCard } from "@/components/dashboard/live-snapshot-card";
 import {
   buildWalletNavHref,
   parseWalletNavContext,
@@ -39,6 +40,7 @@ import { queryKeys } from "@/lib/query/query-keys";
 import { useDashboardQuery } from "@/lib/query/use-dashboard-query";
 import { useDebugHealthQuery } from "@/lib/query/use-debug-health-query";
 import { useDebugStatusQuery } from "@/lib/query/use-debug-status-query";
+import { useLiveSnapshotQuery } from "@/lib/query/use-live-snapshot-query";
 import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
 
 const DEFAULT_CHAIN_ID = "369";
@@ -88,6 +90,13 @@ function DashboardScreenContent() {
     chainId: submittedParams?.chainId ?? 0,
     quoteAsset: DEFAULT_QUOTE_ASSET,
     enabled: submittedParams !== null,
+  });
+
+  const liveSnapshotQuery = useLiveSnapshotQuery({
+    walletAddress: submittedParams?.walletAddress ?? "",
+    chainId: submittedParams?.chainId ?? 0,
+    quoteAsset: DEFAULT_QUOTE_ASSET,
+    enabled: submittedParams !== null && dashboardQuery.data?.materialization.status === null,
   });
 
   const trackedWallets = trackedWalletsQuery.data?.wallets;
@@ -259,24 +268,32 @@ function DashboardScreenContent() {
       {submittedParams !== null && dashboardQuery.isLoading ? <LoadingStateCard /> : null}
 
       {dashboardQuery.data !== undefined ? (
-        <>
-          <PortfolioSummarySection dashboard={dashboardQuery.data} />
-          <MaterializationFreshnessSection
-            freshness={dashboardQuery.data.materialization.freshness}
-          />
-          <MaterializationIntegritySection
-            materialization={dashboardQuery.data.materialization}
-          />
-          <LedgerCoverageSection
-            ledgerCoverage={dashboardQuery.data.ledgerCoverage}
-          />
-          <PnlCoverageSection
-            pnlCoverage={dashboardQuery.data.pnlCoverage}
-          />
-          <TokenPositionsTable positions={dashboardQuery.data.tokenPositions} />
-          <LpPositionsTable positions={dashboardQuery.data.lpPositions} />
-          <StakePositionsTable positions={dashboardQuery.data.stakePositions} />
-        </>
+        dashboardQuery.data.materialization.status === null ? (
+          // No materialization record yet: show only the fast RPC-derived live
+          // snapshot fallback (once loaded) instead of the ledger-derived
+          // sections below, which would otherwise render misleading empty/zero
+          // states directly beneath real, non-zero live balances.
+          liveSnapshotQuery.data ? <LiveSnapshotCard snapshot={liveSnapshotQuery.data} /> : null
+        ) : (
+          <>
+            <PortfolioSummarySection dashboard={dashboardQuery.data} />
+            <MaterializationFreshnessSection
+              freshness={dashboardQuery.data.materialization.freshness}
+            />
+            <MaterializationIntegritySection
+              materialization={dashboardQuery.data.materialization}
+            />
+            <LedgerCoverageSection
+              ledgerCoverage={dashboardQuery.data.ledgerCoverage}
+            />
+            <PnlCoverageSection
+              pnlCoverage={dashboardQuery.data.pnlCoverage}
+            />
+            <TokenPositionsTable positions={dashboardQuery.data.tokenPositions} />
+            <LpPositionsTable positions={dashboardQuery.data.lpPositions} />
+            <StakePositionsTable positions={dashboardQuery.data.stakePositions} />
+          </>
+        )
       ) : null}
     </PageContainer>
   );
