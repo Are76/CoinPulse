@@ -48,6 +48,14 @@ export const dashboardRequestSchema = z.object({
   asOf: optionalAsOfSchema,
 });
 
+export const liveSnapshotRequestSchema = z.object({
+  walletAddress: walletAddressSchema,
+  chainId: chainIdSchema,
+  quoteAsset: quoteAssetSchema,
+});
+
+export type LiveSnapshotRequestInput = z.infer<typeof liveSnapshotRequestSchema>;
+
 export const manualSyncRequestSchema = z
   .object({
     walletAddress: walletAddressSchema,
