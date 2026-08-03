@@ -24,12 +24,12 @@ export function SectionCard({
         <div className="flex flex-col gap-0.5">
           <span
             className="text-xs font-semibold uppercase tracking-widest"
-            style={{ color: "#586070", letterSpacing: "0.08em" }}
+            style={{ color: "var(--text-muted)", letterSpacing: "0.08em" }}
           >
             {title}
           </span>
           {subtitle && (
-            <span className="text-xs" style={{ color: "#a0a8c0" }}>
+            <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
               {subtitle}
             </span>
           )}

@@ -5,13 +5,13 @@ import { cn } from "@/lib/utils";
 type ProvenanceTone = "neutral" | "fresh" | "warn" | "danger" | "info" | "stale" | "estimated";
 
 const TONE_STYLES: Record<ProvenanceTone, { color: string; bg: string; border: string; dot?: boolean }> = {
-  neutral:   { color: "#a0a8c0", bg: "rgba(160,168,192,0.08)",  border: "rgba(160,168,192,0.18)" },
-  fresh:     { color: "#4ade80", bg: "rgba(74,222,128,0.09)",   border: "rgba(74,222,128,0.22)",  dot: true },
-  warn:      { color: "#f59e0b", bg: "rgba(245,158,11,0.09)",   border: "rgba(245,158,11,0.22)",  dot: true },
-  danger:    { color: "#f87171", bg: "rgba(248,113,113,0.09)",  border: "rgba(248,113,113,0.22)", dot: true },
-  info:      { color: "#60a5fa", bg: "rgba(96,165,250,0.09)",   border: "rgba(96,165,250,0.2)" },
-  stale:     { color: "#94a3b8", bg: "rgba(148,163,184,0.09)",  border: "rgba(148,163,184,0.2)" },
-  estimated: { color: "#c4b5fd", bg: "rgba(196,181,253,0.09)",  border: "rgba(196,181,253,0.2)" },
+  neutral:   { color: "var(--text-secondary)", bg: "rgba(160,168,192,0.08)",  border: "rgba(160,168,192,0.18)" },
+  fresh:     { color: "var(--status-fresh)",   bg: "rgba(74,222,128,0.09)",   border: "rgba(74,222,128,0.22)",  dot: true },
+  warn:      { color: "var(--status-warning)", bg: "rgba(245,158,11,0.09)",   border: "rgba(245,158,11,0.22)",  dot: true },
+  danger:    { color: "var(--status-danger)",  bg: "rgba(248,113,113,0.09)",  border: "rgba(248,113,113,0.22)", dot: true },
+  info:      { color: "var(--status-info)",    bg: "rgba(96,165,250,0.09)",   border: "rgba(96,165,250,0.2)" },
+  stale:     { color: "var(--status-stale)",   bg: "rgba(148,163,184,0.09)",  border: "rgba(148,163,184,0.2)" },
+  estimated: { color: "var(--accent-2)",       bg: "rgba(196,181,253,0.09)",  border: "rgba(196,181,253,0.2)" },
 };
 
 type ProvenanceChipProps = HTMLAttributes<HTMLSpanElement> & {
