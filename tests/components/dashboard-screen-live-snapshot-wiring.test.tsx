@@ -54,7 +54,14 @@ const mockUseDebugHealthQuery = vi.mocked(useDebugHealthQuery);
 const mockUseDebugStatusQuery = vi.mocked(useDebugStatusQuery);
 const mockUseTrackedWalletsQuery = vi.mocked(useTrackedWalletsQuery);
 
-function buildDashboardDto(status: PortfolioDashboardDto["materialization"]["status"]): PortfolioDashboardDto {
+function buildDashboardDto(
+  status: PortfolioDashboardDto["materialization"]["status"],
+  positions?: {
+    tokenPositions?: PortfolioDashboardDto["tokenPositions"];
+    lpPositions?: PortfolioDashboardDto["lpPositions"];
+    stakePositions?: PortfolioDashboardDto["stakePositions"];
+  },
+): PortfolioDashboardDto {
   return {
     schemaVersion: "v1",
     wallet: { id: "wallet-1", address: "0x1111111111111111111111111111111111111111", chainId: 369 },
@@ -95,9 +102,9 @@ function buildDashboardDto(status: PortfolioDashboardDto["materialization"]["sta
       valuationCoverage: { totalPositions: 0, valuedPositions: 0, unvaluedPositions: 0 },
       warnings: [],
     },
-    tokenPositions: [],
-    lpPositions: [],
-    stakePositions: [],
+    tokenPositions: positions?.tokenPositions ?? [],
+    lpPositions: positions?.lpPositions ?? [],
+    stakePositions: positions?.stakePositions ?? [],
   };
 }
 
@@ -115,11 +122,20 @@ const LIVE_SNAPSHOT_DTO: LiveHoldingsSnapshotDto = {
     {
       assetId: "chain:369:erc20:0xcccccccccccccccccccccccccccccccccccccc",
       assetAddress: "0xcccccccccccccccccccccccccccccccccccccc",
-      symbol: "PLS",
+      symbol: "TKN",
       decimals: 18,
       balanceQuantity: "2000000000000000000",
       priceStatus: "priced",
       valueQuote: "1.25",
+      pricing: {
+        sourceType: "PULSEX_ONCHAIN",
+        sourceId: "pulsex:pulsex_v2:route:wpls-pdai",
+        confidence: "0.9",
+        observedAt: "2026-08-03T11:59:00.000Z",
+        observedBlock: "987650",
+        staleAfterSeconds: 300,
+        rejectedReasons: [],
+      },
     },
   ],
   totalValueQuote: "1.25",
@@ -209,5 +225,104 @@ describe("DashboardScreen live snapshot wiring", () => {
     expect(
       screen.getByText("No token positions were materialized for this wallet and chain."),
     ).toBeInTheDocument();
+  });
+
+  it("shows the normal dashboard sections (not the live snapshot fallback) when materialization is null but persisted token positions exist", () => {
+    const persistedTokenPosition: PortfolioDashboardDto["tokenPositions"][number] = {
+      assetId: "chain:369:erc20:0xdddddddddddddddddddddddddddddddddddddd",
+      assetAddress: "0xdddddddddddddddddddddddddddddddddddddd",
+      balanceQuantity: "3000000000000000000",
+      decimals: 18,
+      metadataProvenance: { status: "unknown", source: "unknown", observedAt: null, confidence: "unknown", conflictReason: null },
+      updatedFromBlock: null,
+      updatedToBlock: null,
+      pricing: { status: "unavailable", sourceType: null, sourceId: null, confidence: null, observedAt: null, staleAfterSeconds: null, rejectedReasons: [] },
+      valuation: { status: "unavailable", valueQuote: null },
+      pnl: {
+        status: "unavailable",
+        holdingsQuantity: null,
+        averageCost: null,
+        realizedPnl: null,
+        unrealizedPnl: null,
+        markPrice: null,
+        totalAcquiredQuantity: null,
+        totalDisposedQuantity: null,
+        warnings: [],
+      },
+    };
+
+    mockUseDashboardQuery.mockReturnValue({
+      data: buildDashboardDto(null, { tokenPositions: [persistedTokenPosition] }),
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    } as ReturnType<typeof useDashboardQuery>);
+    mockUseLiveSnapshotQuery.mockReturnValue({
+      data: undefined,
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    } as ReturnType<typeof useLiveSnapshotQuery>);
+
+    renderDashboard();
+
+    // A null materialization status alone must not hide real persisted
+    // positions — only an actually-empty dashboard should fall back to the
+    // live snapshot.
+    expect(screen.queryByTestId("live-snapshot-card")).not.toBeInTheDocument();
+    expect(screen.getByText("Materialization freshness")).toBeInTheDocument();
+    expect(
+      screen.queryByText("No token positions were materialized for this wallet and chain."),
+    ).not.toBeInTheDocument();
+    // The live snapshot query must not even be enabled in this case.
+    expect(mockUseLiveSnapshotQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: false }),
+    );
+  });
+
+  it("shows a loading state for the live snapshot while it is still fetching", () => {
+    mockUseDashboardQuery.mockReturnValue({
+      data: buildDashboardDto(null),
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    } as ReturnType<typeof useDashboardQuery>);
+    mockUseLiveSnapshotQuery.mockReturnValue({
+      data: undefined,
+      error: null,
+      isError: false,
+      isFetching: true,
+      isLoading: true,
+    } as ReturnType<typeof useLiveSnapshotQuery>);
+
+    renderDashboard();
+
+    expect(screen.queryByTestId("live-snapshot-card")).not.toBeInTheDocument();
+    expect(document.querySelector(".animate-pulse")).toBeInTheDocument();
+  });
+
+  it("shows an explicit error state when the live snapshot request fails, using the backend error message", () => {
+    mockUseDashboardQuery.mockReturnValue({
+      data: buildDashboardDto(null),
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    } as ReturnType<typeof useDashboardQuery>);
+    mockUseLiveSnapshotQuery.mockReturnValue({
+      data: undefined,
+      error: new Error("Live snapshot RPC provider unavailable."),
+      isError: true,
+      isFetching: false,
+      isLoading: false,
+    } as ReturnType<typeof useLiveSnapshotQuery>);
+
+    renderDashboard();
+
+    expect(screen.queryByTestId("live-snapshot-card")).not.toBeInTheDocument();
+    expect(screen.getByText("Live snapshot RPC provider unavailable.")).toBeInTheDocument();
   });
 });

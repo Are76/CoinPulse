@@ -2,6 +2,7 @@ import "server-only";
 
 import { z, ZodError } from "zod";
 
+import { PULSECHAIN_CHAIN } from "@/config/chains";
 import { SUPPORTED_SYNC_SOURCE_FAMILIES } from "@/services/sync/source-families";
 
 /**
@@ -48,9 +49,15 @@ export const dashboardRequestSchema = z.object({
   asOf: optionalAsOfSchema,
 });
 
+// Live Portfolio V1 is PulseChain-only. Reject unsupported chain IDs here at
+// the request boundary rather than letting them reach the RPC-reading
+// assembler (which also asserts this defensively — see
+// UnsupportedChainError in src/services/portfolio/live-holdings-snapshot.ts).
 export const liveSnapshotRequestSchema = z.object({
   walletAddress: walletAddressSchema,
-  chainId: chainIdSchema,
+  chainId: chainIdSchema.refine((value) => value === PULSECHAIN_CHAIN.id, {
+    message: `Live Portfolio V1 only supports chain ${PULSECHAIN_CHAIN.id} (PulseChain).`,
+  }),
   quoteAsset: quoteAssetSchema,
 });
 

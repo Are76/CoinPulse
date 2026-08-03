@@ -92,11 +92,27 @@ function DashboardScreenContent() {
     enabled: submittedParams !== null,
   });
 
+  // A null materialization status only means no PortfolioMaterializationState
+  // row exists yet — it does NOT prove the materialized position tables are
+  // empty (e.g. positions created before an additive provenance migration
+  // that didn't backfill state rows). The live snapshot fallback must only
+  // ever supplement an empty dashboard, never hide real persisted positions.
+  const hasMaterializedPositions =
+    dashboardQuery.data !== undefined &&
+    (dashboardQuery.data.tokenPositions.length > 0 ||
+      dashboardQuery.data.lpPositions.length > 0 ||
+      dashboardQuery.data.stakePositions.length > 0);
+
+  const shouldShowLiveSnapshotFallback =
+    dashboardQuery.data !== undefined &&
+    dashboardQuery.data.materialization.status === null &&
+    !hasMaterializedPositions;
+
   const liveSnapshotQuery = useLiveSnapshotQuery({
     walletAddress: submittedParams?.walletAddress ?? "",
     chainId: submittedParams?.chainId ?? 0,
     quoteAsset: DEFAULT_QUOTE_ASSET,
-    enabled: submittedParams !== null && dashboardQuery.data?.materialization.status === null,
+    enabled: submittedParams !== null && shouldShowLiveSnapshotFallback,
   });
 
   const trackedWallets = trackedWalletsQuery.data?.wallets;
@@ -268,12 +284,21 @@ function DashboardScreenContent() {
       {submittedParams !== null && dashboardQuery.isLoading ? <LoadingStateCard /> : null}
 
       {dashboardQuery.data !== undefined ? (
-        dashboardQuery.data.materialization.status === null ? (
-          // No materialization record yet: show only the fast RPC-derived live
-          // snapshot fallback (once loaded) instead of the ledger-derived
-          // sections below, which would otherwise render misleading empty/zero
-          // states directly beneath real, non-zero live balances.
-          liveSnapshotQuery.data ? <LiveSnapshotCard snapshot={liveSnapshotQuery.data} /> : null
+        shouldShowLiveSnapshotFallback ? (
+          // No materialization record yet AND no persisted positions exist
+          // either: show the fast RPC-derived live snapshot fallback instead
+          // of the ledger-derived sections below, which would otherwise
+          // render misleading empty/zero states directly beneath real,
+          // non-zero live balances. A null materialization status alone does
+          // NOT justify this — persisted positions can exist without a
+          // materialization state row (see hasMaterializedPositions above).
+          liveSnapshotQuery.isLoading ? (
+            <LoadingStateCard />
+          ) : liveSnapshotQuery.isError ? (
+            <ErrorStateCard message={getDashboardErrorMessage(liveSnapshotQuery.error)} />
+          ) : liveSnapshotQuery.data ? (
+            <LiveSnapshotCard snapshot={liveSnapshotQuery.data} />
+          ) : null
         ) : (
           <>
             <PortfolioSummarySection dashboard={dashboardQuery.data} />

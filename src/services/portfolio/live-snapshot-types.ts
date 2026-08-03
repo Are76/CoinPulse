@@ -2,6 +2,20 @@ export type LiveSnapshotAssetPriceStatus = "priced" | "unpriced";
 
 export type LiveHoldingsSnapshotValuationStatus = "available" | "partial" | "unavailable";
 
+// Mirrors the field vocabulary of DashboardPricingDto (src/services/dashboard/types.ts)
+// so price provenance reads the same way across both DTOs, plus the block the
+// observation was made at (dashboard's equivalent doesn't need it — this DTO's
+// whole premise is a single observed block, so it's included here).
+export type LiveSnapshotPriceProvenanceDto = {
+  sourceType: string | null;
+  sourceId: string | null;
+  confidence: string | null;
+  observedAt: string | null;
+  observedBlock: string | null;
+  staleAfterSeconds: number | null;
+  rejectedReasons: string[];
+};
+
 export type LiveSnapshotAssetDto = {
   assetId: string;
   assetAddress: string | null;
@@ -10,6 +24,7 @@ export type LiveSnapshotAssetDto = {
   balanceQuantity: string;
   priceStatus: LiveSnapshotAssetPriceStatus;
   valueQuote: string | null;
+  pricing: LiveSnapshotPriceProvenanceDto;
 };
 
 export type LiveHoldingsSnapshotDto = {

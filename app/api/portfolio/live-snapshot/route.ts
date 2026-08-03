@@ -1,6 +1,6 @@
 import { ZodError } from "zod";
 
-import { assembleLiveHoldingsSnapshot } from "@/services/portfolio/live-holdings-snapshot";
+import { assembleLiveHoldingsSnapshot, UnsupportedChainError } from "@/services/portfolio/live-holdings-snapshot";
 import {
   buildInternalErrorResponse,
   buildInvalidInputResponse,
@@ -32,6 +32,15 @@ export async function GET(request: Request) {
   } catch (error) {
     if (error instanceof ZodError) {
       return buildInvalidInputResponse(error);
+    }
+    // Defense in depth: the request schema already rejects non-PulseChain
+    // chain IDs, but a resolved wallet's stored chainId is a second,
+    // independent source, so the assembler asserts it again.
+    if (error instanceof UnsupportedChainError) {
+      return Response.json(
+        { error: { code: error.code, message: error.message } },
+        { status: 400 },
+      );
     }
     return buildInternalErrorResponse();
   }
