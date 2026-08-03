@@ -43,7 +43,7 @@ export function WarningList({ warnings }: { warnings: string[] }) {
       {warnings.map((warning) => (
         <li key={warning} className="flex items-start gap-1.5">
           <span style={{ color: "var(--status-warning)" }} className="mt-0.5 flex-shrink-0">·</span>
-          {warning}
+          <span className="break-all">{warning}</span>
         </li>
       ))}
     </ul>
