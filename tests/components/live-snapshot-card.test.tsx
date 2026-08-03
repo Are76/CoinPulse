@@ -71,73 +71,101 @@ describe("LiveSnapshotCard", () => {
     cleanup();
   });
 
-  it("renders the observed block and coverage note", () => {
+  it("renders the Live Portfolio header with a live indicator and known-assets-only coverage chip", () => {
     render(<LiveSnapshotCard snapshot={SNAPSHOT} />);
 
-    expect(screen.getByText(/observed directly from PulseChain by the backend at block/)).toBeInTheDocument();
-    expect(screen.getByText(/12345678/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Live Portfolio" })).toBeInTheDocument();
+    expect(screen.getByText("Live")).toBeInTheDocument();
+    expect(screen.getByText("Known assets only")).toBeInTheDocument();
+  });
+
+  it("renders wallet context, observed block, and observed time in the header", () => {
+    render(<LiveSnapshotCard snapshot={SNAPSHOT} />);
+
+    expect(screen.getByText(/Wallet 0x1111…1111 · chain 369/)).toBeInTheDocument();
+    expect(screen.getByText(/Observed block 12345678/)).toBeInTheDocument();
+    expect(screen.getByText(/Source: backend live RPC snapshot/)).toBeInTheDocument();
+  });
+
+  it("renders the coverage notice from the backend and states this is not historical PnL, cost basis, or accounting truth", () => {
+    render(<LiveSnapshotCard snapshot={SNAPSHOT} />);
+
     expect(
       screen.getByText(/Only assets already known to CoinPulse are included in this live snapshot\./),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Historical sync, cost basis, and\s*PnL are separate/),
+    ).toBeInTheDocument();
   });
 
-  it("states this is not historical PnL, cost basis, or accounting truth", () => {
+  it("renders backend-provided summary values without frontend calculation", () => {
     render(<LiveSnapshotCard snapshot={SNAPSHOT} />);
 
-    expect(
-      screen.getByText(/not historical PnL, cost basis, or accounting truth/),
-    ).toBeInTheDocument();
+    expect(screen.getByText("partial")).toBeInTheDocument();
+    expect(screen.getByText("1 priced / 1 unpriced (2 total)")).toBeInTheDocument();
+    expect(screen.getAllByText("fiat:usd").length).toBeGreaterThan(0);
   });
 
   it("renders a priced native PLS asset with its symbol, quote value, and price provenance", () => {
     render(<LiveSnapshotCard snapshot={SNAPSHOT} />);
 
-    const listItem = screen.getByText(/PLS: 1000000000000000000 raw units/);
-    expect(listItem).toBeInTheDocument();
-    const row = listItem.closest("li");
-    expect(row).toHaveTextContent("0.50 fiat:usd");
-    expect(row).toHaveTextContent("source: PULSEX_ONCHAIN");
-    expect(row).toHaveTextContent("confidence: 0.9");
+    expect(screen.getByText("PLS")).toBeInTheDocument();
+    expect(screen.getByText(/Balance 1000000000000000000 raw units \(18 decimals\)/)).toBeInTheDocument();
+    expect(screen.getByText(/≈ fiat:usd 0\.50/)).toBeInTheDocument();
+    expect(screen.getByText(/Source PULSEX_ONCHAIN/)).toBeInTheDocument();
+    expect(screen.getByText(/Confidence 0\.9/)).toBeInTheDocument();
+    expect(screen.getByText(/Priced at block 12345670/)).toBeInTheDocument();
   });
 
-  it("falls back to assetId and shows price unavailable for an unpriced asset with no symbol", () => {
+  it("falls back to a truncated address and shows price unavailable for an unpriced asset with no symbol", () => {
     render(<LiveSnapshotCard snapshot={SNAPSHOT} />);
 
-    const listItem = screen.getByText(new RegExp(`${TOKEN_ASSET_ID}: 500000000000000000 raw units`));
-    expect(listItem).toBeInTheDocument();
-    expect(listItem.closest("li")).toHaveTextContent("price unavailable");
+    expect(screen.getByText("0xbbbb…bbbb")).toBeInTheDocument();
+    expect(screen.getByText("Price unavailable")).toBeInTheDocument();
   });
 
   it("renders the partial total value with its valuation status", () => {
     render(<LiveSnapshotCard snapshot={SNAPSHOT} />);
 
-    expect(screen.getByText(/Estimated total \(partial\): 0.50 fiat:usd/)).toBeInTheDocument();
+    // "0.50" appears twice: once for the summary total, once for the priced
+    // PLS asset row — both are backend-provided values, not duplicates of a
+    // frontend calculation.
+    expect(screen.getAllByText(/fiat:usd 0\.50/).length).toBe(2);
+    expect(screen.getByText("partial")).toBeInTheDocument();
   });
 
-  it("renders an explicit empty state when the snapshot has zero assets", () => {
-    render(<LiveSnapshotCard snapshot={{ ...SNAPSHOT, assets: [], totalValueQuote: null, valuationStatus: "unavailable" }} />);
+  it("renders an explicit empty state when the snapshot has zero assets, without implying the wallet is globally empty", () => {
+    render(
+      <LiveSnapshotCard
+        snapshot={{ ...SNAPSHOT, assets: [], totalValueQuote: null, valuationStatus: "unavailable" }}
+      />,
+    );
 
     expect(screen.getByText("No known balances found")).toBeInTheDocument();
-    expect(screen.queryByText(/PLS: /)).not.toBeInTheDocument();
+    expect(screen.getByText(/does not confirm the wallet holds nothing/)).toBeInTheDocument();
+    expect(screen.queryByText("PLS")).not.toBeInTheDocument();
   });
 
-  it("surfaces backend warnings so a failed read is not confused with a confirmed zero balance", () => {
+  it("groups failed balance reads separately from other coverage warnings", () => {
     render(
       <LiveSnapshotCard
         snapshot={{
           ...SNAPSHOT,
-          warnings: [`balance-read-failed:${TOKEN_ASSET_ID}`],
+          warnings: [`balance-read-failed:${TOKEN_ASSET_ID}`, "some-other-warning"],
         }}
       />,
     );
 
-    expect(screen.getByText("Coverage warnings")).toBeInTheDocument();
+    expect(screen.getByText("Balances that could not be read")).toBeInTheDocument();
     expect(screen.getByText(`balance-read-failed:${TOKEN_ASSET_ID}`)).toBeInTheDocument();
+    expect(screen.getByText("Other coverage warnings")).toBeInTheDocument();
+    expect(screen.getByText("some-other-warning")).toBeInTheDocument();
   });
 
   it("does not render a warnings banner when there are no warnings", () => {
     render(<LiveSnapshotCard snapshot={SNAPSHOT} />);
 
-    expect(screen.queryByText("Coverage warnings")).not.toBeInTheDocument();
+    expect(screen.queryByText("Balances that could not be read")).not.toBeInTheDocument();
+    expect(screen.queryByText("Other coverage warnings")).not.toBeInTheDocument();
   });
 });
