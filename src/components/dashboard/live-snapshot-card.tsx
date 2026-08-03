@@ -75,10 +75,11 @@ export function LiveSnapshotCard({ snapshot }: { snapshot: LiveHoldingsSnapshotD
       <p className="text-sm leading-6" style={{ color: "var(--color-text-muted)" }}>
         {snapshot.coverageNote} Native PLS and tokens already known to CoinPulse are checked here; a token
         CoinPulse does not yet know about will not appear, and a balance that failed to read is dropped and
-        surfaced only as a warning below, never shown as a confirmed zero. Liquidity, farming, lending, or other
-        DeFi positions appear only if this snapshot explicitly returns them. Historical sync, cost basis, and
-        PnL are separate and are not part of this live view — they require the ledger sync workflow, which has
-        not completed for this wallet yet.
+        surfaced only as a warning below, never shown as a confirmed zero. Liquidity, farming, lending, and
+        other DeFi positions are not included in this Live Portfolio V1 snapshot yet. They are planned as
+        separate backend-supported portfolio sections. Historical sync, cost basis, and PnL are separate and
+        are not part of this live view — they require the ledger sync workflow, which has not completed for
+        this wallet yet.
       </p>
 
       {/* Summary */}
@@ -178,7 +179,6 @@ function AssetRow({ asset, quoteAsset }: { asset: LiveSnapshotAssetDto; quoteAss
       {asset.priceStatus === "priced" && asset.pricing.sourceType !== null ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
           <span>Source {asset.pricing.sourceType}</span>
-          {asset.pricing.confidence !== null ? <span>Confidence {asset.pricing.confidence}</span> : null}
           {asset.pricing.observedBlock !== null ? <span>Priced at block {asset.pricing.observedBlock}</span> : null}
           {asset.pricing.observedAt !== null ? <TimestampLabel label="Priced at" value={asset.pricing.observedAt} /> : null}
         </div>

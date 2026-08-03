@@ -98,6 +98,16 @@ describe("LiveSnapshotCard", () => {
     ).toBeInTheDocument();
   });
 
+  it("states that liquidity, farming, lending, and other DeFi positions are not yet included in Live Portfolio V1, without implying they are permanently out of scope", () => {
+    render(<LiveSnapshotCard snapshot={SNAPSHOT} />);
+
+    expect(
+      screen.getByText(
+        /Liquidity, farming, lending, and\s*other DeFi positions are not included in this Live Portfolio V1 snapshot yet\. They are planned as\s*separate backend-supported portfolio sections\./,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("renders backend-provided summary values without frontend calculation", () => {
     render(<LiveSnapshotCard snapshot={SNAPSHOT} />);
 
@@ -106,15 +116,17 @@ describe("LiveSnapshotCard", () => {
     expect(screen.getAllByText("fiat:usd").length).toBeGreaterThan(0);
   });
 
-  it("renders a priced native PLS asset with its symbol, quote value, and price provenance", () => {
+  it("renders a priced native PLS asset with its symbol, quote value, and price provenance, without a confidence display", () => {
     render(<LiveSnapshotCard snapshot={SNAPSHOT} />);
 
     expect(screen.getByText("PLS")).toBeInTheDocument();
     expect(screen.getByText(/Balance 1000000000000000000 raw units \(18 decimals\)/)).toBeInTheDocument();
     expect(screen.getByText(/≈ fiat:usd 0\.50/)).toBeInTheDocument();
     expect(screen.getByText(/Source PULSEX_ONCHAIN/)).toBeInTheDocument();
-    expect(screen.getByText(/Confidence 0\.9/)).toBeInTheDocument();
     expect(screen.getByText(/Priced at block 12345670/)).toBeInTheDocument();
+    // `confidence` is not an Atlas-approved user-facing display concept
+    // (docs/design/atlas-design-system-v1.md, Restricted decisions).
+    expect(screen.queryByText(/Confidence/)).not.toBeInTheDocument();
   });
 
   it("falls back to a truncated address and shows price unavailable for an unpriced asset with no symbol", () => {
