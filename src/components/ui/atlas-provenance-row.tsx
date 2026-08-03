@@ -16,10 +16,10 @@ interface AtlasProvenanceRowProps {
 function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-xs" style={{ color: "#586070" }}>{label}</span>
+      <span className="text-xs" style={{ color: "var(--text-muted)" }}>{label}</span>
       <span
         className="text-xs"
-        style={{ color: "#a0a8c0", fontFamily: mono ? "var(--font-mono-data), monospace" : "inherit" }}
+        style={{ color: "var(--text-secondary)", fontFamily: mono ? "var(--font-mono-data), monospace" : "inherit" }}
       >
         {value}
       </span>
@@ -46,13 +46,13 @@ export function AtlasProvenanceRow({
         {source && <Field label="Source" value={source} />}
         {observedAt && (
           <div className="flex items-center gap-1.5">
-            <span className="text-xs" style={{ color: "#586070" }}>As of</span>
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>As of</span>
             <TimestampLabel value={observedAt} />
           </div>
         )}
         {schemaVersion && <Field label="Version" value={schemaVersion} mono />}
         <div className="flex items-center gap-1.5">
-          <span className="text-xs" style={{ color: "#586070" }}>Evidence</span>
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>Evidence</span>
           <AtlasStatusBadge variant={evidenceStatus} size="sm" />
         </div>
       </div>
@@ -64,23 +64,23 @@ export function AtlasProvenanceRow({
         >
           <span
             className="text-xs font-semibold uppercase w-full"
-            style={{ color: "#586070", letterSpacing: "0.08em", fontSize: "9px" }}
+            style={{ color: "var(--text-muted)", letterSpacing: "0.08em", fontSize: "9px" }}
           >
             Operator detail
           </span>
           {sourceFamily && <Field label="Source family" value={sourceFamily} />}
           {syncStatus && (
             <div className="flex items-center gap-1.5">
-              <span className="text-xs" style={{ color: "#586070" }}>Sync</span>
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Sync</span>
               <AtlasStatusBadge variant={syncStatus} size="sm" />
             </div>
           )}
           {warningCodes && warningCodes.length > 0 && (
             <div className="flex items-center gap-1.5">
-              <span className="text-xs" style={{ color: "#586070" }}>Warnings</span>
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>Warnings</span>
               <span
                 className="text-xs"
-                style={{ color: "#f59e0b", fontFamily: "var(--font-mono-data), monospace" }}
+                style={{ color: "var(--status-warning)", fontFamily: "var(--font-mono-data), monospace" }}
               >
                 {warningCodes.join(" · ")}
               </span>

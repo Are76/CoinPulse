@@ -20,7 +20,7 @@ export function TimestampLabel({
   return (
     <span
       className="text-xs whitespace-nowrap"
-      style={{ color: "#586070", fontFamily: value ? "var(--font-mono-data), monospace" : "inherit" }}
+      style={{ color: "var(--text-muted)", fontFamily: value ? "var(--font-mono-data), monospace" : "inherit" }}
     >
       {label ? `${label} ` : ""}
       {formatted}
