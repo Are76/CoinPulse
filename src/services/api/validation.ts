@@ -63,6 +63,8 @@ export const liveSnapshotRequestSchema = z.object({
 
 export type LiveSnapshotRequestInput = z.infer<typeof liveSnapshotRequestSchema>;
 
+export const manualSyncModeSchema = z.enum(["dry-run", "execute"]).default("execute");
+
 export const manualSyncRequestSchema = z
   .object({
     walletAddress: walletAddressSchema,
@@ -71,6 +73,7 @@ export const manualSyncRequestSchema = z
     startBlock: blockNumberSchema.optional(),
     endBlock: blockNumberSchema,
     policyLabel: z.string().trim().min(1).max(128),
+    mode: manualSyncModeSchema,
   })
   .refine((value) => value.startBlock === undefined || value.startBlock <= value.endBlock, {
     path: ["startBlock"],
@@ -84,7 +87,11 @@ export const manualSyncRequestSchema = z
       path: ["endBlock"],
       message: `Block span exceeds the safe operator limit of ${MANUAL_SYNC_MAX_BLOCK_SPAN} blocks. Use a smaller range or run source families separately.`,
     },
-  );
+  )
+  .refine((value) => value.mode !== "dry-run" || value.startBlock !== undefined, {
+    path: ["startBlock"],
+    message: "startBlock is required in dry-run mode so the exact requested range can be reported.",
+  });
 
 export const rebuildRequestSchema = z
   .object({

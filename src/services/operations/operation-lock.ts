@@ -126,6 +126,34 @@ export async function checkOperationConflict(args: {
   return { allowed: true };
 }
 
+/**
+ * Read-only conflict check for a wallet/chain/trigger scope, without
+ * reserving a SyncRun. Used by dry-run planning callers that must report
+ * whether an operation would be executable without mutating anything.
+ */
+export async function previewOperationConflict(args: {
+  walletId: string;
+  chainId: number;
+  trigger: SyncTrigger;
+  db?: PrismaClient;
+  now?: Date;
+  thresholds?: OperationStaleThresholds;
+}): Promise<OperationConflictResult> {
+  const db = args.db ?? getDb();
+  const requestedOperation = {
+    trigger: args.trigger,
+    walletId: args.walletId,
+    chainId: args.chainId,
+  } as const;
+
+  return checkOperationConflict({
+    requestedOperation,
+    listActiveRuns: async () => listConflictingRuns(db, requestedOperation),
+    now: args.now,
+    thresholds: args.thresholds,
+  });
+}
+
 export async function reserveOperationRun(args: {
   walletId: string;
   chainId: number;

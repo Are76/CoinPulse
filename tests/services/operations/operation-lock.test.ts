@@ -5,6 +5,7 @@ import {
   inspectOperationBlocker,
   isOperationConflictError,
   OperationConflictError,
+  previewOperationConflict,
   reserveOperationRun,
 } from "@/services/operations/operation-lock";
 
@@ -546,5 +547,101 @@ describe("reserveOperationRun", () => {
         now: new Date("2026-05-08T15:00:00.000Z"),
       }),
     ).resolves.toEqual({ id: "run-created" });
+  });
+});
+
+describe("previewOperationConflict", () => {
+  it("reports allowed: true and performs no mutation when no conflicting run exists", async () => {
+    const findMany = async () => [];
+    const create = async () => {
+      throw new Error("previewOperationConflict must never call create()");
+    };
+    const db = { syncRun: { findMany, create } } as never;
+
+    const result = await previewOperationConflict({
+      walletId: "wallet-1",
+      chainId: 369,
+      trigger: "MANUAL",
+      db,
+      now: new Date("2026-05-08T16:00:00.000Z"),
+    });
+
+    expect(result).toEqual({ allowed: true });
+  });
+
+  it("reports the conflicting run's details without reserving anything", async () => {
+    const create = async () => {
+      throw new Error("previewOperationConflict must never call create()");
+    };
+    const db = {
+      syncRun: {
+        findMany: async () => [
+          {
+            id: "run-rebuild-preview",
+            trigger: "REBUILD",
+            status: "RUNNING",
+            stage: "REBUILDING_LEDGER",
+            chainId: 369,
+            walletId: "wallet-1",
+            createdAt: new Date("2026-05-08T16:00:00.000Z"),
+            updatedAt: new Date("2026-05-08T16:01:00.000Z"),
+          },
+        ],
+        create,
+      },
+    } as never;
+
+    const result = await previewOperationConflict({
+      walletId: "wallet-1",
+      chainId: 369,
+      trigger: "MANUAL",
+      db,
+      now: new Date("2026-05-08T16:01:00.000Z"),
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "active_rebuild_in_progress",
+      conflictingOperationId: "run-rebuild-preview",
+      conflictingTrigger: "REBUILD",
+      conflictingStage: "REBUILDING_LEDGER",
+      operationType: "rebuild",
+      status: "RUNNING",
+      startedAt: "2026-05-08T16:00:00.000Z",
+      createdAt: "2026-05-08T16:00:00.000Z",
+      updatedAt: "2026-05-08T16:01:00.000Z",
+      ageMs: 60000,
+      appearsStale: false,
+      staleReason: null,
+    });
+  });
+
+  it("does not report a conflict from another wallet's active run in the same chain", async () => {
+    const create = async () => {
+      throw new Error("previewOperationConflict must never call create()");
+    };
+    const db = {
+      syncRun: {
+        findMany: async ({ where }: { where: { walletId?: string } }) => {
+          // Mirrors the real query shape: MANUAL/IMPORT conflicts are scoped
+          // to the requested wallet+chain (only REBUILD is chain-wide).
+          if (where.walletId && where.walletId !== "wallet-1") {
+            return [];
+          }
+          return [];
+        },
+        create,
+      },
+    } as never;
+
+    const result = await previewOperationConflict({
+      walletId: "wallet-1",
+      chainId: 369,
+      trigger: "MANUAL",
+      db,
+      now: new Date("2026-05-08T16:05:00.000Z"),
+    });
+
+    expect(result).toEqual({ allowed: true });
   });
 });

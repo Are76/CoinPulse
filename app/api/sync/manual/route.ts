@@ -1,7 +1,11 @@
 import { after } from "next/server";
 import { ZodError } from "zod";
 
-import { isOperationConflictError, reserveOperationRun } from "@/services/operations/operation-lock";
+import {
+  isOperationConflictError,
+  previewOperationConflict,
+  reserveOperationRun,
+} from "@/services/operations/operation-lock";
 import { runWalletSync } from "@/services/sync";
 import { classifySyncError } from "@/services/sync/sync-error-classifier";
 import {
@@ -10,11 +14,13 @@ import {
   buildInvalidInputResponse,
   buildNotFoundResponse,
   manualSyncRequestSchema,
+  MANUAL_SYNC_MAX_BLOCK_SPAN,
   parseJsonBody,
+  serializeForJson,
 } from "@/services/api/validation";
 import { resolveTrackedWalletByAddress } from "@/services/api/wallets";
 
-type ManualSyncRoutePhase = "parse_input" | "resolve_wallet" | "reserve_run";
+type ManualSyncRoutePhase = "parse_input" | "resolve_wallet" | "dry_run_preview" | "reserve_run";
 
 export async function POST(request: Request) {
   let phase: ManualSyncRoutePhase = "parse_input";
@@ -30,6 +36,37 @@ export async function POST(request: Request) {
 
     if (!wallet) {
       return buildNotFoundResponse("WALLET_NOT_FOUND", "Wallet not found for the requested chain.");
+    }
+
+    if (input.mode === "dry-run") {
+      phase = "dry_run_preview";
+      // startBlock is guaranteed defined here — the schema's dry-run
+      // refinement rejects an omitted startBlock before this code runs.
+      const startBlock = input.startBlock as bigint;
+      const conflict = await previewOperationConflict({
+        walletId: wallet.id,
+        chainId: input.chainId,
+        trigger: "MANUAL",
+      });
+
+      return Response.json({
+        data: {
+          mode: "dry-run" as const,
+          wallet: { chainId: input.chainId, address: input.walletAddress },
+          requestedRange: {
+            startBlock: serializeForJson(startBlock),
+            endBlock: serializeForJson(input.endBlock),
+          },
+          sourceFamilies: input.sourceFamilies,
+          policyLabel: input.policyLabel,
+          limits: {
+            maxBlockSpan: serializeForJson(MANUAL_SYNC_MAX_BLOCK_SPAN),
+            requestedSpan: serializeForJson(input.endBlock - startBlock),
+          },
+          executable: conflict.allowed,
+          blockers: conflict.allowed ? [] : [conflict],
+        },
+      });
     }
 
     // Reserve the SyncRun record now so the runId is available immediately.
