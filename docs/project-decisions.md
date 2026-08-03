@@ -1,6 +1,6 @@
 # CoinPulse Project Decisions
 
-**Last updated:** 2026-07-24
+**Last updated:** 2026-08-03
 
 ---
 
@@ -705,3 +705,19 @@ No pDAI→USD implementation PR may begin until a separate, evidence-backed deci
 **Implications:** Future pDAI→USD proposals must be evaluated against §§2–8 above before any implementation work starts. The absence of a concrete provider or threshold in this decision is intentional, not an oversight — see §3.
 
 **Do not:** Treat this decision as approving any pricing provider, oracle, or pDAI→USD bridge. Do not treat it as making USD valuation available for pDAI-routed assets. Do not treat PR #354's canonical pDAI `quoteAsset` correction as evidence toward USD parity — it corrects identity only, per PR #354's own commit message ("does not by itself increase Dashboard USD valuation coverage"). Do not weaken D-006 or the `UNVERIFIED_QUOTE_ASSUMPTION` resolver rejection based on this decision. Do not read "sufficient evidence," "reliable source," or "stable enough" anywhere in this decision as a defined threshold — none is defined here; a separate evidence-backed decision is required.
+
+---
+
+## D-035: Atlas Design System Adoption and Portfolio-Tracker-First Product Direction
+
+**Status:** Accepted (2026-08-03) — planning/documentation decision only; no functional change
+
+**Evidence:** [E1] `docs/design/atlas-design-system-v1.md` (existing accepted Atlas component/placeholder reference); `docs/atlas-design-system-integration-plan.md` (this decision's companion document, added in the same PR). [E3] Repository inspection (2026-08-03) of `src/components/ui/atlas-status-badge.tsx`, `src/components/ui/atlas-provenance-row.tsx`, `src/components/ui/value/timestamp-label.tsx`, `src/components/ui/value/value-display.tsx`, `src/components/ui/data-state/warning-banner.tsx`, `src/components/ui/section-card.tsx`, `src/components/ui/surface-card.tsx`, `src/components/dashboard/dashboard-presenters.tsx`, `src/components/dashboard/live-snapshot-card.tsx`, `src/components/portfolio/asset-holdings-screen.tsx`, `src/components/hexmining/hexmining-screen.tsx`, `src/components/layout/app-shell.tsx`, `src/components/debug/operator-tools-nav.tsx`. [E2] PR #356 (live-holdings-snapshot for wallets pending ledger sync).
+
+**Decision:** Atlas (Figma Make design system) is the intended visual design system for the CoinPulse frontend, adopted through small bounded PRs into the existing Next.js app — never as a second application, never by copying Figma Make generated `App.tsx`/Vite setup/full shadcn directory. Alongside this, CoinPulse's product direction is clarified: CoinPulse is a portfolio tracker first — fast live view of current wallet assets and positions — with historical transactions, PnL, yield, and DeFi analytics as progressive enrichment layered on top, not a precondition for showing current state. The full data-mode taxonomy (live/estimated/materialized/historically verified/unavailable family), the two-path architecture (fast portfolio path vs. historical enrichment path), the inspected component-to-repository mapping, and the phased implementation roadmap are recorded in `docs/atlas-design-system-integration-plan.md`.
+
+**Rationale:** `docs/design/atlas-design-system-v1.md` already established Atlas as an accepted design reference with per-component safe-placeholder behavior, but did not record product positioning, the live/historical architecture split, or an implementation sequence — leaving a gap between "Atlas is a reference" and "here is how and in what order it gets built." Separately, repository inspection found that Atlas naming (`AtlasStatusBadge`, `AtlasProvenanceRow`, `AtlasMetricCard`, `AtlasSummaryCard`) has already begun appearing in production components ahead of any formal roadmap, and PR #356 already shipped a first fast-path live snapshot. This decision and its companion document catch the durable record up to both facts and give future PRs an agreed sequence instead of ad hoc adoption.
+
+**Implications:** Future frontend PRs should treat Atlas as the target visual system and follow the phased roadmap in `docs/atlas-design-system-integration-plan.md` §12 (Phase 0 decision/inventory — this PR; Phase 1 semantic tokens; Phase 2 UI primitives; Phase 3 app shell; Phase 4 Live Portfolio; Phase 5 unified portfolio; later phases unscheduled). The dashboard and future portfolio surfaces should be read as two layers — a live layer (fast path) and an enrichment layer (historical path) — rather than one monolithic PnL view. HexMining scope is unaffected: native pHEX only, per D-032/D-033.
+
+**Do not:** Treat this decision as implementing any Atlas component, token, page, CSS, or application code — none is introduced by this PR. Do not treat "portfolio tracker first" as license to skip DTO-only consumption, bigint-safe handling, chain-aware identity, or any other architecture rule in `CLAUDE.md` — the fast portfolio path still terminates in a versioned backend DTO. Do not describe a Live Portfolio surface as PnL, accounting, or historical truth. Do not reopen HSI/HTT/eHEX/cross-chain HexMining scope via this decision — D-032/D-033 stand. Do not treat the component mapping in `docs/atlas-design-system-integration-plan.md` §7 as approval to build any "no dedicated component" row without its own bounded Phase 2 PR.

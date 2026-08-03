@@ -1,6 +1,6 @@
 # CoinPulse AI Handoff
 
-**Last updated:** 2026-07-24 (D-032: HexMining Phase 1 completion scope defined as native pHEX only)
+**Last updated:** 2026-08-03 (D-035: Atlas design system adoption and portfolio-tracker-first product direction defined — docs only)
 
 ---
 
@@ -78,6 +78,8 @@ These rules apply to every PR. [E1]
 **HexMining posture:** Phase 4C complete and gate-lifted (PR #252). Phase 5 complete (PRs #307–#310). Public estimated yield is live for valid evidence paths. Ended stake pipeline (persistence, discovery, reader, DTO, API route) is live. Phase 6 **HSI backend implementation is complete** (PRs #312–#317: persistence, discovery, reader enrichment, live-verification tooling), but HSI is **not yet exposed via the public DTO/API** — `HexStakeSource` is still `"native"` only and `GET /api/hexmining/stakes` still calls only `readNativeHexStakes`. **HSI live verification is deferred pending availability of an HSI-owning wallet** (the tooling shipped but no live run occurred). Public HSI DTO/API integration, the **HTT** source family within Phase 6, and Phase 7 (pricing/valuation/PnL) are not started. Native active-stake reads (Phase 2) gained live-verification tooling (#318) — a live run against the fixture wallet recorded stakeCount 32 / 32 with all checks passing — and deterministic single-block read pinning (#319). [E1] [E2] [E3]
 
 **Source/RPC policy posture:** PR #249 removed the hardcoded `pulsechainstats.com` RPC default. No third-party RPC default is hardcoded. Runtime/operator/env/CLI-supplied RPC is the authoritative transport. PR #246 established the accepted authoritative PulseChain source reference doc. [E2]
+
+**Product direction and Atlas posture (D-035):** CoinPulse is a portfolio tracker first — a fast live view of current wallet assets/positions — with historical transactions, PnL, yield, and DeFi analytics as progressive enrichment, not a precondition for the live view. Atlas (Figma Make) is the intended frontend design system, adopted into the existing app through small bounded PRs per the phased roadmap in `docs/atlas-design-system-integration-plan.md`; it extends, and does not replace, the already-accepted `docs/design/atlas-design-system-v1.md`. This is a planning/documentation decision only — no component, token, CSS, or DTO change has landed from it. Do not describe a Live Portfolio surface as PnL, accounting, or historical truth. [E1] [E2]
 
 ---
 
@@ -245,6 +247,9 @@ Then read the specific PR, roadmap, or docs I mention.
 Treat Gate 10 and Gate 11 as lifted by PR #252. Phase 5 (ended stake pipeline) is complete via PRs #307–#310. Phase 6 HSI implementation is complete via PRs #312–#317, but HSI live verification is deferred pending an HSI-owning wallet (do not claim it passed). Native active-stake verification tooling (#318) and reader block pinning (#319) are merged. Do not infer HTT, Phase 7, or any HSI live-verification pass from HSI implementation completion.
 
 HexMining Phase 1 completion scope is defined by D-032 (docs/project-decisions.md): native pHEX only (active + ended, chainId 369). HSI/HTT/eHEX and pricing/valuation/PnL are later-phase scope and do not block Phase 1 completion. Do not pull HSI into Phase 1 without a new decision superseding D-032. Transfer-backfill is paused after Window 60; Window 61 needs explicit operator approval; PR #341 does not authorize further backfill runs.
+
+CoinPulse product direction and Atlas adoption are defined by D-035 (docs/project-decisions.md) and docs/atlas-design-system-integration-plan.md: portfolio tracker first, fast live view via a fast portfolio path, historical/PnL/yield/DeFi analytics as progressive enrichment via the existing truth-stack path — not a precondition for the live view. Atlas is the intended frontend design system, adopted via the phased roadmap there; it is docs-only so far, no component/token/CSS/DTO change has landed. Never label a live/estimated value as PnL, accounting, or historical truth.
+
 Do not propose runtime changes until you identify:
 1. current latest merged PR,
 2. current gate/status,
