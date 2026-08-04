@@ -28,6 +28,15 @@ export const QUERY_DEFAULTS = {
     staleTime: 30_000,
     gcTime: 10 * 60_000,
   },
+  walletOnboardingStatus: {
+    staleTime: 15_000,
+    gcTime: 5 * 60_000,
+    // Bounded poll while the backend reports an active sync/rebuild
+    // (status === "SYNC_IN_PROGRESS") so a mounted dashboard picks up the
+    // eventual terminal state instead of displaying "Sync in progress"
+    // indefinitely. Stops as soon as the status leaves that value.
+    activeOperationPollIntervalMs: 5_000,
+  },
   hexminingStakes: {
     staleTime: 30_000,
     gcTime: 10 * 60_000,
