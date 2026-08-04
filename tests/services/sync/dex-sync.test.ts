@@ -434,6 +434,39 @@ function createMemoryStores() {
         }
         return { count };
       },
+      async findMany(args: {
+        where: {
+          chainId: { in: number[] };
+          walletId: { in: string[] };
+          txHash: { in: string[] };
+          entryType: "FEE";
+          assetId: { in: string[] };
+          direction: "OUT";
+        };
+      }) {
+        return Array.from(ledgerEntries.values())
+          .filter((row) => {
+            const entry = row as Record<string, unknown>;
+            return (
+              entry.entryType === "FEE" &&
+              args.where.chainId.in.includes(entry.chainId as number) &&
+              args.where.walletId.in.includes(entry.walletId as string) &&
+              args.where.txHash.in.includes((entry.txHash as string).toLowerCase()) &&
+              args.where.assetId.in.includes(entry.assetId as string) &&
+              entry.direction === "OUT"
+            );
+          })
+          .map((row) => {
+            const entry = row as Record<string, unknown>;
+            return {
+              chainId: entry.chainId as number,
+              walletId: entry.walletId as string,
+              txHash: entry.txHash as string,
+              assetId: entry.assetId as string,
+              direction: entry.direction as string,
+            };
+          });
+      },
     },
     syncRun: {
       async create(args: { data: Record<string, unknown>; select: { id: true } }) {

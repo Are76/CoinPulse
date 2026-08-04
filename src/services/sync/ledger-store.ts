@@ -43,6 +43,31 @@ type LedgerStoreClient = {
       }>;
       skipDuplicates: boolean;
     }): Promise<{ count: number }>;
+    findMany(args: {
+      where: {
+        chainId: { in: number[] };
+        walletId: { in: string[] };
+        txHash: { in: string[] };
+        entryType: "FEE";
+        assetId: { in: string[] };
+        direction: "OUT";
+      };
+      select: {
+        chainId: true;
+        walletId: true;
+        txHash: true;
+        assetId: true;
+        direction: true;
+      };
+    }): Promise<
+      Array<{
+        chainId: number;
+        walletId: string;
+        txHash: string;
+        assetId: string;
+        direction: string;
+      }>
+    >;
   };
 };
 
@@ -125,6 +150,87 @@ export function buildDeterministicLedgerEntryId(args: {
   ]);
 }
 
+function feeIdentityKey(row: {
+  chainId: number;
+  walletId: string;
+  txHash: string;
+  assetId: string;
+  direction: string;
+}) {
+  return `${row.chainId}:${row.walletId}:${row.txHash.toLowerCase()}:${row.assetId}:${row.direction}`;
+}
+
+/**
+ * A transaction pays gas exactly once. Independent source-family normalizers
+ * (TRANSFERS, DEX, LP, STAKING) each emit their own FEE draft for the same
+ * transaction, and — for rows persisted before every normalizer shared
+ * NATIVE_GAS_FEE_SOURCE_REF — those drafts may carry different sourceRef
+ * values and therefore different dedupeKey/id, so the createMany
+ * skipDuplicates guard below cannot catch them by id alone.
+ *
+ * This performs one additional, narrowly-scoped existence check: for every
+ * FEE draft in this batch, has a FEE LedgerEntry already been persisted for
+ * the exact same (chainId, walletId, txHash, assetId, direction) — under
+ * ANY dedupeKey, old family-specific format or new canonical format alike?
+ * If so, that transaction's gas cost is already recorded; the new draft is
+ * dropped from the in-memory batch before insert. Nothing is read or
+ * written outside the exact txHashes already present in this batch, so this
+ * can never affect an unrelated transaction, and it never touches a
+ * non-FEE entry.
+ */
+async function dropDuplicateEconomicFees(
+  entries: Map<string, CanonicalLedgerEntryDraft & { actionGroupId: string; id: string }>,
+  client: LedgerStoreClient,
+) {
+  const feeDraftsByIdentity = new Map<string, string>();
+  for (const [entryIdentity, entry] of entries) {
+    if (entry.entryType !== "FEE") {
+      continue;
+    }
+    feeDraftsByIdentity.set(
+      feeIdentityKey({
+        chainId: entry.chainId,
+        walletId: entry.walletId,
+        txHash: entry.txHash,
+        assetId: entry.assetId,
+        direction: entry.direction,
+      }),
+      entryIdentity,
+    );
+  }
+
+  if (feeDraftsByIdentity.size === 0) {
+    return;
+  }
+
+  const feeDrafts = Array.from(entries.values()).filter((entry) => entry.entryType === "FEE");
+  const existingFees = await client.ledgerEntry.findMany({
+    where: {
+      chainId: { in: Array.from(new Set(feeDrafts.map((entry) => entry.chainId))) },
+      walletId: { in: Array.from(new Set(feeDrafts.map((entry) => entry.walletId))) },
+      txHash: { in: Array.from(new Set(feeDrafts.map((entry) => entry.txHash.toLowerCase()))) },
+      entryType: "FEE",
+      assetId: { in: Array.from(new Set(feeDrafts.map((entry) => entry.assetId))) },
+      direction: "OUT",
+    },
+    select: {
+      chainId: true,
+      walletId: true,
+      txHash: true,
+      assetId: true,
+      direction: true,
+    },
+  });
+
+  for (const existing of existingFees) {
+    const key = feeIdentityKey(existing);
+    const entryIdentity = feeDraftsByIdentity.get(key);
+    if (entryIdentity !== undefined) {
+      entries.delete(entryIdentity);
+    }
+  }
+}
+
 export async function persistNormalizedLedger(
   drafts: readonly CanonicalLedgerEntryDraft[],
   client: LedgerStoreClient = getDb(),
@@ -193,6 +299,8 @@ export async function persistNormalizedLedger(
       });
     }
   }
+
+  await dropDuplicateEconomicFees(entries, client);
 
   const createdActionGroups = await client.ledgerActionGroup.createMany({
     data: Array.from(actionGroups.values()),

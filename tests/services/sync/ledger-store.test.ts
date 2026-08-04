@@ -46,6 +46,7 @@ describe("persistNormalizedLedger", () => {
       },
       ledgerEntry: {
         createMany: ledgerEntryCreateMany,
+        findMany: vi.fn(async () => []),
       },
     };
 

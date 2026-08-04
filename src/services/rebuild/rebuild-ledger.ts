@@ -120,6 +120,31 @@ type RebuildDbClient = {
         };
       };
     }): Promise<Array<{ id: string }>>;
+    findMany(args: {
+      where: {
+        chainId: { in: number[] };
+        walletId: { in: string[] };
+        txHash: { in: string[] };
+        entryType: "FEE";
+        assetId: { in: string[] };
+        direction: "OUT";
+      };
+      select: {
+        chainId: true;
+        walletId: true;
+        txHash: true;
+        assetId: true;
+        direction: true;
+      };
+    }): Promise<
+      Array<{
+        chainId: number;
+        walletId: string;
+        txHash: string;
+        assetId: string;
+        direction: string;
+      }>
+    >;
     deleteMany(args: { where: { id: { in: string[] } } }): Promise<{ count: number }>;
   };
   $transaction?<T>(callback: (client: RebuildDbClient) => Promise<T>): Promise<T>;
