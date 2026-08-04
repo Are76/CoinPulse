@@ -184,6 +184,108 @@ request, fixture, or evidence record.
    `chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39` HEX, the dust token, and the two
    DAI-family assets) against the materialized balances.
 
+## Forward sync batch runner (`scripts/wallet-forward-sync-runner.ts`)
+
+**Tool:** `scripts/wallet-forward-sync-runner.ts` (`npm run backfill:wallet-forward -- <args>`)
+
+This runner automates a small, explicitly bounded batch of the manual
+sequence documented above for the common case of extending an already-partly
+synced wallet's TRANSFERS coverage **forward** (ascending) from its live
+cursor's upper edge. It is a thin, generic tool: wallet, chain, expected
+cursor, first window start, window size, and policy label prefix are all
+explicit CLI arguments — nothing about a specific wallet or campaign is
+hardcoded.
+
+**Difference from the backward campaign runner
+(`scripts/transfer-backfill-runner.ts`):** that runner plans a large
+*descending* historical-recovery campaign from hardcoded campaign constants
+for a different wallet, and can submit checkpoint/final rebuilds. This runner:
+
+- only ever extends a wallet's cursor **forward** (`toBlock` advances;
+  `fromBlock` stays anchored),
+- takes wallet/chain/cursor/range/policy-label as required CLI arguments —
+  it never infers or hardcodes them,
+- never submits a rebuild, materialization, or pricing request — no such
+  code path exists in the file,
+- is hard-capped at **5 windows per invocation** (not 25).
+
+### Dry-run-first workflow
+
+```bash
+npm run backfill:wallet-forward -- \
+  --wallet-address 0x08ac26d74013af7430c350c97eacd8be0bdc5613 \
+  --chain-id 369 \
+  --expected-cursor-from 25077549 --expected-cursor-to 25078548 \
+  --first-window-start 25078549 --window-size 1000 \
+  --max-windows 5 --policy-label-prefix wallet-forward-sync-window
+```
+
+Dry-run is the default — no `--execute` flag needed. It reads the live
+TRANSFERS cursor, verifies it matches `--expected-cursor-from`/
+`--expected-cursor-to` exactly, verifies the first computed window's
+`startBlock` matches `--first-window-start` exactly, runs every pre-submit
+gate (health, active-operation, policy-label collision, adjacency,
+fabricated-contamination pre-gate) for each of up to `--max-windows` proposed
+windows, writes one evidence record per proposed window, and **never**
+submits an HTTP POST or mutates any state.
+
+### Explicit approval gate
+
+This runner never executes without the operator passing `--execute`
+explicitly, and every execute invocation still requires the same product-owner
+approval and dry-run-first discipline described earlier in this document —
+implementing the runner is not itself authorization to run it against
+production.
+
+### Executing
+
+```bash
+npm run backfill:wallet-forward -- \
+  --wallet-address 0x08ac26d74013af7430c350c97eacd8be0bdc5613 \
+  --chain-id 369 \
+  --expected-cursor-from 25077549 --expected-cursor-to 25078548 \
+  --first-window-start 25078549 --window-size 1000 \
+  --max-windows 5 --policy-label-prefix wallet-forward-sync-window \
+  --execute
+```
+
+`--max-windows` defaults to `1` and is **hard-capped at 5** — a value above 5
+is rejected before anything runs. Windows execute strictly sequentially.
+
+### Per-window stop gates (execute mode)
+
+Before submitting each window: live cursor matches expectation exactly, no
+active `PENDING`/`RUNNING` operation, no policy-label collision, server
+healthy, zero fabricated-contamination rows in the proposed range. After each
+submitted window, before the next: `SyncRun` reached `COMPLETED` for the
+exact wallet/chain/policyLabel/range/`sourceFamilies: ["TRANSFERS"]`,
+`warningCount === 0` with empty `warningDetails`, `errorMessage` null,
+`failedSourceFamily`/`failedFromBlock`/`failedToBlock` null, the live cursor's
+`fromBlock` is unchanged from the original anchor and `toBlock` equals the
+just-completed window's `endBlock`, zero remaining active operations, zero
+post-run contamination rows, and zero duplicate `RawTransaction` /
+`RawTokenTransfer` / `LedgerEntry` identity groups. Any single failed gate is
+a hard stop before the next `POST`; nothing is retried automatically.
+
+### No rebuild or materialization
+
+This runner never calls `POST /api/rebuild` and has no rebuild code path at
+all — TRANSFERS-only manual sync windows do not materialize positions (see
+"What this is not" above). A separate, explicit rebuild remains a distinct
+operator decision after ingestion is verified.
+
+### Evidence
+
+One JSON line per preflight, planned window, submitted window, completed
+window, stop event, and final summary is appended to the file at
+`--evidence-file` (default
+`operator-evidence/wallet-forward-sync-batch-runner/evidence.jsonl`, gitignored
+— operator-local output, not campaign truth). Each completed-window record
+includes: window index, policyLabel, runId, exact range, cursor before/after,
+warning count/details, contamination pre/post counts, duplicate-group counts,
+invariant failures, and outcome. No secret values (connection strings, RPC
+URLs, headers) are ever written.
+
 ## Non-goals
 
 - No automatic background sync or worker/queue infrastructure.
