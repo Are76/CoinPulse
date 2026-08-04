@@ -32,8 +32,8 @@ describe("GET /api/wallets/onboarding-status route contract", () => {
       chainId: 369,
     });
     getWalletOnboardingStatus.mockResolvedValue({
-      status: "CANONICAL_STATE_READY",
-      reason: "Canonical materialized state is ready and covers the known ledger history.",
+      status: "CANONICAL_STATE_MATERIALIZED",
+      reason: "Canonical portfolio state has been successfully materialized and its recorded ledger block range is fully known.",
       actionRequired: false,
       holdingsMayBeVisible: true,
       pnlMayBeAvailable: true,
@@ -61,7 +61,7 @@ describe("GET /api/wallets/onboarding-status route contract", () => {
     const body = await response.json();
     expect(body.data.schemaVersion).toBe("v1");
     expect(body.data.wallet).toEqual({ id: "wallet-1", address: VALID_ADDRESS, chainId: 369 });
-    expect(body.data.onboarding.status).toBe("CANONICAL_STATE_READY");
+    expect(body.data.onboarding.status).toBe("CANONICAL_STATE_MATERIALIZED");
 
     expect(resolveTrackedWalletByAddress).toHaveBeenCalledWith({
       walletAddress: VALID_ADDRESS,

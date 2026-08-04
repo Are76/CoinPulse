@@ -128,12 +128,12 @@ const LIVE_SNAPSHOT_DTO: LiveHoldingsSnapshotDto = {
   warnings: [],
 };
 
-const READY_ONBOARDING: WalletOnboardingStatusResponseDto = {
+const MATERIALIZED_ONBOARDING: WalletOnboardingStatusResponseDto = {
   schemaVersion: "v1",
   wallet: { id: "wallet-1", address: WALLET_ADDRESS, chainId: 369 },
   onboarding: {
-    status: "CANONICAL_STATE_READY",
-    reason: "Canonical materialized state is ready and covers the known ledger history.",
+    status: "CANONICAL_STATE_MATERIALIZED",
+    reason: "Canonical portfolio state has been successfully materialized and its recorded ledger block range is fully known.",
     actionRequired: false,
     holdingsMayBeVisible: true,
     pnlMayBeAvailable: true,
@@ -225,7 +225,7 @@ describe("DashboardScreen wallet onboarding status wiring", () => {
 
   it("renders the canonical backend-derived status once a wallet is submitted", () => {
     mockUseWalletOnboardingStatusQuery.mockReturnValue({
-      data: READY_ONBOARDING,
+      data: MATERIALIZED_ONBOARDING,
       isLoading: false,
       isError: false,
     } as ReturnType<typeof useWalletOnboardingStatusQuery>);
@@ -234,13 +234,15 @@ describe("DashboardScreen wallet onboarding status wiring", () => {
     submitWalletForm();
 
     expect(screen.getByText("Onboarding status")).toBeInTheDocument();
-    expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.getByText("Materialized")).toBeInTheDocument();
     expect(
-      screen.getByText("Canonical materialized state is ready and covers the known ledger history."),
+      screen.getByText(
+        "Canonical portfolio state has been successfully materialized and its recorded ledger block range is fully known.",
+      ),
     ).toBeInTheDocument();
   });
 
-  it("renders TRACKED_NOT_SYNCED distinctly from a ready state", () => {
+  it("renders TRACKED_NOT_SYNCED distinctly from a materialized state", () => {
     mockUseWalletOnboardingStatusQuery.mockReturnValue({
       data: NOT_SYNCED_ONBOARDING,
       isLoading: false,
@@ -251,7 +253,7 @@ describe("DashboardScreen wallet onboarding status wiring", () => {
     submitWalletForm();
 
     expect(screen.getByText("Not synced")).toBeInTheDocument();
-    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+    expect(screen.queryByText("Materialized")).not.toBeInTheDocument();
   });
 
   it("keeps the canonical onboarding status visible even when the live snapshot fallback renders", () => {

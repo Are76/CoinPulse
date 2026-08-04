@@ -232,7 +232,7 @@ const ONBOARDING_STATUS_LABEL: Record<WalletOnboardingStatusDto["status"], strin
   SYNC_IN_PROGRESS: "Sync in progress",
   SYNC_FAILED: "Sync failed",
   CANONICAL_STATE_PARTIAL: "Partial coverage",
-  CANONICAL_STATE_READY: "Ready",
+  CANONICAL_STATE_MATERIALIZED: "Materialized",
   CANONICAL_STATE_WARNING: "Needs review",
 };
 
@@ -241,7 +241,7 @@ const ONBOARDING_STATUS_TONE: Record<WalletOnboardingStatusDto["status"], BadgeT
   SYNC_IN_PROGRESS: "info",
   SYNC_FAILED: "danger",
   CANONICAL_STATE_PARTIAL: "stale",
-  CANONICAL_STATE_READY: "fresh",
+  CANONICAL_STATE_MATERIALIZED: "fresh",
   CANONICAL_STATE_WARNING: "warn",
 };
 

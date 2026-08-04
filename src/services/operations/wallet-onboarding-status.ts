@@ -12,13 +12,22 @@ import { getDb } from "@/lib/db";
  * RPC, live snapshots, or frontend inference. See docs/project-decisions.md
  * D-035 for the live-snapshot/canonical-truth boundary this status
  * reinforces.
+ *
+ * `CANONICAL_STATE_MATERIALIZED` (not "READY") is deliberate: a persisted
+ * `sourceLedgerFromBlock`/`sourceLedgerToBlock` pair only proves the most
+ * recent materialization run's own recorded block window is fully known —
+ * it does not prove the wallet's complete history back to genesis has been
+ * captured (see `src/services/api/validation.ts` MANUAL_SYNC_MAX_BLOCK_SPAN /
+ * REBUILD_MAX_BLOCK_SPAN: a single sync/rebuild is capped at 1,000 blocks).
+ * No persisted field in the current schema proves full historical coverage,
+ * so this status never claims "ready" or "complete".
  */
 export type WalletOnboardingStatus =
   | "TRACKED_NOT_SYNCED"
   | "SYNC_IN_PROGRESS"
   | "SYNC_FAILED"
   | "CANONICAL_STATE_PARTIAL"
-  | "CANONICAL_STATE_READY"
+  | "CANONICAL_STATE_MATERIALIZED"
   | "CANONICAL_STATE_WARNING";
 
 export type WalletOnboardingLatestSyncRunDto = {
@@ -77,21 +86,40 @@ export type MaterializationStateInput = {
 
 const ACTIVE_SYNC_RUN_STATUSES = new Set(["PENDING", "RUNNING"]);
 
+type OnboardingFlags = {
+  actionRequired: boolean;
+  holdingsMayBeVisible: boolean;
+  pnlMayBeAvailable: boolean;
+  pricingMayBeUnavailable: boolean;
+};
+
 /**
  * Pure derivation — no I/O. Exactly one branch matches for any input,
  * evaluated in this precedence order:
  *
- * 1. No SyncRun ever created for the wallet           -> TRACKED_NOT_SYNCED
- * 2. Latest SyncRun is PENDING or RUNNING              -> SYNC_IN_PROGRESS
- * 3. Latest SyncRun is FAILED                          -> SYNC_FAILED
- * 4. Latest SyncRun is COMPLETED, and materialized
- *    state is missing / not COMPLETED / not
- *    successful / RUNNING / FAILED / lacks full
- *    ledger block-range coverage                       -> CANONICAL_STATE_PARTIAL
- * 5. Materialized state is COMPLETED + successful +
- *    covered, with warningCount > 0                    -> CANONICAL_STATE_WARNING
- * 6. Materialized state is COMPLETED + successful +
- *    covered, with warningCount === 0                  -> CANONICAL_STATE_READY
+ * 1. No SyncRun AND no materialization ever recorded    -> TRACKED_NOT_SYNCED
+ * 2. Latest SyncRun is PENDING or RUNNING                -> SYNC_IN_PROGRESS
+ * 3. Latest SyncRun is FAILED                            -> SYNC_FAILED
+ * 4. Otherwise (latest SyncRun is COMPLETED, or no
+ *    SyncRun exists but a PortfolioMaterializationState
+ *    row does — e.g. a legacy/imported wallet whose
+ *    materialization predates per-run SyncRun tracking):
+ *    classify from the materialization row alone, since
+ *    it is self-describing persisted evidence:
+ *      a. missing / RUNNING / FAILED / not
+ *         completedSuccessfully / lacks a fully recorded
+ *         ledger block-range                             -> CANONICAL_STATE_PARTIAL
+ *      b. COMPLETED + successful + fully recorded range,
+ *         warningCount > 0                                -> CANONICAL_STATE_WARNING
+ *      c. COMPLETED + successful + fully recorded range,
+ *         warningCount === 0                               -> CANONICAL_STATE_MATERIALIZED
+ *
+ * Note: no branch here can produce an indeterminate result — every
+ * materialization row carries enough persisted fields (status,
+ * completedSuccessfully, warningCount, block range) to classify on its own,
+ * so an explicit UNKNOWN/INCONSISTENT status is never reachable today. If a
+ * future persisted shape stops guaranteeing that, this function must gain
+ * one rather than guessing.
  */
 export function deriveWalletOnboardingStatus(input: {
   latestSyncRun: LatestSyncRunInput;
@@ -117,16 +145,7 @@ export function deriveWalletOnboardingStatus(input: {
     latestMaterializedAt: materializationState?.latestMaterializedAt?.toISOString() ?? null,
   };
 
-  function build(
-    status: WalletOnboardingStatus,
-    reason: string,
-    flags: {
-      actionRequired: boolean;
-      holdingsMayBeVisible: boolean;
-      pnlMayBeAvailable: boolean;
-      pricingMayBeUnavailable: boolean;
-    },
-  ): WalletOnboardingStatusDto {
+  function build(status: WalletOnboardingStatus, reason: string, flags: OnboardingFlags): WalletOnboardingStatusDto {
     return {
       status,
       reason,
@@ -136,7 +155,7 @@ export function deriveWalletOnboardingStatus(input: {
     };
   }
 
-  if (!latestSyncRun) {
+  if (!latestSyncRun && !materializationState) {
     return build(
       "TRACKED_NOT_SYNCED",
       "Wallet is tracked but no sync has ever been attempted.",
@@ -149,7 +168,7 @@ export function deriveWalletOnboardingStatus(input: {
     );
   }
 
-  if (ACTIVE_SYNC_RUN_STATUSES.has(latestSyncRun.status)) {
+  if (latestSyncRun && ACTIVE_SYNC_RUN_STATUSES.has(latestSyncRun.status)) {
     return build(
       "SYNC_IN_PROGRESS",
       "A sync or rebuild operation is currently running for this wallet.",
@@ -162,7 +181,7 @@ export function deriveWalletOnboardingStatus(input: {
     );
   }
 
-  if (latestSyncRun.status === "FAILED") {
+  if (latestSyncRun && latestSyncRun.status === "FAILED") {
     return build(
       "SYNC_FAILED",
       latestSyncRun.errorMessage
@@ -177,12 +196,20 @@ export function deriveWalletOnboardingStatus(input: {
     );
   }
 
-  // latestSyncRun.status === "COMPLETED" from here down.
+  // From here: latestSyncRun is either COMPLETED, or null while a
+  // PortfolioMaterializationState row still exists (legacy/imported wallet
+  // with no per-run SyncRun evidence). Either way, no SyncRun row present
+  // must never be reported as "never synced" once materialization evidence
+  // contradicts that — classify from the materialization row alone.
+  const noSyncEvidencePrefix =
+    latestSyncRun === null
+      ? "No SyncRun evidence exists for this wallet, but persisted materialization state does. "
+      : "";
 
   if (!materializationState) {
     return build(
       "CANONICAL_STATE_PARTIAL",
-      "Sync completed but canonical portfolio state has not been materialized yet.",
+      `${noSyncEvidencePrefix}Sync completed but canonical portfolio state has not been materialized yet.`,
       {
         actionRequired: false,
         holdingsMayBeVisible: false,
@@ -195,7 +222,7 @@ export function deriveWalletOnboardingStatus(input: {
   if (materializationState.status === "RUNNING") {
     return build(
       "CANONICAL_STATE_PARTIAL",
-      "Canonical portfolio state materialization is currently in progress.",
+      `${noSyncEvidencePrefix}Canonical portfolio state materialization is currently in progress.`,
       {
         actionRequired: false,
         holdingsMayBeVisible: false,
@@ -209,8 +236,8 @@ export function deriveWalletOnboardingStatus(input: {
     return build(
       "CANONICAL_STATE_PARTIAL",
       materializationState.errorMessage
-        ? `Materialization failed: ${materializationState.errorMessage}`
-        : "Materialization failed.",
+        ? `${noSyncEvidencePrefix}Materialization failed: ${materializationState.errorMessage}`
+        : `${noSyncEvidencePrefix}Materialization failed.`,
       {
         actionRequired: false,
         holdingsMayBeVisible: false,
@@ -223,7 +250,7 @@ export function deriveWalletOnboardingStatus(input: {
   if (!materializationState.completedSuccessfully) {
     return build(
       "CANONICAL_STATE_PARTIAL",
-      "Materialization completed without a recorded success confirmation.",
+      `${noSyncEvidencePrefix}Materialization completed without a recorded success confirmation.`,
       {
         actionRequired: false,
         holdingsMayBeVisible: false,
@@ -236,7 +263,7 @@ export function deriveWalletOnboardingStatus(input: {
   if (ledgerCoverageStatus(materializationState) !== "covered") {
     return build(
       "CANONICAL_STATE_PARTIAL",
-      "Canonical materialized state exists but historical ledger coverage is partial or unknown.",
+      `${noSyncEvidencePrefix}Canonical materialized state exists but historical ledger coverage is partial or unknown.`,
       {
         actionRequired: false,
         holdingsMayBeVisible: true,
@@ -247,21 +274,28 @@ export function deriveWalletOnboardingStatus(input: {
   }
 
   if (materializationState.warningCount > 0) {
+    // Fail closed: a persisted warning (including negative-token-balance
+    // integrity warnings — see materialize-positions.ts) means the
+    // materialized state is not safe to treat as valuation/PnL-ready. This
+    // mirrors the existing pricing-candidate materialization-health gate
+    // (src/services/pricing/discover-ingest-candidates.ts buildMaterializationHealth),
+    // which already refuses to classify anything as "healthy" once
+    // warningCount > 0.
     return build(
       "CANONICAL_STATE_WARNING",
-      "Canonical materialized state is ready but has active integrity or persisted warnings.",
+      `${noSyncEvidencePrefix}Canonical materialized state carries active integrity or persisted warnings; portfolio totals, valuation, and PnL are not trustworthy until the warnings are resolved.`,
       {
         actionRequired: true,
         holdingsMayBeVisible: true,
-        pnlMayBeAvailable: true,
-        pricingMayBeUnavailable: false,
+        pnlMayBeAvailable: false,
+        pricingMayBeUnavailable: true,
       },
     );
   }
 
   return build(
-    "CANONICAL_STATE_READY",
-    "Canonical materialized state is ready and covers the known ledger history.",
+    "CANONICAL_STATE_MATERIALIZED",
+    `${noSyncEvidencePrefix}Canonical portfolio state has been successfully materialized and its recorded ledger block range is fully known. This does not by itself prove the wallet's complete history has been captured.`,
     {
       actionRequired: false,
       holdingsMayBeVisible: true,

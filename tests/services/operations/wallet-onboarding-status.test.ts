@@ -17,7 +17,11 @@ const BASE_SYNC_RUN: NonNullable<LatestSyncRunInput> = {
   updatedAt: new Date("2026-08-01T00:05:00.000Z"),
 };
 
-const READY_MATERIALIZATION: NonNullable<MaterializationStateInput> = {
+// Warning-free, fully covered materialization. NOTE: "covered" here only
+// means the most recent materialization run's own recorded block window is
+// fully known — it is not, by itself, proof of complete wallet history. See
+// Finding 2 tests below.
+const CLEAN_MATERIALIZATION: NonNullable<MaterializationStateInput> = {
   status: "COMPLETED",
   completedSuccessfully: true,
   warningCount: 0,
@@ -61,7 +65,7 @@ describe("deriveWalletOnboardingStatus", () => {
   it("returns SYNC_IN_PROGRESS when the latest SyncRun is RUNNING", () => {
     const result = deriveWalletOnboardingStatus({
       latestSyncRun: { ...BASE_SYNC_RUN, status: "RUNNING", stage: "INGESTING_RAW_LOGS" },
-      materializationState: READY_MATERIALIZATION,
+      materializationState: CLEAN_MATERIALIZATION,
     });
 
     expect(result.status).toBe("SYNC_IN_PROGRESS");
@@ -102,7 +106,7 @@ describe("deriveWalletOnboardingStatus", () => {
   it("returns CANONICAL_STATE_PARTIAL when materialization is currently RUNNING", () => {
     const result = deriveWalletOnboardingStatus({
       latestSyncRun: BASE_SYNC_RUN,
-      materializationState: { ...READY_MATERIALIZATION, status: "RUNNING", completedSuccessfully: false },
+      materializationState: { ...CLEAN_MATERIALIZATION, status: "RUNNING", completedSuccessfully: false },
     });
 
     expect(result.status).toBe("CANONICAL_STATE_PARTIAL");
@@ -112,7 +116,7 @@ describe("deriveWalletOnboardingStatus", () => {
     const result = deriveWalletOnboardingStatus({
       latestSyncRun: BASE_SYNC_RUN,
       materializationState: {
-        ...READY_MATERIALIZATION,
+        ...CLEAN_MATERIALIZATION,
         status: "FAILED",
         completedSuccessfully: false,
         errorMessage: "negative balance invariant violated",
@@ -123,11 +127,13 @@ describe("deriveWalletOnboardingStatus", () => {
     expect(result.reason).toContain("negative balance invariant violated");
   });
 
-  it("returns CANONICAL_STATE_PARTIAL when ledger block-range coverage is unknown", () => {
+  // ── Finding 2: block bounds do not prove complete history ────────────────
+
+  it("returns CANONICAL_STATE_PARTIAL when ledger block-range coverage is unknown (neither bound present)", () => {
     const result = deriveWalletOnboardingStatus({
       latestSyncRun: BASE_SYNC_RUN,
       materializationState: {
-        ...READY_MATERIALIZATION,
+        ...CLEAN_MATERIALIZATION,
         sourceLedgerFromBlock: null,
         sourceLedgerToBlock: null,
       },
@@ -138,11 +144,11 @@ describe("deriveWalletOnboardingStatus", () => {
     expect(result.pnlMayBeAvailable).toBe(false);
   });
 
-  it("returns CANONICAL_STATE_PARTIAL when ledger block-range coverage is only partially recorded", () => {
+  it("returns CANONICAL_STATE_PARTIAL when only one ledger block bound is recorded", () => {
     const result = deriveWalletOnboardingStatus({
       latestSyncRun: BASE_SYNC_RUN,
       materializationState: {
-        ...READY_MATERIALIZATION,
+        ...CLEAN_MATERIALIZATION,
         sourceLedgerFromBlock: 100n,
         sourceLedgerToBlock: null,
       },
@@ -151,37 +157,75 @@ describe("deriveWalletOnboardingStatus", () => {
     expect(result.status).toBe("CANONICAL_STATE_PARTIAL");
   });
 
-  it("returns CANONICAL_STATE_READY for a fully covered, warning-free materialization", () => {
+  it("classifies a bounded 1,000-block materialization with both bounds present as MATERIALIZED, never a claim of full readiness", () => {
+    // Mirrors REBUILD_MAX_BLOCK_SPAN (src/services/api/validation.ts): a
+    // single materialization pass is capped at 1,000 blocks and can never by
+    // itself prove complete wallet history.
     const result = deriveWalletOnboardingStatus({
       latestSyncRun: BASE_SYNC_RUN,
-      materializationState: READY_MATERIALIZATION,
+      materializationState: {
+        ...CLEAN_MATERIALIZATION,
+        sourceLedgerFromBlock: 1_000_000n,
+        sourceLedgerToBlock: 1_001_000n,
+      },
     });
 
-    expect(result.status).toBe("CANONICAL_STATE_READY");
+    expect(result.status).toBe("CANONICAL_STATE_MATERIALIZED");
+    expect(result.status).not.toBe("CANONICAL_STATE_READY" as never);
+    expect(result.reason.toLowerCase()).not.toContain("ready");
+    expect(result.reason).toContain("does not by itself prove the wallet's complete history");
+  });
+
+  it("returns CANONICAL_STATE_MATERIALIZED (not a 'ready'/complete claim) for a fully covered, warning-free materialization", () => {
+    const result = deriveWalletOnboardingStatus({
+      latestSyncRun: BASE_SYNC_RUN,
+      materializationState: CLEAN_MATERIALIZATION,
+    });
+
+    expect(result.status).toBe("CANONICAL_STATE_MATERIALIZED");
     expect(result.actionRequired).toBe(false);
     expect(result.holdingsMayBeVisible).toBe(true);
     expect(result.pnlMayBeAvailable).toBe(true);
     expect(result.pricingMayBeUnavailable).toBe(false);
   });
 
-  it("returns CANONICAL_STATE_WARNING for a covered, successful materialization with active warnings", () => {
+  // ── Finding 1: warning-bearing materialization fails closed ──────────────
+
+  it("returns CANONICAL_STATE_WARNING and fails closed (no PnL, pricing not guaranteed) for a covered materialization with active warnings", () => {
     const result = deriveWalletOnboardingStatus({
       latestSyncRun: BASE_SYNC_RUN,
-      materializationState: { ...READY_MATERIALIZATION, warningCount: 3 },
+      materializationState: { ...CLEAN_MATERIALIZATION, warningCount: 3 },
     });
 
     expect(result.status).toBe("CANONICAL_STATE_WARNING");
     expect(result.actionRequired).toBe(true);
     expect(result.holdingsMayBeVisible).toBe(true);
-    expect(result.pnlMayBeAvailable).toBe(true);
+    expect(result.pnlMayBeAvailable).toBe(false);
+    expect(result.pricingMayBeUnavailable).toBe(true);
+    expect(result.reason).toContain("are not trustworthy");
   });
 
-  it("prioritizes an active sync over an older FAILED run and a ready materialization", () => {
+  it("fails closed for a negative-balance-style warning-bearing materialization", () => {
+    // Negative-token-balance integrity warnings are folded into warningCount
+    // at materialization time (see materialize-positions.ts), so this is the
+    // same branch as any other warning — never treated as PnL/pricing-safe.
+    const result = deriveWalletOnboardingStatus({
+      latestSyncRun: BASE_SYNC_RUN,
+      materializationState: { ...CLEAN_MATERIALIZATION, warningCount: 1 },
+    });
+
+    expect(result.status).toBe("CANONICAL_STATE_WARNING");
+    expect(result.pnlMayBeAvailable).toBe(false);
+    expect(result.pricingMayBeUnavailable).toBe(true);
+    expect(result.actionRequired).toBe(true);
+  });
+
+  it("prioritizes an active sync over an older FAILED run and a clean materialization", () => {
     // Precedence check: the most recent SyncRun always wins regardless of
     // what earlier runs or the persisted materialization state say.
     const result = deriveWalletOnboardingStatus({
       latestSyncRun: { ...BASE_SYNC_RUN, id: "run-2", status: "RUNNING" },
-      materializationState: READY_MATERIALIZATION,
+      materializationState: CLEAN_MATERIALIZATION,
     });
 
     expect(result.status).toBe("SYNC_IN_PROGRESS");
@@ -201,7 +245,7 @@ describe("deriveWalletOnboardingStatus", () => {
   it("serializes latestSyncRun and materialization timestamps as ISO strings", () => {
     const result = deriveWalletOnboardingStatus({
       latestSyncRun: BASE_SYNC_RUN,
-      materializationState: READY_MATERIALIZATION,
+      materializationState: CLEAN_MATERIALIZATION,
     });
 
     expect(result.latestSyncRun).toEqual({
@@ -214,12 +258,71 @@ describe("deriveWalletOnboardingStatus", () => {
     });
     expect(result.materialization.latestMaterializedAt).toBe("2026-08-01T00:05:00.000Z");
   });
+
+  // ── Finding 3: contradictory persisted state (no SyncRun, materialization exists) ──
+
+  it("does not claim TRACKED_NOT_SYNCED when materialization exists despite no SyncRun row", () => {
+    const result = deriveWalletOnboardingStatus({
+      latestSyncRun: null,
+      materializationState: CLEAN_MATERIALIZATION,
+    });
+
+    expect(result.status).not.toBe("TRACKED_NOT_SYNCED");
+  });
+
+  it("derives CANONICAL_STATE_MATERIALIZED from a warning-free materialization when no SyncRun exists", () => {
+    const result = deriveWalletOnboardingStatus({
+      latestSyncRun: null,
+      materializationState: CLEAN_MATERIALIZATION,
+    });
+
+    expect(result.status).toBe("CANONICAL_STATE_MATERIALIZED");
+    expect(result.latestSyncRun).toBeNull();
+    expect(result.reason).toContain("No SyncRun evidence exists for this wallet");
+  });
+
+  it("derives CANONICAL_STATE_WARNING (failing closed) from a warning-bearing materialization when no SyncRun exists", () => {
+    const result = deriveWalletOnboardingStatus({
+      latestSyncRun: null,
+      materializationState: { ...CLEAN_MATERIALIZATION, warningCount: 2 },
+    });
+
+    expect(result.status).toBe("CANONICAL_STATE_WARNING");
+    expect(result.pnlMayBeAvailable).toBe(false);
+    expect(result.reason).toContain("No SyncRun evidence exists for this wallet");
+  });
+
+  it("derives CANONICAL_STATE_PARTIAL from a FAILED materialization when no SyncRun exists", () => {
+    const result = deriveWalletOnboardingStatus({
+      latestSyncRun: null,
+      materializationState: {
+        ...CLEAN_MATERIALIZATION,
+        status: "FAILED",
+        completedSuccessfully: false,
+        errorMessage: "boom",
+      },
+    });
+
+    expect(result.status).toBe("CANONICAL_STATE_PARTIAL");
+    expect(result.reason).toContain("No SyncRun evidence exists for this wallet");
+    expect(result.reason).toContain("boom");
+  });
+
+  it("derives CANONICAL_STATE_PARTIAL from a RUNNING materialization when no SyncRun exists", () => {
+    const result = deriveWalletOnboardingStatus({
+      latestSyncRun: null,
+      materializationState: { ...CLEAN_MATERIALIZATION, status: "RUNNING", completedSuccessfully: false },
+    });
+
+    expect(result.status).toBe("CANONICAL_STATE_PARTIAL");
+    expect(result.reason).toContain("No SyncRun evidence exists for this wallet");
+  });
 });
 
 describe("getWalletOnboardingStatus", () => {
   it("queries the latest SyncRun (by createdAt desc) and the materialization state scoped to walletId + chainId", async () => {
     const findFirst = vi.fn().mockResolvedValue(BASE_SYNC_RUN);
-    const findUnique = vi.fn().mockResolvedValue(READY_MATERIALIZATION);
+    const findUnique = vi.fn().mockResolvedValue(CLEAN_MATERIALIZATION);
     const db = {
       syncRun: { findFirst },
       portfolioMaterializationState: { findUnique },
@@ -227,7 +330,7 @@ describe("getWalletOnboardingStatus", () => {
 
     const result = await getWalletOnboardingStatus({ walletId: "wallet-1", chainId: 369, db });
 
-    expect(result.status).toBe("CANONICAL_STATE_READY");
+    expect(result.status).toBe("CANONICAL_STATE_MATERIALIZED");
     expect(findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { walletId: "wallet-1", chainId: 369 },
