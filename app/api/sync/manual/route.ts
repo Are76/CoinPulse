@@ -43,11 +43,26 @@ export async function POST(request: Request) {
       // startBlock is guaranteed defined here — the schema's dry-run
       // refinement rejects an omitted startBlock before this code runs.
       const startBlock = input.startBlock as bigint;
+      // Single timestamp shared by the response's generatedAt and the
+      // conflict-staleness check below, so both describe the same instant.
+      const now = new Date();
       const conflict = await previewOperationConflict({
         walletId: wallet.id,
         chainId: input.chainId,
         trigger: "MANUAL",
+        now,
       });
+
+      // The ingestion range is inclusive on both ends (the sync pipeline
+      // scans every block from startBlock through endBlock), so a
+      // startBlock === endBlock request scans exactly one block, not zero.
+      // MANUAL_SYNC_MAX_BLOCK_SPAN caps endBlock - startBlock (the existing
+      // execute-mode schema refinement in src/services/api/validation.ts),
+      // which permits at most MANUAL_SYNC_MAX_BLOCK_SPAN + 1 inclusive
+      // blocks — maxInclusiveBlockCount below makes that limit explicit so
+      // requestedBlockCount can be compared directly against it.
+      const requestedBlockCount = input.endBlock - startBlock + 1n;
+      const maxInclusiveBlockCount = MANUAL_SYNC_MAX_BLOCK_SPAN + 1n;
 
       return Response.json({
         data: {
@@ -61,10 +76,12 @@ export async function POST(request: Request) {
           policyLabel: input.policyLabel,
           limits: {
             maxBlockSpan: serializeForJson(MANUAL_SYNC_MAX_BLOCK_SPAN),
-            requestedSpan: serializeForJson(input.endBlock - startBlock),
+            maxInclusiveBlockCount: serializeForJson(maxInclusiveBlockCount),
+            requestedBlockCount: serializeForJson(requestedBlockCount),
           },
           executable: conflict.allowed,
           blockers: conflict.allowed ? [] : [conflict],
+          generatedAt: now.toISOString(),
         },
       });
     }

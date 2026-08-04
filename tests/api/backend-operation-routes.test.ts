@@ -443,6 +443,57 @@ describe("POST /api/sync/manual (dry-run mode)", () => {
     });
     previewOperationConflictFn.mockResolvedValue({ allowed: true });
 
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-04T05:47:00.000Z"));
+    try {
+      const { POST } = await import("../../app/api/sync/manual/route");
+      const response = await POST(
+        new Request("http://localhost/api/sync/manual", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            walletAddress: TARGET_WALLET,
+            chainId: 369,
+            sourceFamilies: ["TRANSFERS"],
+            startBlock: "26943376",
+            endBlock: "26944376",
+            policyLabel: "wallet-scoped-historical-sync-window-1",
+            mode: "dry-run",
+          }),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      // startBlock/endBlock differ by 1000, so the inclusive scan count is
+      // 1001 (endBlock - startBlock + 1) — not the raw 1000 difference.
+      await expect(response.json()).resolves.toEqual({
+        data: {
+          mode: "dry-run",
+          wallet: { chainId: 369, address: TARGET_WALLET },
+          requestedRange: { startBlock: "26943376", endBlock: "26944376" },
+          sourceFamilies: ["TRANSFERS"],
+          policyLabel: "wallet-scoped-historical-sync-window-1",
+          limits: { maxBlockSpan: "1000", maxInclusiveBlockCount: "1001", requestedBlockCount: "1001" },
+          executable: true,
+          blockers: [],
+          generatedAt: "2026-08-04T05:47:00.000Z",
+        },
+      });
+      expect(reserveOperationRunFn).not.toHaveBeenCalled();
+      expect(runWalletSync).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports requestedBlockCount: \"1\" for a single-block window (startBlock === endBlock)", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-target",
+      address: TARGET_WALLET,
+      chainId: 369,
+    });
+    previewOperationConflictFn.mockResolvedValue({ allowed: true });
+
     const { POST } = await import("../../app/api/sync/manual/route");
     const response = await POST(
       new Request("http://localhost/api/sync/manual", {
@@ -452,7 +503,7 @@ describe("POST /api/sync/manual (dry-run mode)", () => {
           walletAddress: TARGET_WALLET,
           chainId: 369,
           sourceFamilies: ["TRANSFERS"],
-          startBlock: "26943376",
+          startBlock: "26944376",
           endBlock: "26944376",
           policyLabel: "wallet-scoped-historical-sync-window-1",
           mode: "dry-run",
@@ -460,21 +511,92 @@ describe("POST /api/sync/manual (dry-run mode)", () => {
       }),
     );
 
+    const body = await response.json();
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      data: {
-        mode: "dry-run",
-        wallet: { chainId: 369, address: TARGET_WALLET },
-        requestedRange: { startBlock: "26943376", endBlock: "26944376" },
-        sourceFamilies: ["TRANSFERS"],
-        policyLabel: "wallet-scoped-historical-sync-window-1",
-        limits: { maxBlockSpan: "1000", requestedSpan: "1000" },
-        executable: true,
-        blockers: [],
-      },
+    expect(body.data.limits.requestedBlockCount).toBe("1");
+  });
+
+  it("reports the correct inclusive count at the maximum allowed span (1000 span == 1001 blocks)", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-target",
+      address: TARGET_WALLET,
+      chainId: 369,
     });
-    expect(reserveOperationRunFn).not.toHaveBeenCalled();
-    expect(runWalletSync).not.toHaveBeenCalled();
+    previewOperationConflictFn.mockResolvedValue({ allowed: true });
+
+    const { POST } = await import("../../app/api/sync/manual/route");
+    const response = await POST(
+      new Request("http://localhost/api/sync/manual", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: TARGET_WALLET,
+          chainId: 369,
+          sourceFamilies: ["TRANSFERS"],
+          startBlock: "0",
+          endBlock: "1000",
+          policyLabel: "wallet-scoped-historical-sync-window-1",
+          mode: "dry-run",
+        }),
+      }),
+    );
+
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    // endBlock - startBlock == 1000 (at the MANUAL_SYNC_MAX_BLOCK_SPAN limit,
+    // still valid), so the inclusive count is 1001, matching
+    // limits.maxInclusiveBlockCount exactly — the boundary case.
+    expect(body.data.limits.requestedBlockCount).toBe("1001");
+    expect(body.data.limits.maxInclusiveBlockCount).toBe("1001");
+  });
+
+  it("computes generatedAt deterministically under mocked time, identically across repeated calls", async () => {
+    resolveTrackedWalletByAddress.mockResolvedValue({
+      id: "wallet-target",
+      address: TARGET_WALLET,
+      chainId: 369,
+    });
+    previewOperationConflictFn.mockResolvedValue({ allowed: true });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-04T05:47:00.000Z"));
+    try {
+      const requestBody = JSON.stringify({
+        walletAddress: TARGET_WALLET,
+        chainId: 369,
+        sourceFamilies: ["TRANSFERS"],
+        startBlock: "26943376",
+        endBlock: "26944376",
+        policyLabel: "wallet-scoped-historical-sync-window-1",
+        mode: "dry-run",
+      });
+
+      const { POST } = await import("../../app/api/sync/manual/route");
+      const first = await POST(
+        new Request("http://localhost/api/sync/manual", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: requestBody,
+        }),
+      );
+      const second = await POST(
+        new Request("http://localhost/api/sync/manual", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: requestBody,
+        }),
+      );
+
+      const firstBody = await first.json();
+      const secondBody = await second.json();
+
+      expect(firstBody.data.generatedAt).toBe("2026-08-04T05:47:00.000Z");
+      expect(secondBody.data.generatedAt).toBe("2026-08-04T05:47:00.000Z");
+      expect(reserveOperationRunFn).not.toHaveBeenCalled();
+      expect(runWalletSync).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports executable: false with blocker details when an operation is already active", async () => {
@@ -611,25 +733,36 @@ describe("POST /api/sync/manual (dry-run mode)", () => {
       mode: "dry-run",
     });
 
-    const { POST } = await import("../../app/api/sync/manual/route");
-    const first = await POST(
-      new Request("http://localhost/api/sync/manual", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: requestBody,
-      }),
-    );
-    const second = await POST(
-      new Request("http://localhost/api/sync/manual", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: requestBody,
-      }),
-    );
+    // generatedAt is server time at request receipt, so it is pinned here —
+    // the point of this test is that everything else about the report is
+    // identical across repeated calls, not that generatedAt is constant
+    // across real-world invocations (it deliberately is not; see the
+    // separate "computes generatedAt deterministically" test above).
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-04T05:47:00.000Z"));
+    try {
+      const { POST } = await import("../../app/api/sync/manual/route");
+      const first = await POST(
+        new Request("http://localhost/api/sync/manual", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: requestBody,
+        }),
+      );
+      const second = await POST(
+        new Request("http://localhost/api/sync/manual", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: requestBody,
+        }),
+      );
 
-    await expect(first.json()).resolves.toEqual(await second.json());
-    expect(reserveOperationRunFn).not.toHaveBeenCalled();
-    expect(runWalletSync).not.toHaveBeenCalled();
+      await expect(first.json()).resolves.toEqual(await second.json());
+      expect(reserveOperationRunFn).not.toHaveBeenCalled();
+      expect(runWalletSync).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

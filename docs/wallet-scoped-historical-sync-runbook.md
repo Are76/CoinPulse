@@ -45,7 +45,10 @@ the live database and explorer, never guessed or pre-filled.
   which may omit `startBlock` to resume from the cursor). Historical recovery must always target
   an explicit, reviewable window — never an implicit chain-wide range.
 - `endBlock - startBlock` is capped at `MANUAL_SYNC_MAX_BLOCK_SPAN` (currently 1,000 blocks) in
-  both modes, enforced by the existing schema refinement in `src/services/api/validation.ts`.
+  both modes, enforced by the existing schema refinement in `src/services/api/validation.ts`. The
+  scan range is **inclusive on both ends** — the sync pipeline reads every block from `startBlock`
+  through `endBlock` — so the maximum block span of 1,000 permits at most **1,001 inclusive
+  blocks** per request (`startBlock === endBlock` scans exactly 1 block, not 0).
 - `sourceFamilies` must be a non-empty array drawn from `SUPPORTED_SYNC_SOURCE_FAMILIES`. For
   native PLS + PRC-20 recovery, use `["TRANSFERS"]` — that family's ingestion already scans both
   native block/transaction evidence and topic-filtered ERC-20 transfer logs for the wallet.
@@ -76,16 +79,30 @@ recorded operator run):
     "requestedRange": { "startBlock": "<candidate-start-block>", "endBlock": "<candidate-end-block>" },
     "sourceFamilies": ["TRANSFERS"],
     "policyLabel": "wallet-scoped-historical-sync-window-<n>",
-    "limits": { "maxBlockSpan": "1000", "requestedSpan": "<endBlock - startBlock>" },
+    "limits": {
+      "maxBlockSpan": "1000",
+      "maxInclusiveBlockCount": "1001",
+      "requestedBlockCount": "<endBlock - startBlock + 1>"
+    },
     "executable": true,
-    "blockers": []
+    "blockers": [],
+    "generatedAt": "<server ISO-8601 UTC timestamp>"
   }
 }
 ```
 
+`limits.requestedBlockCount` is the exact inclusive number of blocks this window will scan —
+compare it directly against `limits.maxInclusiveBlockCount` (both already account for the
+inclusive range; `maxBlockSpan` is the raw underlying `endBlock - startBlock` limit the schema
+enforces). `generatedAt` is the server-generated UTC timestamp of when this preview was computed
+— it describes only the instant the operation-lock state (`executable`/`blockers`) was read, not
+an approval, and it does not remain valid: a subsequent `mode: "execute"` request always performs
+its own fresh lock reservation and its own fresh contamination check (§ step 4 below) regardless
+of how recent the dry-run's `generatedAt` is.
+
 When `executable: false`, `blockers` contains the same conflict-detail shape used by the existing
 409 responses (`conflictingOperationId`, `status`, `appearsStale`, etc.) — nothing is inferred or
-fabricated; it is the live operation-lock state.
+fabricated; it is the live operation-lock state as of `generatedAt`.
 
 ## Execute behavior
 
@@ -142,15 +159,23 @@ request, fixture, or evidence record.
      by the API — the dry-run response's `executable` field reflects only operation-lock state,
      not contamination status, so this query must be run separately every time.
 5. **Propose the first bounded execution window** to the product owner for explicit approval —
-   this PR implements the capability only; it does not execute it.
+   this PR implements the capability only; it does not execute it. Approval and submission can
+   happen well after step 4 was run, and the API does not enforce contamination checks itself
+   (the dry-run response's `executable` field reflects only operation-lock state, not
+   contamination status — see `generatedAt` above). **Immediately before submitting the approved
+   `mode: "execute"` request, rerun the exact same contamination query from step 4 over the exact
+   same `[startBlock, endBlock]` range.** If it returns any row, stop per step 4's remediation
+   path and do not submit the execute request — a fabricated row could have appeared between step
+   4 and approval. This rerun is required in addition to, not instead of, step 4's earlier check.
 6. **After an approved execute window completes**, run the full per-window verification checklist
    already documented in `docs/transfer-history-backfill-operator-plan.md` §7 (SyncRun status,
    warning triage, post-run contamination re-check, duplicate check, cursor/coverage check) —
    this feature reuses the same canonical pipeline, so the same invariants apply.
 7. **Repeat** for the next adjacent window only after the previous window's evidence is verified
-   and its contamination gate (step 4) passed.
+   and both contamination checks (step 4's pre-proposal gate and step 5's immediate pre-submit
+   rerun) passed.
 8. **Materialization rebuild is a separate, explicit `POST /api/rebuild` call** after ingestion
-   across the intended range is verified **and** the contamination gate has passed for every
+   across the intended range is verified **and** both contamination checks have passed for every
    window in that range — never automatic, never bundled into a sync window, and never run after
    a contamination stop until the product owner has resolved it.
 9. **After rebuild**, re-check all previously-negative assets for the wallet (native PLS,
