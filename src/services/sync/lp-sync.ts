@@ -225,7 +225,7 @@ export function normalizeLpActions(args: {
         lpAssetId: rawLog.lpAssetIdSnapshot,
         lpAmountRaw: rawLog.lpAmountRaw,
         lpDecimals: rawLog.lpDecimalsSnapshot,
-        feeAssetId: rawLog.feeAssetIdSnapshot,
+        feeAssetId: canonicalizeSnapshotAssetId(rawLog.feeAssetIdSnapshot),
         feeAmountRaw: rawLog.feeAmountRaw,
         feeDecimals: rawLog.feeDecimalsSnapshot,
       }),

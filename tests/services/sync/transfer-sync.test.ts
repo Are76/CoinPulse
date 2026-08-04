@@ -351,6 +351,14 @@ function createMemoryStores() {
         }
         return { count };
       },
+      async findMany(args: { where: { id: { in: string[] } } }) {
+        return Array.from(ledgerActionGroups.values())
+          .filter((row) => args.where.id.in.includes((row as Record<string, unknown>).id as string))
+          .map((row) => {
+            const group = row as Record<string, unknown>;
+            return { id: group.id as string, actionType: group.actionType as string };
+          });
+      },
     },
     ledgerEntry: {
       async createMany(args: { data: Array<{ id: string }> }) {
@@ -358,6 +366,48 @@ function createMemoryStores() {
         for (const item of args.data) {
           if (!ledgerEntries.has(item.id)) {
             ledgerEntries.set(item.id, item);
+            count += 1;
+          }
+        }
+        return { count };
+      },
+      async findMany(args: {
+        where: {
+          chainId: { in: number[] };
+          walletId: { in: string[] };
+          txHash: { in: string[] };
+          entryType: "FEE";
+          direction: "OUT";
+        };
+      }) {
+        return Array.from(ledgerEntries.values())
+          .filter((row) => {
+            const entry = row as Record<string, unknown>;
+            return (
+              entry.entryType === "FEE" &&
+              args.where.chainId.in.includes(entry.chainId as number) &&
+              args.where.walletId.in.includes(entry.walletId as string) &&
+              args.where.txHash.in.includes((entry.txHash as string).toLowerCase()) &&
+              entry.direction === "OUT"
+            );
+          })
+          .map((row) => {
+            const entry = row as Record<string, unknown>;
+            return {
+              id: entry.id as string,
+              chainId: entry.chainId as number,
+              walletId: entry.walletId as string,
+              txHash: entry.txHash as string,
+              actionGroupId: entry.actionGroupId as string,
+            };
+          });
+      },
+      async updateMany(args: { where: { id: { in: string[] } }; data: { actionGroupId: string } }) {
+        let count = 0;
+        for (const id of args.where.id.in) {
+          const row = ledgerEntries.get(id) as Record<string, unknown> | undefined;
+          if (row) {
+            row.actionGroupId = args.data.actionGroupId;
             count += 1;
           }
         }

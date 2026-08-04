@@ -366,7 +366,7 @@ export function normalizeStakeActions(args: {
         principalReturnedRaw: rawLog.principalReturnedRaw,
         yieldRaw: rawLog.yieldRaw,
         penaltyRaw: rawLog.penaltyRaw,
-        feeAssetId: rawLog.feeAssetIdSnapshot,
+        feeAssetId: canonicalizeSnapshotAssetId(rawLog.feeAssetIdSnapshot),
         feeAmountRaw: rawLog.feeAmountRaw,
         feeDecimals: rawLog.feeDecimalsSnapshot,
         sourceRef: `stake:end:${rawLog.stakeId ?? rawLog.actionIndex}`,
