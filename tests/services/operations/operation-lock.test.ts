@@ -5,6 +5,7 @@ import {
   inspectOperationBlocker,
   isOperationConflictError,
   OperationConflictError,
+  previewOperationConflict,
   reserveOperationRun,
 } from "@/services/operations/operation-lock";
 
@@ -546,5 +547,214 @@ describe("reserveOperationRun", () => {
         now: new Date("2026-05-08T15:00:00.000Z"),
       }),
     ).resolves.toEqual({ id: "run-created" });
+  });
+});
+
+describe("previewOperationConflict", () => {
+  it("reports allowed: true and performs no mutation when no conflicting run exists", async () => {
+    const findMany = async () => [];
+    const create = async () => {
+      throw new Error("previewOperationConflict must never call create()");
+    };
+    const db = { syncRun: { findMany, create } } as never;
+
+    const result = await previewOperationConflict({
+      walletId: "wallet-1",
+      chainId: 369,
+      trigger: "MANUAL",
+      db,
+      now: new Date("2026-05-08T16:00:00.000Z"),
+    });
+
+    expect(result).toEqual({ allowed: true });
+  });
+
+  it("reports the conflicting run's details without reserving anything", async () => {
+    const create = async () => {
+      throw new Error("previewOperationConflict must never call create()");
+    };
+    const db = {
+      syncRun: {
+        findMany: async () => [
+          {
+            id: "run-rebuild-preview",
+            trigger: "REBUILD",
+            status: "RUNNING",
+            stage: "REBUILDING_LEDGER",
+            chainId: 369,
+            walletId: "wallet-1",
+            createdAt: new Date("2026-05-08T16:00:00.000Z"),
+            updatedAt: new Date("2026-05-08T16:01:00.000Z"),
+          },
+        ],
+        create,
+      },
+    } as never;
+
+    const result = await previewOperationConflict({
+      walletId: "wallet-1",
+      chainId: 369,
+      trigger: "MANUAL",
+      db,
+      now: new Date("2026-05-08T16:01:00.000Z"),
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "active_rebuild_in_progress",
+      conflictingOperationId: "run-rebuild-preview",
+      conflictingTrigger: "REBUILD",
+      conflictingStage: "REBUILDING_LEDGER",
+      operationType: "rebuild",
+      status: "RUNNING",
+      startedAt: "2026-05-08T16:00:00.000Z",
+      createdAt: "2026-05-08T16:00:00.000Z",
+      updatedAt: "2026-05-08T16:01:00.000Z",
+      ageMs: 60000,
+      appearsStale: false,
+      staleReason: null,
+    });
+  });
+
+  it("scopes the underlying findMany query to the exact requested wallet, chain, and trigger", async () => {
+    let capturedWhere: unknown;
+    const create = async () => {
+      throw new Error("previewOperationConflict must never call create()");
+    };
+    const db = {
+      syncRun: {
+        findMany: async (args: { where: unknown }) => {
+          capturedWhere = args.where;
+          return [];
+        },
+        create,
+      },
+    } as never;
+
+    await previewOperationConflict({
+      walletId: "wallet-1",
+      chainId: 369,
+      trigger: "MANUAL",
+      db,
+      now: new Date("2026-05-08T16:05:00.000Z"),
+    });
+
+    // This is the exact contract a chain-wide regression would break: the
+    // MANUAL/IMPORT branch of the OR clause must carry the requested
+    // walletId and chainId, not just the trigger set.
+    expect(capturedWhere).toEqual({
+      status: { in: ["PENDING", "RUNNING"] },
+      OR: [
+        { trigger: "REBUILD" },
+        {
+          trigger: { in: ["MANUAL", "IMPORT"] },
+          walletId: "wallet-1",
+          chainId: 369,
+        },
+      ],
+    });
+  });
+
+  it("reports a conflict for an active MANUAL run belonging to the SAME wallet+chain (positive control)", async () => {
+    const create = async () => {
+      throw new Error("previewOperationConflict must never call create()");
+    };
+    const SAME_WALLET_RUN = {
+      id: "run-same-wallet",
+      trigger: "MANUAL",
+      status: "RUNNING",
+      stage: "INGESTING_RAW_LOGS",
+      chainId: 369,
+      walletId: "wallet-1",
+      createdAt: new Date("2026-05-08T16:00:00.000Z"),
+      updatedAt: new Date("2026-05-08T16:04:00.000Z"),
+    };
+    const db = {
+      syncRun: {
+        // Simulates real Prisma filtering behavior for the where clause
+        // previewOperationConflict actually sends (asserted in the test
+        // above): only rows matching walletId+chainId (for MANUAL/IMPORT)
+        // or trigger === REBUILD are returned.
+        findMany: async ({
+          where,
+        }: {
+          where: { OR: Array<{ trigger: string; walletId?: string; chainId?: number }> };
+        }) => {
+          const scopedClause = where.OR.find((clause) => "walletId" in clause);
+          if (
+            scopedClause &&
+            SAME_WALLET_RUN.walletId === scopedClause.walletId &&
+            SAME_WALLET_RUN.chainId === scopedClause.chainId
+          ) {
+            return [SAME_WALLET_RUN];
+          }
+          return [];
+        },
+        create,
+      },
+    } as never;
+
+    const result = await previewOperationConflict({
+      walletId: "wallet-1",
+      chainId: 369,
+      trigger: "MANUAL",
+      db,
+      now: new Date("2026-05-08T16:05:00.000Z"),
+    });
+
+    expect(result).toMatchObject({
+      allowed: false,
+      reason: "active_sync_in_scope",
+      conflictingOperationId: "run-same-wallet",
+    });
+  });
+
+  it("does not report a conflict from another wallet's active run in the same chain (negative control)", async () => {
+    const create = async () => {
+      throw new Error("previewOperationConflict must never call create()");
+    };
+    const OTHER_WALLET_RUN = {
+      id: "run-other-wallet",
+      trigger: "MANUAL",
+      status: "RUNNING",
+      stage: "INGESTING_RAW_LOGS",
+      chainId: 369,
+      walletId: "wallet-other",
+      createdAt: new Date("2026-05-08T16:00:00.000Z"),
+      updatedAt: new Date("2026-05-08T16:04:00.000Z"),
+    };
+    const db = {
+      syncRun: {
+        // Same realistic filtering simulation as the positive-control test
+        // above — proves the SAME mock logic excludes a different wallet's
+        // run rather than merely never having one to exclude.
+        findMany: async ({
+          where,
+        }: {
+          where: { OR: Array<{ trigger: string; walletId?: string; chainId?: number }> };
+        }) => {
+          const scopedClause = where.OR.find((clause) => "walletId" in clause);
+          if (
+            scopedClause &&
+            OTHER_WALLET_RUN.walletId === scopedClause.walletId &&
+            OTHER_WALLET_RUN.chainId === scopedClause.chainId
+          ) {
+            return [OTHER_WALLET_RUN];
+          }
+          return [];
+        },
+        create,
+      },
+    } as never;
+
+    const result = await previewOperationConflict({
+      walletId: "wallet-1",
+      chainId: 369,
+      trigger: "MANUAL",
+      db,
+      now: new Date("2026-05-08T16:05:00.000Z"),
+    });
+
+    expect(result).toEqual({ allowed: true });
   });
 });
