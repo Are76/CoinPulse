@@ -21,7 +21,7 @@ function buildRequest(query: Record<string, string>) {
 
 describe("GET /api/wallets/onboarding-status route contract", () => {
   afterEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.resetModules();
   });
 
@@ -43,6 +43,8 @@ describe("GET /api/wallets/onboarding-status route contract", () => {
         status: "COMPLETED",
         trigger: "MANUAL",
         stage: "UPDATING_CURSOR",
+        warningCount: 0,
+        appearsStale: false,
         createdAt: "2026-08-01T00:00:00.000Z",
         updatedAt: "2026-08-01T00:05:00.000Z",
       },
@@ -97,6 +99,8 @@ describe("GET /api/wallets/onboarding-status route contract", () => {
     const response = await GET(buildRequest({ walletAddress: VALID_ADDRESS, chainId: "" }));
 
     expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error.code).toBe("INVALID_INPUT");
   });
 
   it("returns 500 with a stable error envelope and no internal detail leakage when the service throws", async () => {

@@ -300,16 +300,48 @@ describe("DashboardScreen wallet onboarding status wiring", () => {
     expect(screen.getByText("Loading onboarding status…")).toBeInTheDocument();
   });
 
-  it("shows an explicit error message when the onboarding status request fails", () => {
+  it("falls back to a generic message when the onboarding status request fails without a query error object", () => {
     mockUseWalletOnboardingStatusQuery.mockReturnValue({
       data: undefined,
       isLoading: false,
       isError: true,
+      error: null,
+    } as unknown as ReturnType<typeof useWalletOnboardingStatusQuery>);
+
+    renderDashboard();
+    submitWalletForm();
+
+    expect(screen.getByText("Unknown frontend error.")).toBeInTheDocument();
+  });
+
+  // ── Finding 9: render the backend-provided onboarding error message ──────
+
+  it("renders the operator-safe backend WALLET_NOT_FOUND message verbatim instead of a generic string", () => {
+    mockUseWalletOnboardingStatusQuery.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("Wallet not found for the requested chain."),
     } as ReturnType<typeof useWalletOnboardingStatusQuery>);
 
     renderDashboard();
     submitWalletForm();
 
-    expect(screen.getByText("Could not load onboarding status.")).toBeInTheDocument();
+    expect(screen.getByText("Wallet not found for the requested chain.")).toBeInTheDocument();
+    expect(screen.queryByText("Could not load onboarding status.")).not.toBeInTheDocument();
+  });
+
+  it("does not leak internal error details, only the backend-provided message", () => {
+    mockUseWalletOnboardingStatusQuery.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("Internal server error."),
+    } as ReturnType<typeof useWalletOnboardingStatusQuery>);
+
+    renderDashboard();
+    submitWalletForm();
+
+    expect(screen.getByText("Internal server error.")).toBeInTheDocument();
   });
 });

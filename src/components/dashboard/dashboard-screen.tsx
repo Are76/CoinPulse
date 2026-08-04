@@ -217,6 +217,16 @@ function DashboardScreenContent() {
         quoteAsset: DEFAULT_QUOTE_ASSET,
       }),
     });
+    // Same reasoning for the onboarding-status query: a repeat submit for the
+    // same wallet/chain must not silently keep a stale/failed cached result
+    // (retry is disabled and staleTime keeps it cached for a window) — always
+    // remove it so the submit re-fetches the current backend state.
+    queryClient.removeQueries({
+      queryKey: queryKeys.wallets.onboardingStatus({
+        walletAddress: params.walletAddress,
+        chainId: params.chainId,
+      }),
+    });
 
     setSubmittedParams(params);
     setSubmittedWalletSource(
@@ -293,6 +303,7 @@ function DashboardScreenContent() {
           onboarding={onboardingStatusQuery.data?.onboarding}
           isLoading={onboardingStatusQuery.isLoading}
           isError={onboardingStatusQuery.isError}
+          error={onboardingStatusQuery.error}
         />
       ) : null}
       {errorMessage !== null ? <ErrorStateCard message={errorMessage} /> : null}

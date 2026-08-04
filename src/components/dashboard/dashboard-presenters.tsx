@@ -20,7 +20,7 @@ import { SurfaceCard } from "@/components/ui/surface-card";
 import { TimestampLabel } from "@/components/ui/value/timestamp-label";
 import { ValueDisplay } from "@/components/ui/value/value-display";
 import type { TrackedWalletDto } from "@/lib/api/debug-client";
-import { findTrackedWalletMatch } from "@/components/dashboard/dashboard-screen-helpers";
+import { findTrackedWalletMatch, getDashboardErrorMessage } from "@/components/dashboard/dashboard-screen-helpers";
 import type { WalletOnboardingStatusDto } from "@/services/operations/wallet-onboarding-status";
 import type {
   DashboardLedgerCoverageDto,
@@ -256,10 +256,12 @@ export function WalletOnboardingStatusSection({
   onboarding,
   isLoading,
   isError,
+  error,
 }: {
   onboarding: WalletOnboardingStatusDto | undefined;
   isLoading: boolean;
   isError: boolean;
+  error?: unknown;
 }) {
   if (isLoading) {
     return (
@@ -272,7 +274,9 @@ export function WalletOnboardingStatusSection({
   if (isError || onboarding === undefined) {
     return (
       <SurfaceCard>
-        <p className="text-sm" style={{ color: "#586070" }}>Could not load onboarding status.</p>
+        <p className="text-sm" style={{ color: "#586070" }}>
+          {isError ? getDashboardErrorMessage(error) : "Could not load onboarding status."}
+        </p>
       </SurfaceCard>
     );
   }

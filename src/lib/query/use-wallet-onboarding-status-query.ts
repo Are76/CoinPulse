@@ -22,5 +22,12 @@ export function useWalletOnboardingStatusQuery({
     retry: false,
     staleTime: QUERY_DEFAULTS.walletOnboardingStatus.staleTime,
     gcTime: QUERY_DEFAULTS.walletOnboardingStatus.gcTime,
+    // Bounded polling only while the backend reports an active operation.
+    // Stops immediately for every terminal status (or on error/no data) —
+    // never a global/always-on poll.
+    refetchInterval: (query) =>
+      query.state.data?.onboarding?.status === "SYNC_IN_PROGRESS"
+        ? QUERY_DEFAULTS.walletOnboardingStatus.activeOperationPollIntervalMs
+        : false,
   });
 }
