@@ -27,12 +27,17 @@ addition (`"dry-run" | "execute"`) to the existing manual sync request contract.
   "walletAddress": "0x75f808367720951e789d47e9e9db51148d9aa765",
   "chainId": 369,
   "sourceFamilies": ["TRANSFERS"],
-  "startBlock": "26943376",
-  "endBlock": "26944376",
-  "policyLabel": "wallet-scoped-historical-sync-window-1",
+  "startBlock": "<candidate-start-block>",
+  "endBlock": "<candidate-end-block>",
+  "policyLabel": "wallet-scoped-historical-sync-window-<n>",
   "mode": "dry-run"
 }
 ```
+
+`<candidate-start-block>` / `<candidate-end-block>` are placeholders only. No production
+recovery window has been proposed, reviewed, or approved by this PR — the exact starting block
+is operator-determined per the "Recommended sequence" section below, using evidence read from
+the live database and explorer, never guessed or pre-filled.
 
 - `mode` is optional and defaults to `"execute"` — existing callers (e.g. the dashboard's manual
   sync mutation, which never sends `mode`) are unaffected.
@@ -60,17 +65,18 @@ addition (`"dry-run" | "execute"`) to the existing manual sync request contract.
 4. Returns a report and performs **no mutation**: no `SyncRun` row, no raw/ledger writes, no
    materialization.
 
-Example response:
+Example response shape (illustrative — actual values depend on the request; this is not a
+recorded operator run):
 
 ```json
 {
   "data": {
     "mode": "dry-run",
     "wallet": { "chainId": 369, "address": "0x75f808367720951e789d47e9e9db51148d9aa765" },
-    "requestedRange": { "startBlock": "26943376", "endBlock": "26944376" },
+    "requestedRange": { "startBlock": "<candidate-start-block>", "endBlock": "<candidate-end-block>" },
     "sourceFamilies": ["TRANSFERS"],
-    "policyLabel": "wallet-scoped-historical-sync-window-1",
-    "limits": { "maxBlockSpan": "1000", "requestedSpan": "1000" },
+    "policyLabel": "wallet-scoped-historical-sync-window-<n>",
+    "limits": { "maxBlockSpan": "1000", "requestedSpan": "<endBlock - startBlock>" },
     "executable": true,
     "blockers": []
   }
@@ -103,7 +109,8 @@ request, fixture, or evidence record.
    explorer's "first seen" block for the wallet against the earliest `OUT` ledger entry for each
    negative-balance asset (see `docs/transfer-history-backfill-operator-plan.md` §3 Q2 for the
    exact query pattern; reuse it, do not re-derive it).
-3. **Dry-run the first candidate window**:
+3. **Dry-run the candidate window** (`<candidate-start-block>` / `<candidate-end-block>` are
+   placeholders — substitute the exact values determined in step 2, never a guess):
    ```bash
    curl -s -X POST http://localhost:3000/api/sync/manual \
      -H 'content-type: application/json' \
@@ -111,23 +118,42 @@ request, fixture, or evidence record.
        "walletAddress": "0x75f808367720951e789d47e9e9db51148d9aa765",
        "chainId": 369,
        "sourceFamilies": ["TRANSFERS"],
-       "startBlock": "<candidate-start>",
-       "endBlock": "<candidate-end>",
-       "policyLabel": "wallet-scoped-historical-sync-window-1",
+       "startBlock": "<candidate-start-block>",
+       "endBlock": "<candidate-end-block>",
+       "policyLabel": "wallet-scoped-historical-sync-window-<n>",
        "mode": "dry-run"
      }'
    ```
    Confirm `executable: true` and the reported range matches intent exactly.
-4. **Propose the first bounded execution window** to the product owner for explicit approval —
+4. **Mandatory pre-execution contamination gate.** Before proposing or submitting any execute
+   window (`mode: "execute"`), run the existing fabricated-transfer contamination pre-submit
+   query over the exact candidate `[startBlock, endBlock]` range — the same query and gate
+   already defined in `docs/transfer-history-backfill-operator-plan.md` §3 Q5 ("Detection
+   query") and enforced as the V8 check in that plan's §7 verification checklist. Do not invent
+   a different contamination check for this feature; reuse that one exactly, since it reads
+   against the same canonical `RawTokenTransfer`/`RawLog` tables this feature's ingestion also
+   writes to.
+   - **If the contamination query returns zero rows:** the window may be proposed for execution.
+   - **If the contamination query returns any row (count > 0): STOP.** Do not submit the
+     `mode: "execute"` request for that window. Do not run `POST /api/rebuild`. Investigate and
+     report the exact row identities to the product owner per the existing plan's remediation
+     path (`docs/transfer-history-backfill-operator-plan.md` §3 Q5, §8 risk R4) before any further
+     action on this wallet. This is an explicit operator gate, not an automated check performed
+     by the API — the dry-run response's `executable` field reflects only operation-lock state,
+     not contamination status, so this query must be run separately every time.
+5. **Propose the first bounded execution window** to the product owner for explicit approval —
    this PR implements the capability only; it does not execute it.
-5. **After an approved execute window completes**, run the same per-window verification queries
-   already documented in `docs/transfer-history-backfill-operator-plan.md` §7 (contamination
-   check, duplicate check, cursor/coverage check) — this feature reuses the same canonical
-   pipeline, so the same invariants apply.
-6. **Repeat** for the next adjacent window only after the previous window's evidence is verified.
-7. **Materialization rebuild is a separate, explicit `POST /api/rebuild` call** after ingestion
-   across the intended range is verified — never automatic, never bundled into a sync window.
-8. **After rebuild**, re-check all previously-negative assets for the wallet (native PLS,
+6. **After an approved execute window completes**, run the full per-window verification checklist
+   already documented in `docs/transfer-history-backfill-operator-plan.md` §7 (SyncRun status,
+   warning triage, post-run contamination re-check, duplicate check, cursor/coverage check) —
+   this feature reuses the same canonical pipeline, so the same invariants apply.
+7. **Repeat** for the next adjacent window only after the previous window's evidence is verified
+   and its contamination gate (step 4) passed.
+8. **Materialization rebuild is a separate, explicit `POST /api/rebuild` call** after ingestion
+   across the intended range is verified **and** the contamination gate has passed for every
+   window in that range — never automatic, never bundled into a sync window, and never run after
+   a contamination stop until the product owner has resolved it.
+9. **After rebuild**, re-check all previously-negative assets for the wallet (native PLS,
    `chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39` HEX, the dust token, and the two
    DAI-family assets) against the materialized balances.
 
