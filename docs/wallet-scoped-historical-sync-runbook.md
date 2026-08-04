@@ -97,8 +97,10 @@ inclusive range; `maxBlockSpan` is the raw underlying `endBlock - startBlock` li
 enforces). `generatedAt` is the server-generated UTC timestamp of when this preview was computed
 — it describes only the instant the operation-lock state (`executable`/`blockers`) was read, not
 an approval, and it does not remain valid: a subsequent `mode: "execute"` request always performs
-its own fresh lock reservation and its own fresh contamination check (§ step 4 below) regardless
-of how recent the dry-run's `generatedAt` is.
+its own fresh lock reservation regardless of how recent the dry-run's `generatedAt` is. The API
+itself performs no contamination check at any point — the operator must rerun the contamination
+query required by steps 4 and 5 below before submission; `generatedAt` says nothing about
+contamination status.
 
 When `executable: false`, `blockers` contains the same conflict-detail shape used by the existing
 409 responses (`conflictingOperationId`, `status`, `appearsStale`, etc.) — nothing is inferred or
