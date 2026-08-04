@@ -2,16 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { buildLedgerEntryDedupeKey } from "@/services/normalization/ledger-dedupe";
 import { normalizeStakeEnd } from "@/services/normalization/stake-normalizer";
+import { normalizeSwap } from "@/services/normalization/swap-normalizer";
 import { normalizeNativeTransaction } from "@/services/normalization/transfer-normalizer";
 import { toCanonicalQuantity } from "@/services/normalization/types";
 import {
-  buildDeterministicActionGroupId,
   buildDeterministicLedgerEntryId,
   persistNormalizedLedger,
 } from "@/services/sync/ledger-store";
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 
 const NATIVE_ASSET_ID = "chain:369:native:0x0000000000000000000000000000000000000000";
+const LEGACY_NATIVE_ASSET_ID = "chain:369:native:PLS";
 const PHEX_ASSET_ID = "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39";
 const CHAIN_ID = 369;
 const WALLET_ID = "wallet_1";
@@ -83,14 +84,36 @@ function buildNativeTransactionDrafts(overrides: { txHash: string }) {
   });
 }
 
+function buildSwapDrafts(overrides: { txHash: string; logIndex: number }) {
+  return normalizeSwap({
+    chainId: CHAIN_ID,
+    walletId: WALLET_ID,
+    walletAddress: WALLET_ADDRESS,
+    txHash: overrides.txHash,
+    blockNumber: REGRESSION_BLOCK,
+    sourceRef: `swap:pulsex-v2:${overrides.logIndex}`,
+    occurredAt: new Date("2026-06-08T00:00:00.000Z"),
+    normalizerVersion: "v1",
+    soldAssetId: PHEX_ASSET_ID,
+    soldAmountRaw: "100000000",
+    soldDecimals: 8,
+    boughtAssetId: "chain:369:erc20:0xf6f8db0aba00007681f8faf16a0fda1c9b030b11",
+    boughtAmountRaw: "500000000000000000000",
+    boughtDecimals: 18,
+    feeAssetId: NATIVE_ASSET_ID,
+    feeAmountRaw: REGRESSION_FEE_RAW,
+    feeDecimals: 18,
+  });
+}
+
 /**
- * Stateful in-memory double that mirrors the real Prisma
- * `createMany({ skipDuplicates: true })` contract: a row whose id already
- * exists is silently skipped, exactly like Postgres `ON CONFLICT DO NOTHING`.
- * Unlike a plain vi.fn() spy, state persists across separate
- * persistNormalizedLedger calls, so this can simulate two independent
- * rebuild invocations (e.g. STAKING then TRANSFERS) writing to the same
- * underlying table.
+ * Stateful in-memory double that mirrors the real Prisma persistence
+ * contract used by ledger-store.ts: createMany({ skipDuplicates: true })
+ * behaves like Postgres ON CONFLICT DO NOTHING keyed by id; findMany reads
+ * reflect current state; updateMany mutates only the targeted field. State
+ * persists across separate persistNormalizedLedger calls, so this can
+ * simulate two independent rebuild invocations (e.g. STAKING then
+ * TRANSFERS) writing to the same underlying tables.
  */
 function createPersistentLedgerStoreClient() {
   const actionGroups = new Map<string, Record<string, unknown>>();
@@ -110,6 +133,11 @@ function createPersistentLedgerStoreClient() {
           }
           return { count };
         },
+        findMany: async ({ where }: { where: { id: { in: string[] } } }) => {
+          return Array.from(actionGroups.values())
+            .filter((row) => where.id.in.includes(row.id as string))
+            .map((row) => ({ id: row.id as string, actionType: row.actionType as string }));
+        },
       },
       ledgerEntry: {
         createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
@@ -123,11 +151,11 @@ function createPersistentLedgerStoreClient() {
           }
           return { count };
         },
-        // Mirrors the real Prisma query dropDuplicateEconomicFees issues:
+        // Mirrors the real Prisma query resolveCanonicalFeeOwnership issues:
         // any already-persisted FEE row for the same
-        // (chainId, walletId, txHash, assetId, direction), regardless of
-        // which dedupeKey/id it was written under (old family-specific
-        // format or new canonical format alike).
+        // (chainId, walletId, txHash), regardless of which dedupeKey/id or
+        // assetId string it was written under (old family-specific format,
+        // legacy native asset id, or new canonical format alike).
         findMany: async ({
           where,
         }: {
@@ -136,7 +164,6 @@ function createPersistentLedgerStoreClient() {
             walletId: { in: string[] };
             txHash: { in: string[] };
             entryType: "FEE";
-            assetId: { in: string[] };
             direction: "OUT";
           };
         }) => {
@@ -147,16 +174,32 @@ function createPersistentLedgerStoreClient() {
                 where.chainId.in.includes(row.chainId as number) &&
                 where.walletId.in.includes(row.walletId as string) &&
                 where.txHash.in.includes((row.txHash as string).toLowerCase()) &&
-                where.assetId.in.includes(row.assetId as string) &&
                 row.direction === "OUT",
             )
             .map((row) => ({
+              id: row.id as string,
               chainId: row.chainId as number,
               walletId: row.walletId as string,
               txHash: row.txHash as string,
-              assetId: row.assetId as string,
-              direction: row.direction as string,
+              actionGroupId: row.actionGroupId as string,
             }));
+        },
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: { id: { in: string[] } };
+          data: { actionGroupId: string };
+        }) => {
+          let count = 0;
+          for (const id of where.id.in) {
+            const row = entries.get(id);
+            if (row) {
+              row.actionGroupId = data.actionGroupId;
+              count += 1;
+            }
+          }
+          return { count };
         },
       },
     },
@@ -169,8 +212,15 @@ function feeRows(entries: Map<string, Record<string, unknown>>) {
   return Array.from(entries.values()).filter((row) => row.entryType === "FEE");
 }
 
-describe("cross-family native gas-fee dedup", () => {
-  it("STAKING then TRANSFERS produces exactly one FEE entry", async () => {
+function actionTypeOf(
+  store: ReturnType<typeof createPersistentLedgerStoreClient>,
+  actionGroupId: string,
+) {
+  return store.actionGroups.get(actionGroupId)?.actionType;
+}
+
+describe("cross-family native gas-fee dedup and canonical ownership", () => {
+  it("STAKING then TRANSFERS produces exactly one FEE entry owned by STAKING", async () => {
     const store = createPersistentLedgerStoreClient();
 
     await persistNormalizedLedger(
@@ -185,15 +235,23 @@ describe("cross-family native gas-fee dedup", () => {
     const fees = feeRows(store.entries);
     expect(fees).toHaveLength(1);
     expect(fees[0].quantity).toBe(REGRESSION_FEE_QUANTITY);
+    expect(actionTypeOf(store, fees[0].actionGroupId as string)).toBe("HEX_STAKE_END");
   });
 
-  it("TRANSFERS then STAKING produces exactly one FEE entry", async () => {
+  it("TRANSFERS then STAKING produces exactly one FEE entry, re-homed to STAKING", async () => {
     const store = createPersistentLedgerStoreClient();
 
     await persistNormalizedLedger(
       buildNativeTransactionDrafts({ txHash: REGRESSION_TX_HASH }),
       store.client,
     );
+    // Before STAKING runs, the fee is (correctly, for now) owned by the
+    // generic TRANSFER group — the only action that has happened yet.
+    expect(feeRows(store.entries)).toHaveLength(1);
+    expect(actionTypeOf(store, feeRows(store.entries)[0].actionGroupId as string)).toBe(
+      "TRANSFER",
+    );
+
     await persistNormalizedLedger(
       buildStakeEndDrafts({ txHash: REGRESSION_TX_HASH, stakeId: "800372" }),
       store.client,
@@ -202,6 +260,42 @@ describe("cross-family native gas-fee dedup", () => {
     const fees = feeRows(store.entries);
     expect(fees).toHaveLength(1);
     expect(fees[0].quantity).toBe(REGRESSION_FEE_QUANTITY);
+    expect(actionTypeOf(store, fees[0].actionGroupId as string)).toBe("HEX_STAKE_END");
+  });
+
+  it("both normalization orders converge on the identical canonical fee owner", async () => {
+    const storeStakingFirst = createPersistentLedgerStoreClient();
+    await persistNormalizedLedger(
+      buildStakeEndDrafts({ txHash: REGRESSION_TX_HASH, stakeId: "800372" }),
+      storeStakingFirst.client,
+    );
+    await persistNormalizedLedger(
+      buildNativeTransactionDrafts({ txHash: REGRESSION_TX_HASH }),
+      storeStakingFirst.client,
+    );
+
+    const storeTransfersFirst = createPersistentLedgerStoreClient();
+    await persistNormalizedLedger(
+      buildNativeTransactionDrafts({ txHash: REGRESSION_TX_HASH }),
+      storeTransfersFirst.client,
+    );
+    await persistNormalizedLedger(
+      buildStakeEndDrafts({ txHash: REGRESSION_TX_HASH, stakeId: "800372" }),
+      storeTransfersFirst.client,
+    );
+
+    const feeA = feeRows(storeStakingFirst.entries)[0];
+    const feeB = feeRows(storeTransfersFirst.entries)[0];
+
+    expect(actionTypeOf(storeStakingFirst, feeA.actionGroupId as string)).toBe("HEX_STAKE_END");
+    expect(actionTypeOf(storeTransfersFirst, feeB.actionGroupId as string)).toBe(
+      "HEX_STAKE_END",
+    );
+    // Same underlying LedgerEntry identity (id/dedupeKey) either way — only
+    // the eventual actionGroupId can differ mid-flight, never the final one.
+    expect(feeA.id).toBe(feeB.id);
+    expect(feeA.dedupeKey).toBe(feeB.dedupeKey);
+    expect(feeA.quantity).toBe(feeB.quantity);
   });
 
   it("rebuilding TRANSFERS twice produces exactly one FEE entry", async () => {
@@ -234,7 +328,26 @@ describe("cross-family native gas-fee dedup", () => {
     expect(feeRows(store.entries)).toHaveLength(1);
   });
 
-  it("rebuilding both families together (single persist call) produces exactly one FEE entry", async () => {
+  it("rebuilding STAKING then TRANSFERS repeatedly remains idempotent (fee count and owner stable)", async () => {
+    const store = createPersistentLedgerStoreClient();
+
+    for (let i = 0; i < 3; i += 1) {
+      await persistNormalizedLedger(
+        buildStakeEndDrafts({ txHash: REGRESSION_TX_HASH, stakeId: "800372" }),
+        store.client,
+      );
+      await persistNormalizedLedger(
+        buildNativeTransactionDrafts({ txHash: REGRESSION_TX_HASH }),
+        store.client,
+      );
+    }
+
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    expect(actionTypeOf(store, fees[0].actionGroupId as string)).toBe("HEX_STAKE_END");
+  });
+
+  it("rebuilding both families together (single persist call) produces exactly one FEE entry owned by STAKING", async () => {
     const store = createPersistentLedgerStoreClient();
 
     const combinedDrafts: CanonicalLedgerEntryDraft[] = [
@@ -244,7 +357,49 @@ describe("cross-family native gas-fee dedup", () => {
 
     await persistNormalizedLedger(combinedDrafts, store.client);
 
-    expect(feeRows(store.entries)).toHaveLength(1);
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    expect(actionTypeOf(store, fees[0].actionGroupId as string)).toBe("HEX_STAKE_END");
+    // The TRANSFER action group (whose only draft was the losing FEE) must
+    // never be persisted at all.
+    const transferGroups = Array.from(store.actionGroups.values()).filter(
+      (group) => group.actionType === "TRANSFER",
+    );
+    expect(transferGroups).toHaveLength(0);
+  });
+
+  it("SWAP outranks a plain TRANSFER fee, regardless of order", async () => {
+    const swapTx = "0xswap0000000000000000000000000000000000000000000000000000000001";
+    const storeSwapFirst = createPersistentLedgerStoreClient();
+    await persistNormalizedLedger(
+      buildSwapDrafts({ txHash: swapTx, logIndex: 12 }),
+      storeSwapFirst.client,
+    );
+    await persistNormalizedLedger(
+      buildNativeTransactionDrafts({ txHash: swapTx }),
+      storeSwapFirst.client,
+    );
+    expect(feeRows(storeSwapFirst.entries)).toHaveLength(1);
+    expect(
+      actionTypeOf(storeSwapFirst, feeRows(storeSwapFirst.entries)[0].actionGroupId as string),
+    ).toBe("SWAP");
+
+    const storeTransferFirst = createPersistentLedgerStoreClient();
+    await persistNormalizedLedger(
+      buildNativeTransactionDrafts({ txHash: swapTx }),
+      storeTransferFirst.client,
+    );
+    await persistNormalizedLedger(
+      buildSwapDrafts({ txHash: swapTx, logIndex: 12 }),
+      storeTransferFirst.client,
+    );
+    expect(feeRows(storeTransferFirst.entries)).toHaveLength(1);
+    expect(
+      actionTypeOf(
+        storeTransferFirst,
+        feeRows(storeTransferFirst.entries)[0].actionGroupId as string,
+      ),
+    ).toBe("SWAP");
   });
 
   it("preserves the associated staking action entries alongside the deduped fee", async () => {
@@ -286,7 +441,7 @@ describe("cross-family native gas-fee dedup", () => {
     );
   });
 
-  it("produces no FEE entry for a zero-fee transaction", () => {
+  it("produces no FEE entry for a zero-fee TRANSFERS transaction", () => {
     const drafts = normalizeNativeTransaction({
       chainId: CHAIN_ID,
       walletId: WALLET_ID,
@@ -307,60 +462,69 @@ describe("cross-family native gas-fee dedup", () => {
     expect(drafts.some((draft) => draft.entryType === "FEE")).toBe(false);
   });
 
-  it("keeps the regression fee quantity bigint/Decimal safe and exact", () => {
-    const staking = buildStakeEndDrafts({
-      txHash: REGRESSION_TX_HASH,
-      stakeId: "800372",
+  it("produces no FEE entry for a zero-fee SWAP", () => {
+    const drafts = normalizeSwap({
+      chainId: CHAIN_ID,
+      walletId: WALLET_ID,
+      walletAddress: WALLET_ADDRESS,
+      txHash: "0xzero-fee-swap",
+      blockNumber: 1n,
+      sourceRef: "swap:pulsex-v2:1",
+      occurredAt: new Date("2026-06-08T00:00:00.000Z"),
+      normalizerVersion: "v1",
+      soldAssetId: PHEX_ASSET_ID,
+      soldAmountRaw: "100000000",
+      soldDecimals: 8,
+      boughtAssetId: "chain:369:erc20:0xf6f8db0aba00007681f8faf16a0fda1c9b030b11",
+      boughtAmountRaw: "500000000000000000000",
+      boughtDecimals: 18,
+      feeAssetId: NATIVE_ASSET_ID,
+      feeAmountRaw: "0",
+      feeDecimals: 18,
     });
-    const transfer = buildNativeTransactionDrafts({ txHash: REGRESSION_TX_HASH });
 
-    const stakingFee = staking.find((draft) => draft.entryType === "FEE");
-    const transferFee = transfer.find((draft) => draft.entryType === "FEE");
-
-    expect(stakingFee?.quantity).toBe("2313.367367929765231959");
-    expect(transferFee?.quantity).toBe("2313.367367929765231959");
-    expect(stakingFee?.dedupeKey).toBe(transferFee?.dedupeKey);
+    expect(drafts.some((draft) => draft.entryType === "FEE")).toBe(false);
+    expect(drafts.map((draft) => draft.entryType)).toEqual(["SWAP_OUT", "SWAP_IN"]);
   });
 
-  it("regression: block 26154729 dedupe keys and deterministic ids match across families", () => {
-    const staking = buildStakeEndDrafts({
-      txHash: REGRESSION_TX_HASH,
-      stakeId: "800372",
-    });
-    const transfer = buildNativeTransactionDrafts({ txHash: REGRESSION_TX_HASH });
+  it("a zero fee on one transaction never blocks a later real fee on the same transaction", async () => {
+    const store = createPersistentLedgerStoreClient();
+    const txHash = "0xswap0000000000000000000000000000000000000000000000000000000002";
 
-    const stakingFee = staking.find((draft) => draft.entryType === "FEE");
-    const transferFee = transfer.find((draft) => draft.entryType === "FEE");
-    expect(stakingFee).toBeDefined();
-    expect(transferFee).toBeDefined();
+    // A zero-fee SWAP normalization contributes no FEE draft at all.
+    await persistNormalizedLedger(
+      normalizeSwap({
+        chainId: CHAIN_ID,
+        walletId: WALLET_ID,
+        walletAddress: WALLET_ADDRESS,
+        txHash,
+        blockNumber: 1n,
+        sourceRef: "swap:pulsex-v2:1",
+        occurredAt: new Date("2026-06-08T00:00:00.000Z"),
+        normalizerVersion: "v1",
+        soldAssetId: PHEX_ASSET_ID,
+        soldAmountRaw: "100000000",
+        soldDecimals: 8,
+        boughtAssetId: "chain:369:erc20:0xf6f8db0aba00007681f8faf16a0fda1c9b030b11",
+        boughtAmountRaw: "500000000000000000000",
+        boughtDecimals: 18,
+        feeAssetId: NATIVE_ASSET_ID,
+        feeAmountRaw: "0",
+        feeDecimals: 18,
+      }),
+      store.client,
+    );
+    expect(feeRows(store.entries)).toHaveLength(0);
 
-    const stakingId = buildDeterministicLedgerEntryId({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      dedupeKey: stakingFee!.dedupeKey,
-    });
-    const transferId = buildDeterministicLedgerEntryId({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      dedupeKey: transferFee!.dedupeKey,
-    });
+    // A later TRANSFERS normalization of the same tx supplies the real fee.
+    await persistNormalizedLedger(
+      buildNativeTransactionDrafts({ txHash }),
+      store.client,
+    );
 
-    expect(stakingId).toBe(transferId);
-
-    // Action groups remain distinct — only the FEE entry's identity is
-    // shared; the owning action (stake end vs. plain transfer tx) keeps its
-    // own actionGroupKey/actionGroupId.
-    const stakingGroupId = buildDeterministicActionGroupId({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      actionGroupKey: stakingFee!.actionGroupKey,
-    });
-    const transferGroupId = buildDeterministicActionGroupId({
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      actionGroupKey: transferFee!.actionGroupKey,
-    });
-    expect(stakingGroupId).not.toBe(transferGroupId);
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    expect(fees[0].quantity).toBe(REGRESSION_FEE_QUANTITY);
   });
 
   it("does not collapse unrelated ledger entries from the same transactions", async () => {
@@ -388,10 +552,13 @@ describe("cross-family native gas-fee dedup", () => {
 /**
  * Seeds the store with a FEE row exactly as it would have been persisted by
  * a pre-PR normalizer run, using the OLD family-specific sourceRef pattern
- * (never NATIVE_GAS_FEE_SOURCE_REF). This bypasses persistNormalizedLedger
- * entirely — it represents already-committed database state, not a fresh
+ * (never NATIVE_GAS_FEE_SOURCE_REF) and, optionally, the legacy symbol-based
+ * native asset id string. This bypasses persistNormalizedLedger entirely —
+ * it represents already-committed database state, not a fresh
  * normalization — so it proves detection is format-agnostic rather than
- * dependent on any particular sourceRef string.
+ * dependent on any particular sourceRef or assetId string. Also seeds the
+ * owning action group so ownership-priority resolution has real data to
+ * compare against, exactly as a real database would.
  */
 function seedLegacyFee(
   store: ReturnType<typeof createPersistentLedgerStoreClient>,
@@ -399,15 +566,18 @@ function seedLegacyFee(
     txHash: string;
     legacySourceRef: string;
     actionGroupId: string;
+    actionType: string;
     quantity: string;
+    assetId?: string;
   },
 ) {
+  const assetId = args.assetId ?? NATIVE_ASSET_ID;
   const dedupeKey = buildLedgerEntryDedupeKey({
     chainId: CHAIN_ID,
     walletId: WALLET_ID,
     txHash: args.txHash,
     entryType: "FEE",
-    assetId: NATIVE_ASSET_ID,
+    assetId,
     direction: "OUT",
     normalizerVersion: "v1",
     sourceRef: args.legacySourceRef,
@@ -417,6 +587,13 @@ function seedLegacyFee(
     walletId: WALLET_ID,
     dedupeKey,
   });
+  store.actionGroups.set(args.actionGroupId, {
+    id: args.actionGroupId,
+    chainId: CHAIN_ID,
+    walletId: WALLET_ID,
+    txHash: args.txHash.toLowerCase(),
+    actionType: args.actionType,
+  });
   store.entries.set(id, {
     id,
     chainId: CHAIN_ID,
@@ -424,7 +601,7 @@ function seedLegacyFee(
     actionGroupId: args.actionGroupId,
     txHash: args.txHash.toLowerCase(),
     entryType: "FEE",
-    assetId: NATIVE_ASSET_ID,
+    assetId,
     quantity: args.quantity,
     direction: "OUT",
     dedupeKey,
@@ -433,13 +610,14 @@ function seedLegacyFee(
 }
 
 describe("legacy pre-PR fee identity compatibility", () => {
-  it("regression: a legacy STAKING fee already exists, then TRANSFERS is rebuilt — exactly one economic fee", async () => {
+  it("regression: a legacy STAKING fee already exists, then TRANSFERS is rebuilt — exactly one economic fee, still STAKING-owned", async () => {
     const store = createPersistentLedgerStoreClient();
 
     seedLegacyFee(store, {
       txHash: REGRESSION_TX_HASH,
       legacySourceRef: "stake:end:800372:fee",
       actionGroupId: "lag_legacy_stake_end",
+      actionType: "HEX_STAKE_END",
       quantity: REGRESSION_FEE_QUANTITY,
     });
     expect(store.entries.size).toBe(1);
@@ -452,15 +630,17 @@ describe("legacy pre-PR fee identity compatibility", () => {
     const fees = feeRows(store.entries);
     expect(fees).toHaveLength(1);
     expect(fees[0].quantity).toBe(REGRESSION_FEE_QUANTITY);
+    expect(fees[0].actionGroupId).toBe("lag_legacy_stake_end");
   });
 
-  it("a legacy TRANSFERS fee already exists, then STAKING is rebuilt — exactly one economic fee", async () => {
+  it("a legacy TRANSFERS fee already exists, then STAKING is rebuilt — exactly one economic fee, re-homed to STAKING", async () => {
     const store = createPersistentLedgerStoreClient();
 
     seedLegacyFee(store, {
       txHash: REGRESSION_TX_HASH,
       legacySourceRef: "transfer:tx:fee",
       actionGroupId: "lag_legacy_transfer",
+      actionType: "TRANSFER",
       quantity: REGRESSION_FEE_QUANTITY,
     });
 
@@ -472,15 +652,34 @@ describe("legacy pre-PR fee identity compatibility", () => {
     const fees = feeRows(store.entries);
     expect(fees).toHaveLength(1);
     expect(fees[0].quantity).toBe(REGRESSION_FEE_QUANTITY);
+    // Re-homed in place: same row id, new (canonical, higher-priority) owner.
+    expect(fees[0].id).toBe(
+      buildDeterministicLedgerEntryId({
+        chainId: CHAIN_ID,
+        walletId: WALLET_ID,
+        dedupeKey: buildLedgerEntryDedupeKey({
+          chainId: CHAIN_ID,
+          walletId: WALLET_ID,
+          txHash: REGRESSION_TX_HASH,
+          entryType: "FEE",
+          assetId: NATIVE_ASSET_ID,
+          direction: "OUT",
+          normalizerVersion: "v1",
+          sourceRef: "transfer:tx:fee",
+        }),
+      }),
+    );
+    expect(actionTypeOf(store, fees[0].actionGroupId as string)).toBe("HEX_STAKE_END");
   });
 
-  it("a legacy DEX fee already exists, then TRANSFERS is rebuilt — exactly one economic fee", async () => {
+  it("a legacy DEX fee already exists, then TRANSFERS is rebuilt — exactly one economic fee, still DEX-owned", async () => {
     const store = createPersistentLedgerStoreClient();
 
     seedLegacyFee(store, {
       txHash: REGRESSION_TX_HASH,
       legacySourceRef: "swap:pulsex-v2:12:fee",
       actionGroupId: "lag_legacy_swap",
+      actionType: "SWAP",
       quantity: REGRESSION_FEE_QUANTITY,
     });
 
@@ -492,15 +691,17 @@ describe("legacy pre-PR fee identity compatibility", () => {
     const fees = feeRows(store.entries);
     expect(fees).toHaveLength(1);
     expect(fees[0].quantity).toBe(REGRESSION_FEE_QUANTITY);
+    expect(fees[0].actionGroupId).toBe("lag_legacy_swap");
   });
 
-  it("a legacy LP fee already exists, then TRANSFERS is rebuilt — exactly one economic fee", async () => {
+  it("a legacy LP fee already exists, then TRANSFERS is rebuilt — exactly one economic fee, still LP-owned", async () => {
     const store = createPersistentLedgerStoreClient();
 
     seedLegacyFee(store, {
       txHash: REGRESSION_TX_HASH,
       legacySourceRef: "lp:add:5:fee",
       actionGroupId: "lag_legacy_lp_add",
+      actionType: "LP_ADD",
       quantity: REGRESSION_FEE_QUANTITY,
     });
 
@@ -512,6 +713,29 @@ describe("legacy pre-PR fee identity compatibility", () => {
     const fees = feeRows(store.entries);
     expect(fees).toHaveLength(1);
     expect(fees[0].quantity).toBe(REGRESSION_FEE_QUANTITY);
+    expect(fees[0].actionGroupId).toBe("lag_legacy_lp_add");
+  });
+
+  it("a legacy fee recorded under the old symbol-based native asset id is still recognized", async () => {
+    const store = createPersistentLedgerStoreClient();
+
+    seedLegacyFee(store, {
+      txHash: REGRESSION_TX_HASH,
+      legacySourceRef: "stake:end:800372:fee",
+      actionGroupId: "lag_legacy_stake_end",
+      actionType: "HEX_STAKE_END",
+      quantity: REGRESSION_FEE_QUANTITY,
+      assetId: LEGACY_NATIVE_ASSET_ID,
+    });
+
+    await persistNormalizedLedger(
+      buildNativeTransactionDrafts({ txHash: REGRESSION_TX_HASH }),
+      store.client,
+    );
+
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    expect(fees[0].assetId).toBe(LEGACY_NATIVE_ASSET_ID);
   });
 
   it("does not suppress a legitimate fee on a different transaction", async () => {
@@ -523,6 +747,7 @@ describe("legacy pre-PR fee identity compatibility", () => {
       txHash: REGRESSION_TX_HASH,
       legacySourceRef: "stake:end:800372:fee",
       actionGroupId: "lag_legacy_stake_end",
+      actionType: "HEX_STAKE_END",
       quantity: REGRESSION_FEE_QUANTITY,
     });
 
@@ -538,37 +763,26 @@ describe("legacy pre-PR fee identity compatibility", () => {
     );
   });
 
-  it("preserves the legacy-owned action entry and its action group unchanged", async () => {
+  it("preserves the legacy-owned action entry unchanged when the fee is re-homed", async () => {
     const store = createPersistentLedgerStoreClient();
 
     seedLegacyFee(store, {
       txHash: REGRESSION_TX_HASH,
-      legacySourceRef: "stake:end:800372:fee",
-      actionGroupId: "lag_legacy_stake_end",
+      legacySourceRef: "transfer:tx:fee",
+      actionGroupId: "lag_legacy_transfer",
+      actionType: "TRANSFER",
       quantity: REGRESSION_FEE_QUANTITY,
-    });
-    // Also seed the STAKE_END action entry itself, exactly as a real prior
-    // stake-end normalization would have left it, to prove it is untouched.
-    store.entries.set("le_legacy_stake_end_marker", {
-      id: "le_legacy_stake_end_marker",
-      chainId: CHAIN_ID,
-      walletId: WALLET_ID,
-      actionGroupId: "lag_legacy_stake_end",
-      txHash: REGRESSION_TX_HASH.toLowerCase(),
-      entryType: "STAKE_END",
-      assetId: PHEX_ASSET_ID,
-      quantity: "0",
-      direction: "INTERNAL",
-      dedupeKey: "legacy-stake-end-marker",
     });
 
     await persistNormalizedLedger(
-      buildNativeTransactionDrafts({ txHash: REGRESSION_TX_HASH }),
+      buildStakeEndDrafts({ txHash: REGRESSION_TX_HASH, stakeId: "800372" }),
       store.client,
     );
 
-    expect(store.entries.get("le_legacy_stake_end_marker")).toBeDefined();
     expect(feeRows(store.entries)).toHaveLength(1);
+    // The STAKE_END action entry from this run is present alongside it.
+    const entryTypes = Array.from(store.entries.values()).map((row) => row.entryType);
+    expect(entryTypes).toContain("STAKE_END");
     expect(store.entries.size).toBe(2);
   });
 });

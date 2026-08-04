@@ -43,10 +43,12 @@ describe("persistNormalizedLedger", () => {
     const client = {
       ledgerActionGroup: {
         createMany: actionGroupCreateMany,
+        findMany: vi.fn(async () => []),
       },
       ledgerEntry: {
         createMany: ledgerEntryCreateMany,
         findMany: vi.fn(async () => []),
+        updateMany: vi.fn(async () => ({ count: 0 })),
       },
     };
 

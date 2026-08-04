@@ -36,7 +36,7 @@ export function normalizeSwap(
     sourceRef: args.sourceRef,
   });
 
-  return [
+  const entries: CanonicalLedgerEntryDraft[] = [
     createLedgerEntryDraft({
       chainId: args.chainId,
       walletId: args.walletId,
@@ -71,22 +71,29 @@ export function normalizeSwap(
       normalizerVersion: args.normalizerVersion,
       sourceRef: `${args.sourceRef}:in`,
     }),
-    createLedgerEntryDraft({
-      chainId: args.chainId,
-      walletId: args.walletId,
-      walletAddress: args.walletAddress,
-      txHash: args.txHash,
-      blockNumber: args.blockNumber,
-      actionType: "SWAP",
-      actionGroupKey,
-      entryType: "FEE",
-      assetId: args.feeAssetId,
-      amountRaw: args.feeAmountRaw,
-      decimals: args.feeDecimals,
-      direction: "OUT",
-      occurredAt: args.occurredAt,
-      normalizerVersion: args.normalizerVersion,
-      sourceRef: NATIVE_GAS_FEE_SOURCE_REF,
-    }),
   ];
+
+  if (args.feeAssetId && args.feeAmountRaw && args.feeAmountRaw !== "0") {
+    entries.push(
+      createLedgerEntryDraft({
+        chainId: args.chainId,
+        walletId: args.walletId,
+        walletAddress: args.walletAddress,
+        txHash: args.txHash,
+        blockNumber: args.blockNumber,
+        actionType: "SWAP",
+        actionGroupKey,
+        entryType: "FEE",
+        assetId: args.feeAssetId,
+        amountRaw: args.feeAmountRaw,
+        decimals: args.feeDecimals,
+        direction: "OUT",
+        occurredAt: args.occurredAt,
+        normalizerVersion: args.normalizerVersion,
+        sourceRef: NATIVE_GAS_FEE_SOURCE_REF,
+      }),
+    );
+  }
+
+  return entries;
 }
