@@ -103,6 +103,26 @@ export function buildActionGroupKey(args: {
     .digest("hex");
 }
 
+/**
+ * Canonical dedupe sourceRef for a transaction's native gas-fee LedgerEntry.
+ *
+ * A transaction pays gas exactly once, regardless of how many source
+ * families (TRANSFERS, DEX, LP, STAKING) independently normalize evidence
+ * from it. Every normalizer that emits a FEE entry must use this fixed,
+ * family-independent value as that entry's sourceRef so the resulting
+ * dedupeKey (and therefore the deterministic LedgerEntry id, see
+ * buildDeterministicLedgerEntryId in ledger-store.ts) is identical no matter
+ * which family computes it first. persistNormalizedLedger's
+ * createMany({ skipDuplicates: true }) then collapses same-id inserts to
+ * exactly one row, order-independently and idempotently, with no schema
+ * change and no dedup logic beyond this shared identity.
+ *
+ * Do not append a family-, action-, or asset-specific suffix to this value
+ * for a FEE entry — doing so would recreate the cross-family duplication
+ * this constant exists to prevent.
+ */
+export const NATIVE_GAS_FEE_SOURCE_REF = "fee";
+
 function trimLeadingZeros(value: string) {
   const trimmed = value.replace(/^0+/, "");
 

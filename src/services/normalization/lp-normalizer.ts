@@ -1,6 +1,7 @@
 import {
   buildActionGroupKey,
   createLedgerEntryDraft,
+  NATIVE_GAS_FEE_SOURCE_REF,
   type CanonicalLedgerEntryDraft,
 } from "@/services/normalization/types";
 
@@ -114,7 +115,7 @@ export function normalizeLpAdd(
         direction: "OUT",
         occurredAt: args.occurredAt,
         normalizerVersion: args.normalizerVersion,
-        sourceRef: `${args.sourceRef}:fee`,
+        sourceRef: NATIVE_GAS_FEE_SOURCE_REF,
       }),
     );
   }
@@ -232,7 +233,7 @@ export function normalizeLpRemove(
         direction: "OUT",
         occurredAt: args.occurredAt,
         normalizerVersion: args.normalizerVersion,
-        sourceRef: `${args.sourceRef}:fee`,
+        sourceRef: NATIVE_GAS_FEE_SOURCE_REF,
       }),
     );
   }

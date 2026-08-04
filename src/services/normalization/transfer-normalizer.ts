@@ -1,6 +1,7 @@
 import {
   buildActionGroupKey,
   createLedgerEntryDraft,
+  NATIVE_GAS_FEE_SOURCE_REF,
   type CanonicalLedgerEntryDraft,
 } from "@/services/normalization/types";
 
@@ -255,7 +256,7 @@ export function normalizeNativeTransaction(
           direction: "OUT",
           occurredAt: args.occurredAt,
           normalizerVersion: args.normalizerVersion,
-          sourceRef: "transfer:tx:fee",
+          sourceRef: NATIVE_GAS_FEE_SOURCE_REF,
         }),
       );
     }
