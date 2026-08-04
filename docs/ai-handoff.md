@@ -1,6 +1,6 @@
 # CoinPulse AI Handoff
 
-**Last updated:** 2026-08-03 (D-035: Atlas design system adoption and portfolio-tracker-first product direction defined — docs only)
+**Last updated:** 2026-08-04 (D-036: PulseChain fork-state and inherited-history policy proposed — docs only, not yet accepted)
 
 ---
 
@@ -97,6 +97,10 @@ These rules apply to every PR. [E1]
 **Ended-stake follow-ups merged after this file's PR-timeline cutoff (verify details in git log):** operator discovery trigger (#333), start-time stake evidence persistence (#334), completion from start evidence (#335), reader/API verification tooling (#336), historical contract-state evidence recovery (#337), frontend ended-stake history (#340). Ended-stake operator evidence **has since been recorded**: an execute-mode recovery run completed 9/9 observations with 0 failures, and the API verification runner reached `PASS` (9 complete, 0 incomplete, no duplicate identities, no runner-level warnings) — see D-033 and the evidence templates (`docs/hexmining-ended-stake-api-verification-evidence-template.md`, `docs/hexmining-ended-stake-historical-state-recovery-evidence-template.md`). HexMining Phase 1 (native pHEX, per D-032) is formally complete. [E1] [E2] [E3]
 
 **Transfer-backfill posture (unrelated to HexMining scope, recorded here for the next agent):** the TRANSFER-family backfill is **paused after Window 60**. Window 61 requires explicit operator approval before any run. PR #341 (multi-window runner batch fix) is a runner correctness fix only — **it does not authorize further transfer-backfill execution.** [E2] [E4]
+
+> **Known documentation drift (recorded 2026-08-04, not yet corrected in this section):** verified operator/database evidence supplied during the fork-state-policy PR shows Window 63 has since completed (range `26,634,999–26,635,998`) and the next adjacent descending range (`26,633,999–26,634,998`) is operationally Window 64 per the shared `SyncCursor` — **not executed**. The "paused after Window 60 / awaiting Window 61" text above is stale relative to that evidence. It is intentionally left uncorrected here pending a separate, bounded documentation-synchronization PR (see `docs/pulsechain-fork-state-policy.md` §21) — do not treat this note as authorizing Window 64 execution, and do not silently trust either the stale or the corrected window number without re-verifying against the live `SyncCursor` and `SyncRun` tables first. [E4]
+
+**PulseChain fork-state policy posture (2026-08-04):** `docs/pulsechain-fork-state-policy.md` and D-036 (`docs/project-decisions.md`) propose — but do not yet accept — a policy for classifying inherited pre-fork Ethereum history (`blockNumber <= lastInheritedBlock`), fork-opening state (a verified post-transition state read, represented as a canonical opening-balance `LedgerEntry` — not a raw read at `lastInheritedBlock`), and post-fork PulseChain activity (`blockNumber >= firstPostForkBlock`), and for keeping pHEX (chain 369) and any future eHEX (chain 1) identity distinct. **D-036 is `Proposed`, not `Accepted`** pending Tier 1 confirmation of `lastInheritedBlock`/`firstPostForkBlock`, resolution of archived Decision 10's pHEX cost-basis choice (`docs/v2-hexmining-roadmap-archive.md:449-450`, still open), and the documentation-synchronization follow-up above. No code, schema, DTO, sync, rebuild, or backfill change has been made. Do not treat any fork-boundary block number as confirmed until Tier 1-verified. [E1]
 
 ---
 
