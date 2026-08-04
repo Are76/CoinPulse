@@ -234,6 +234,17 @@ function selectCanonicalFeeDrafts(
  * separate STAKING then TRANSFERS rebuilds, in either order, run once or
  * repeatedly) and independent of legacy vs. current dedupeKey format.
  *
+ * This function only reads and plans — it performs no writes. It mutates
+ * the in-memory `entries` map (dropping losing in-batch drafts) but leaves
+ * all actual persistence, including the target-action-group existence
+ * requirement for any reassignment, to the caller. This split matters: a
+ * reassignment's target action group may not exist yet (e.g. this is the
+ * first time this specific stake/swap action group is being created), and
+ * LedgerEntry.actionGroupId is a required foreign key — updating it before
+ * the target group is created would violate that constraint. The caller
+ * (persistNormalizedLedger) is responsible for creating every action group
+ * a reassignment targets before applying any reassignment update.
+ *
  * For every surviving in-batch FEE draft (selectCanonicalFeeDrafts already
  * resolved in-batch ties), look up any already-persisted FEE LedgerEntry
  * for the same (chainId, walletId, txHash) — matched without assetId, for
@@ -243,24 +254,24 @@ function selectCanonicalFeeDrafts(
  *   - Persisted row's action group already outranks or ties the in-batch
  *     draft: drop the in-batch draft; the persisted row is left untouched
  *     (id, dedupeKey, quantity, asset, action group all unchanged).
- *   - In-batch draft outranks the persisted row's action group: re-home the
- *     persisted row in place (update only its actionGroupId — never its id,
- *     dedupeKey, quantity, or asset) to the winning action group, and drop
- *     the in-batch draft (the canonical row already exists under the
- *     correct identity, nothing new needs inserting).
+ *   - In-batch draft outranks the persisted row's action group: plan to
+ *     re-home the persisted row in place (only its actionGroupId — never
+ *     its id, dedupeKey, quantity, or asset) to the winning action group,
+ *     and drop the in-batch draft (the canonical row already exists under
+ *     the correct identity, nothing new needs inserting).
  *
  * This never deletes raw evidence, never touches a non-FEE entry, and never
- * reads or writes outside the exact transactions present in this batch.
+ * reads outside the exact transactions present in this batch.
  */
 async function resolveCanonicalFeeOwnership(
   entries: Map<string, CanonicalLedgerEntryDraft & { actionGroupId: string; id: string }>,
   client: LedgerStoreClient,
-) {
+): Promise<Array<{ id: string; actionGroupId: string }>> {
   const feeCandidates = Array.from(entries.entries()).filter(
     ([, entry]) => entry.entryType === "FEE",
   );
   if (feeCandidates.length === 0) {
-    return;
+    return [];
   }
 
   const existingFees = await client.ledgerEntry.findMany({
@@ -277,7 +288,7 @@ async function resolveCanonicalFeeOwnership(
   });
 
   if (existingFees.length === 0) {
-    return;
+    return [];
   }
 
   const actionGroups = await client.ledgerActionGroup.findMany({
@@ -313,12 +324,7 @@ async function resolveCanonicalFeeOwnership(
     entries.delete(entryIdentity);
   }
 
-  for (const reassignment of reassignments) {
-    await client.ledgerEntry.updateMany({
-      where: { id: { in: [reassignment.id] } },
-      data: { actionGroupId: reassignment.actionGroupId },
-    });
-  }
+  return reassignments;
 }
 
 export async function persistNormalizedLedger(
@@ -392,23 +398,38 @@ export async function persistNormalizedLedger(
     }
   }
 
-  await resolveCanonicalFeeOwnership(entries, client);
+  const reassignments = await resolveCanonicalFeeOwnership(entries, client);
 
   // Never persist an action group that ends up with zero entries in this
   // batch — e.g. a family whose only contribution was a FEE draft that lost
   // canonical ownership (either to another in-batch draft, or to an
-  // already-persisted higher-priority row) above.
-  const referencedActionGroupIds = new Set(
-    Array.from(entries.values()).map((entry) => entry.actionGroupId),
-  );
+  // already-persisted higher-priority row) above. A reassignment target
+  // group must still be created even though its winning FEE draft was
+  // removed from `entries` above (the persisted row is being re-homed into
+  // it, not re-inserted), so reassignment targets are included explicitly.
+  const referencedActionGroupIds = new Set([
+    ...Array.from(entries.values()).map((entry) => entry.actionGroupId),
+    ...reassignments.map((reassignment) => reassignment.actionGroupId),
+  ]);
   const actionGroupsToPersist = Array.from(actionGroups.values()).filter((group) =>
     referencedActionGroupIds.has(group.id),
   );
 
+  // Action groups (including every reassignment target) must exist before
+  // any reassignment update runs: LedgerEntry.actionGroupId is a required
+  // foreign key, and a reassignment target may be a brand-new group being
+  // created for the first time in this very call.
   const createdActionGroups = await client.ledgerActionGroup.createMany({
     data: actionGroupsToPersist,
     skipDuplicates: true,
   });
+
+  for (const reassignment of reassignments) {
+    await client.ledgerEntry.updateMany({
+      where: { id: { in: [reassignment.id] } },
+      data: { actionGroupId: reassignment.actionGroupId },
+    });
+  }
 
   const createdEntries = await client.ledgerEntry.createMany({
     data: Array.from(entries.values()).map((entry) => ({

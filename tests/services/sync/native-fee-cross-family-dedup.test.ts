@@ -184,6 +184,12 @@ function createPersistentLedgerStoreClient() {
               actionGroupId: row.actionGroupId as string,
             }));
         },
+        // Mirrors the real Prisma/Postgres foreign-key constraint:
+        // LedgerEntry.actionGroupId is required and references
+        // LedgerActionGroup.id. Reassigning to a group that has not been
+        // created yet must fail here exactly as it would against a real
+        // database, so this mock catches the write-ordering class of bug
+        // it is designed to catch, not just count-based outcomes.
         updateMany: async ({
           where,
           data,
@@ -191,6 +197,11 @@ function createPersistentLedgerStoreClient() {
           where: { id: { in: string[] } };
           data: { actionGroupId: string };
         }) => {
+          if (!actionGroups.has(data.actionGroupId)) {
+            throw new Error(
+              `foreign key violation: LedgerActionGroup ${data.actionGroupId} does not exist`,
+            );
+          }
           let count = 0;
           for (const id of where.id.in) {
             const row = entries.get(id);
