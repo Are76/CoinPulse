@@ -131,6 +131,45 @@ Calendar dates are unreliable for this purpose because block-production rate is 
 - **Timestamp and block-hash interpretation at or below `lastInheritedBlock` (proposed):** a block's `timestamp` and `blockHash` at or below `lastInheritedBlock` describe the **original Ethereum block** that PulseChain's genesis copied — they are not evidence of *when on PulseChain's own timeline* the event became visible (PulseChain did not exist yet). Any future implementation must document this explicitly wherever such a timestamp is surfaced, so it is never read as "this happened on PulseChain at this time."
 - **Do not rely only on calendar dates (explicit constraint honored):** classification must be implemented as a block-number comparison against `lastInheritedBlock`/`firstPostForkBlock`. A calendar-date heuristic (e.g., "before PulseChain's 2023 mainnet launch") is an acceptable *sanity cross-check* only, never the primary classification mechanism, because block-timestamp data at or below `lastInheritedBlock` describes Ethereum's timeline, not PulseChain's.
 
+### 6.1 Tier 1 verification evidence (2026-08-04)
+
+**Verification date:** 2026-08-04 (UTC).
+
+**Sources consulted (both Tier 1 per `docs/pulsechain-authoritative-data-sources.md` §1):**
+
+- `https://rpc.pulsechain.com` — direct JSON-RPC `eth_chainId`, `eth_getBlockByNumber` calls (no credentials in URL; public endpoint).
+- `https://api.scan.pulsechain.com` — PulseChain's own BlockScout deployment (`gitlab.com/pulsechaincom/blockscout`, directly verified Tier 1 source per the authoritative-data-sources doc §2.1) REST API, block-detail endpoint, used as an independent cross-check of the same block heights.
+
+**`eth_chainId` result:** `0x171` (369) — confirms `rpc.pulsechain.com` serves PulseChain, not Ethereum mainnet or another network.
+
+**Block headers read (both sources agree):**
+
+| Block | Source | `difficulty` | `extraData` (decoded) | `nonce` | `tx_count` | `timestamp` (UTC) | `miner` |
+|---|---|---|---|---|---|---|---|
+| 17,232,998 | RPC | `0x0` | `@builder0x69` | `0x0000000000000000` | — | 2023-05-10T22:35:59Z | `0x690b…ac990` |
+| 17,232,999 | RPC + explorer | `0` | `rsync-builder.xyz` | `0x0000000000000000` | 160 | 2023-05-10T22:36:11Z | `0x1f9090aaE28b8a3dCeaDf281B0F12828e676c326` |
+| 17,233,000 | RPC + explorer | `131072` (`0x20000`) | `geth` / `go1.20.4` / `linux` | `0x1bfcff1b127c1faf` | 0 | 2023-05-10T22:52:51Z | `0x93362117CD70E08f53694Df4Ceb74F7B5e8D241A` |
+| 17,233,001 | RPC | `0x0` | `geth` / `go1.20.4` / `linux` | `0x0000000000000000` | 0 | 2023-05-11T06:23:15Z | `0x0000000000000000000000000000000000000369` |
+
+**Adjacency proof:** block 17,233,000's `parentHash` (`0xe5667f9cafb115b1dcfc36b0b569a5601f01dfa000698140a1298ef4f87e2e37`) equals block 17,232,999's `hash`, confirming the two candidate blocks are direct chain-linked parent/child, not merely consecutive integers.
+
+**What this evidence proves:**
+
+- Blocks at and below 17,232,999 carry Ethereum-mainnet-specific markers: `extraData` values identifying known Ethereum MEV-Boost block builders (`@builder0x69`, `rsync-builder.xyz`), zero `difficulty` (Ethereum's post-merge PoS convention), all-zero `nonce` (also a post-merge PoS convention), real transaction activity, and a ~12-second inter-block gap matching Ethereum's mainnet slot time exactly. This is affirmative evidence of Ethereum-mainnet-origin block production, not merely "the RPC returned a block at this height."
+- Block 17,233,000 is a qualitatively different block: default go-ethereum client `extraData` (no builder tag), a non-zero legacy `difficulty` field, a non-zero PoW-shaped `nonce`, zero transactions, and a ~16-minute-40-second gap since block 17,232,999 — consistent with a chain-halt/genesis-cutover pause, not an ordinary Ethereum or PulseChain block interval.
+- Block 17,233,001 is mined by `0x0000000000000000000000000000000000000369` — a vanity address whose final bytes are the literal decimal string "369", PulseChain's own chain ID. This cannot occur on an Ethereum-mainnet block by coincidence and is affirmative evidence of PulseChain-controlled, chain-ID-aware block production independent of any Ethereum process, beginning at or immediately after block 17,233,000.
+- The regime change (builder-tagged/PoS-style → geth-default/PoW-shaped) occurs exactly between block 17,232,999 and block 17,233,000, with no intermediate or ambiguous block between them.
+
+**Conclusion:** `lastInheritedBlock = 17,232,999` and `firstPostForkBlock = 17,233,000` are Tier 1-verified. `firstPostForkBlock = lastInheritedBlock + 1` holds by direct RPC/explorer block-number and parent-hash inspection.
+
+**Remaining limitations:**
+
+- This evidence proves the *block-production regime* changed at this exact boundary; it does not by itself prove or disprove any claim about `FORK_OPENING_STATE` (§10), which requires a separate, still-unperformed proof of a specific post-transition/pre-first-independent-transaction state-read point. §10's requirements are unaffected by this verification and remain open.
+- This verification does not resolve Open Question 3 (§21) — whether the two test-fixture stake blocks (`15,353,156`, `15,767,882`) correspond to real production rows — which is unrelated to the boundary value itself.
+- `pulsechain.com` and `scan.pulsechain.com` returned HTTP 200 in this session (reachable), but no additional documentation page content was parsed for a written genesis-block statement; the conclusion above rests on the direct RPC/explorer block-header evidence, not on a prose confirmation from PulseChain's documentation.
+
+This resolves Open Question 1 (§21) for the numeric boundary pair. It does **not** change D-036's `Proposed` status (see `docs/project-decisions.md`), which also requires the separate documentation-synchronization follow-up (§21 Q2) before promotion to `Accepted`.
+
 ---
 
 ## 7. Provenance model
@@ -379,7 +418,7 @@ Each phase below is a separate, bounded future PR. None is implemented by this P
 
 ## 21. Open questions
 
-1. **Is `17,233,000` the correct fork-boundary block?** Not independently confirmed in this session (no live RPC access, docs-only scope). Requires operator verification against a Tier 1 PulseChain source (`rpc.pulsechain.com`, `scan.pulsechain.com`, or PulseChain's own documented genesis parameters) per `docs/pulsechain-authoritative-data-sources.md`.
+1. **Is `17,233,000` the correct fork-boundary block?** **Resolved 2026-08-04** — see §6.1. Tier 1-verified via direct `rpc.pulsechain.com` RPC calls and `api.scan.pulsechain.com` cross-check: `lastInheritedBlock = 17,232,999`, `firstPostForkBlock = 17,233,000`, confirmed adjacent via parent-hash linkage. This resolves the numeric-boundary open question; it does not by itself resolve Open Question 2 (documentation synchronization) or promote D-036 to `Accepted`.
 2. **When should `docs/ai-handoff.md`, `docs/project-decisions.md`, `docs/wallet-scoped-historical-sync-runbook.md`, and `docs/transfer-history-backfill-operator-plan.md` be updated to replace the stale "Window 60 paused / Window 61 gated" text with the verified current state (Window 63 completed at `26,634,999–26,635,998`; next adjacent descending range `26,633,999–26,634,998` operationally Window 64; not yet executed)?** This is a required follow-up documentation-synchronization task, explicitly out of scope for this PR (§2.3, §18). The structural conclusion in this policy (current backfill progress is millions of blocks from the fork boundary) holds under either the stale or corrected figures and does not depend on that synchronization happening first.
 3. **Did the two test-fixture stake blocks (`15,353,156`, `15,767,882`) originate from real production data, or are they synthetic test fixtures only?** This session confirmed they exist in committed test files; it did not confirm whether they also correspond to real production `RawStakeAction` rows for a tracked wallet.
 4. **What is the practical scope of pre-fork LP/protocol positions, if any?** §10 treats this as conceptually in-scope but flags that PulseX itself is a post-fork protocol, so the practical surface may be small or empty — unresolved without an operator audit (Phase 2, §19).
@@ -403,7 +442,7 @@ For this PR (documentation-only):
 
 For the broader policy to be considered "done" (future work, not this PR):
 
-- [ ] Fork-boundary block number confirmed via Tier 1 PulseChain source or direct operator RPC verification.
+- [x] Fork-boundary block number confirmed via Tier 1 PulseChain source or direct operator RPC verification — see §6.1 (2026-08-04).
 - [ ] Stale "Window 60/61" text in `docs/ai-handoff.md`, `docs/project-decisions.md`, and the runbooks synchronized to verified current operational state (Window 63 completed; next adjacent range operationally Window 64, not executed), via a separate bounded documentation PR.
 - [ ] Phases 1–11 (§19) implemented as separate bounded PRs, each independently tested and reviewed.
 - [ ] This document's `Status` updated from "Proposed" to "Accepted" once the product owner reviews and approves it, at which point `docs/project-decisions.md` should promote the corresponding entry's `Status` from a pending/deferred marker to `Accepted`.
