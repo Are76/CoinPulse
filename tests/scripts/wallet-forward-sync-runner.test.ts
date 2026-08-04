@@ -1123,6 +1123,23 @@ describe("stop() evidence kind (P2-2)", () => {
     expect(stopRecords).toHaveLength(1);
     expect(stopRecords[0].kind).toBe("stop");
   });
+
+  it("invariant_failed_after_run evidence (via the real orchestrator) also has kind \"stop\", not just the window record", async () => {
+    const db = makeFakeDb({
+      runsById: { "run-1": completedManualRun({ warningCount: 1, warningDetails: ["w"] }) },
+    });
+    const { deps, evidence } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions({ execute: true, maxWindows: 1 }), deps);
+
+    expect(summary.stoppedReason).toBe("invariant_failed_after_run");
+    const windowRecords = evidence.filter((e) => e.kind === "window" && e.outcome === "failed_invariant");
+    expect(windowRecords).toHaveLength(1);
+    const stopRecords = evidence.filter((e) => e.reason === "invariant_failed_after_run");
+    expect(stopRecords).toHaveLength(1);
+    expect(stopRecords[0].kind).toBe("stop");
+    expect(stopRecords[0].detail).toBe(summary.detail);
+  });
 });
 
 // ─── P2-3: sanitized backend failure details ───────────────────────────────────

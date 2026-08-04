@@ -1217,12 +1217,19 @@ export async function runWalletForwardSyncRunner(
     });
 
     if (!allOk) {
-      return {
-        stoppedReason: "invariant_failed_after_run",
-        detail: postRunFailureReasons.join("; "),
+      // Route through stop() (in addition to the window record already
+      // written above) so this — the most serious outcome — also emits a
+      // dedicated kind: "stop" evidence record. Without this, an evidence
+      // consumer filtering for kind === "stop" would miss it entirely, since
+      // every other hard-stop path in this function goes through stop().
+      return stop(
+        deps,
+        "invariant_failed_after_run",
+        postRunFailureReasons.join("; "),
         windowsCompleted,
-        lastWindowNumber: plan.windowNumber,
-      };
+        plan.windowNumber,
+        { windowNumber: plan.windowNumber, policyLabel: plan.policyLabel, runId },
+      );
     }
 
     windowsCompleted += 1;
