@@ -4,6 +4,8 @@
 // no rebuild, and no execution of the sync pipeline happens anywhere in this
 // file.
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,13 +15,18 @@ import {
   SUPPORTED_CHAIN_ID,
   WINDOW_SIZE_HARD_CAP_BLOCKS,
   buildManualSyncRequestBody,
+  buildPostRunFailureReasons,
   checkEnv,
   computeExitCode,
   computeForwardWindowPlan,
   parseRunnerCliArgs,
   policyLabelForBatchWindow,
+  readHttpResponseBody,
+  resolveWalletUsingPrismaClient,
   runWalletForwardSyncRunner,
+  sanitizeBackendResponseBody,
   serializeEvidence,
+  stop,
   validateExpectedLiveCursor,
   validateFirstWindowStart,
   validateForwardAdjacency,
@@ -959,5 +966,424 @@ describe("exit-code allowlist (CLI/main boundary)", () => {
     const summary = await runWalletForwardSyncRunner(baseRunnerOptions({ maxWindows: 5 }), deps);
     expect(summary.stoppedReason).toBe("max_windows_reached");
     expect(computeExitCode(summary.stoppedReason)).toBe(0);
+  });
+});
+
+// ─── P2-1: reuse one Prisma client for wallet lookup ───────────────────────────
+
+describe("resolveWalletUsingPrismaClient (P2-1)", () => {
+  it("uses the injected/local client and returns the exact resolved id/address", async () => {
+    let calledWith: unknown;
+    const fakeClient = {
+      wallet: {
+        findUnique: async (args: unknown) => {
+          calledWith = args;
+          return { id: FIXTURE_WALLET_ID, address: FIXTURE_WALLET, chainId: FIXTURE_CHAIN_ID };
+        },
+      },
+    };
+
+    const result = await resolveWalletUsingPrismaClient(fakeClient, {
+      walletAddress: FIXTURE_WALLET,
+      chainId: FIXTURE_CHAIN_ID,
+    });
+
+    expect(result).toEqual({ id: FIXTURE_WALLET_ID, address: FIXTURE_WALLET });
+    expect(calledWith).toEqual({
+      where: { chainId_addressLower: { chainId: FIXTURE_CHAIN_ID, addressLower: FIXTURE_WALLET } },
+      select: { id: true, address: true, chainId: true },
+    });
+  });
+
+  it("normalizes the wallet address to lowercase before matching", async () => {
+    let calledWith: unknown;
+    const fakeClient = {
+      wallet: {
+        findUnique: async (args: unknown) => {
+          calledWith = args;
+          return null;
+        },
+      },
+    };
+
+    await resolveWalletUsingPrismaClient(fakeClient, {
+      walletAddress: FIXTURE_WALLET.toUpperCase().replace("0X", "0x"),
+      chainId: FIXTURE_CHAIN_ID,
+    });
+
+    expect((calledWith as { where: { chainId_addressLower: { addressLower: string } } }).where.chainId_addressLower.addressLower).toBe(
+      FIXTURE_WALLET,
+    );
+  });
+
+  it("fails closed (returns null) when no wallet is found", async () => {
+    const fakeClient = { wallet: { findUnique: async () => null } };
+    const result = await resolveWalletUsingPrismaClient(fakeClient, {
+      walletAddress: FIXTURE_WALLET,
+      chainId: FIXTURE_CHAIN_ID,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("the runner source no longer references the global DB resolver, so process cleanup never depends on an undisconnected global client", () => {
+    const source = readFileSync(
+      path.join(__dirname, "..", "..", "scripts", "wallet-forward-sync-runner.ts"),
+      "utf8",
+    );
+    // Structural proof: this file must not import the service function that
+    // opens the module-global getDb() client, nor call getDb() itself. The
+    // only DB client this file ever opens is the local `prisma` instance
+    // created in main() and disconnected in its `finally` block.
+    // Only a documentation comment may mention the service function's name
+    // (to explain what shape is mirrored) — it must never be imported or
+    // called, and the module that opens the global client must never be
+    // imported at all.
+    expect(source).not.toMatch(/import\s*\{[^}]*resolveTrackedWalletByAddress[^}]*\}/);
+    expect(source).not.toContain('from "@/services/api/wallets"');
+    expect(source).not.toContain('from "@/lib/db"');
+    expect(source).not.toMatch(/import\s*\{[^}]*\bgetDb\b[^}]*\}/);
+  });
+});
+
+// ─── P2-2: stop() always preserves kind "stop" ─────────────────────────────────
+
+describe("stop() evidence kind (P2-2)", () => {
+  function makeStopDeps(): { deps: RunnerDeps; evidence: EvidenceRecord[] } {
+    const evidence: EvidenceRecord[] = [];
+    const db = makeFakeDb();
+    const deps: RunnerDeps = {
+      db,
+      resolveWallet: async () => ({ id: FIXTURE_WALLET_ID, address: FIXTURE_WALLET }),
+      httpGet: async () => ({ status: 200, body: { data: { status: "ok" } } }),
+      httpPost: async () => ({ status: 202, body: { data: { runId: "run-1" } } }),
+      now: () => new Date(0),
+      sleep: async () => {},
+      writeEvidence: async (record) => {
+        evidence.push(record);
+      },
+    };
+    return { deps, evidence };
+  }
+
+  it("caller extras cannot override kind, even when extra explicitly sets kind to something else", async () => {
+    const { deps, evidence } = makeStopDeps();
+
+    await stop(deps, "some_reason", "some detail", 0, null, {
+      kind: "window",
+      windowNumber: 1,
+      policyLabel: "p-1",
+    });
+
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0].kind).toBe("stop");
+  });
+
+  it("stop reason is preserved exactly alongside the forced kind", async () => {
+    const { deps, evidence } = makeStopDeps();
+
+    const summary = await stop(deps, "cursor_expectation_mismatch", "exact detail text", 2, 3, {
+      kind: "summary",
+    });
+
+    expect(evidence[0].kind).toBe("stop");
+    expect(evidence[0].reason).toBe("cursor_expectation_mismatch");
+    expect(evidence[0].detail).toBe("exact detail text");
+    expect(summary.stoppedReason).toBe("cursor_expectation_mismatch");
+    expect(summary.detail).toBe("exact detail text");
+    expect(summary.windowsCompleted).toBe(2);
+    expect(summary.lastWindowNumber).toBe(3);
+  });
+
+  it("submit-failure evidence (via the real orchestrator) has kind \"stop\"", async () => {
+    const db = makeFakeDb();
+    const { deps, evidence } = makeFakeDeps({
+      db,
+      httpPost: async () => ({ status: 409, body: { error: { code: "OPERATION_CONFLICT", message: "busy" } } }),
+    });
+
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions({ execute: true, maxWindows: 1 }), deps);
+
+    expect(summary.stoppedReason).toBe("manual_sync_submit_failed");
+    const stopRecords = evidence.filter((e) => e.reason === "manual_sync_submit_failed");
+    expect(stopRecords).toHaveLength(1);
+    expect(stopRecords[0].kind).toBe("stop");
+  });
+
+  it("poll-timeout evidence (via the real orchestrator) has kind \"stop\"", async () => {
+    const db = makeFakeDb({ runsById: {} });
+    const { deps, evidence } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(
+      baseRunnerOptions({ execute: true, maxWindows: 1, pollTimeoutMs: 5, pollIntervalMs: 1 }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("poll_timeout");
+    const stopRecords = evidence.filter((e) => e.reason === "poll_timeout");
+    expect(stopRecords).toHaveLength(1);
+    expect(stopRecords[0].kind).toBe("stop");
+  });
+});
+
+// ─── P2-3: sanitized backend failure details ───────────────────────────────────
+
+describe("sanitizeBackendResponseBody / readHttpResponseBody (P2-3)", () => {
+  it("preserves a JSON validation-error body", () => {
+    const body = {
+      error: {
+        code: "INVALID_INPUT",
+        message: "Invalid request input.",
+        details: [{ path: "startBlock", message: "required", code: "invalid_type" }],
+      },
+    };
+    expect(sanitizeBackendResponseBody(body)).toEqual(body);
+  });
+
+  it("preserves an operation-conflict blocker body", () => {
+    const body = {
+      error: {
+        code: "OPERATION_CONFLICT",
+        message: "A conflicting operation is already active.",
+        details: { conflictingOperationId: "run-9", status: "RUNNING", appearsStale: false },
+      },
+    };
+    expect(sanitizeBackendResponseBody(body)).toEqual(body);
+  });
+
+  it("preserves a plain-text/non-JSON body safely, capping an oversized one", () => {
+    expect(sanitizeBackendResponseBody("Internal Server Error")).toBe("Internal Server Error");
+    const huge = "x".repeat(3000);
+    const capped = sanitizeBackendResponseBody(huge) as string;
+    expect(capped.length).toBeLessThan(huge.length);
+    expect(capped.endsWith("...[truncated]")).toBe(true);
+  });
+
+  it("handles a malformed/missing body without masking the original HTTP failure", () => {
+    expect(sanitizeBackendResponseBody(undefined)).toBeNull();
+    // The stop detail string itself (built independently of the body) always
+    // carries the HTTP status, so a null/placeholder body here never hides
+    // the primary failure — verified end-to-end below.
+  });
+
+  it("redacts secret-like fields wherever they appear in the response body", () => {
+    const body = {
+      error: {
+        code: "INTERNAL_ERROR",
+        details: {
+          authorization: "Bearer supersecret",
+          apiKey: "abc123",
+          nested: { database_url: "postgres://user:pass@host/db", ok: "keep-me" },
+        },
+      },
+    };
+    const sanitized = sanitizeBackendResponseBody(body) as typeof body;
+    expect(sanitized.error.details.authorization).toBe("[redacted]");
+    expect(sanitized.error.details.apiKey).toBe("[redacted]");
+    expect((sanitized.error.details.nested as Record<string, unknown>).database_url).toBe("[redacted]");
+    expect((sanitized.error.details.nested as Record<string, unknown>).ok).toBe("keep-me");
+  });
+
+  it("readHttpResponseBody parses JSON, falls back to text, and returns undefined for an empty body", async () => {
+    expect(await readHttpResponseBody({ text: async () => JSON.stringify({ a: 1 }) })).toEqual({ a: 1 });
+    expect(await readHttpResponseBody({ text: async () => "not json" })).toBe("not json");
+    expect(await readHttpResponseBody({ text: async () => "" })).toBeUndefined();
+  });
+
+  it("stop evidence for a submit failure preserves HTTP status and the sanitized backend body, secrets redacted, remaining deterministic", async () => {
+    const db = makeFakeDb();
+    const conflictBody = {
+      error: {
+        code: "OPERATION_CONFLICT",
+        message: "A conflicting operation is already active.",
+        details: { conflictingOperationId: "run-9", authorization: "Bearer leak-me" },
+      },
+    };
+    const { deps, evidence } = makeFakeDeps({
+      db,
+      httpPost: async () => ({ status: 409, body: conflictBody }),
+    });
+
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions({ execute: true, maxWindows: 1 }), deps);
+
+    expect(summary.stoppedReason).toBe("manual_sync_submit_failed");
+    expect(summary.detail).toContain("409");
+    const stopRecord = evidence.find((e) => e.reason === "manual_sync_submit_failed")!;
+    expect(stopRecord.httpStatus).toBe(409);
+    const responseBody = stopRecord.responseBody as typeof conflictBody;
+    expect(responseBody.error.code).toBe("OPERATION_CONFLICT");
+    expect(responseBody.error.details.conflictingOperationId).toBe("run-9");
+    expect(responseBody.error.details.authorization).toBe("[redacted]");
+    expect(() => JSON.parse(serializeEvidence(stopRecord as EvidenceRecord))).not.toThrow();
+  });
+
+  it("stop evidence for a malformed (non-2xx, no body) submit failure still preserves the HTTP status", async () => {
+    const db = makeFakeDb();
+    const { deps, evidence } = makeFakeDeps({
+      db,
+      httpPost: async () => ({ status: 500, body: undefined }),
+    });
+
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions({ execute: true, maxWindows: 1 }), deps);
+
+    expect(summary.stoppedReason).toBe("manual_sync_submit_failed");
+    expect(summary.detail).toContain("500");
+    const stopRecord = evidence.find((e) => e.reason === "manual_sync_submit_failed")!;
+    expect(stopRecord.httpStatus).toBe(500);
+    expect(stopRecord.responseBody).toBeNull();
+  });
+});
+
+// ─── P2-4: report every failed post-run gate ───────────────────────────────────
+
+describe("buildPostRunFailureReasons (P2-4)", () => {
+  const okTerminal = { ok: true as const };
+  const okCursor = { ok: true as const };
+
+  function base() {
+    return {
+      terminalVerification: okTerminal,
+      cursorGatePost: okCursor,
+      postContaminationRowCount: 0,
+      duplicateRawTransactionGroups: 0,
+      duplicateRawTokenTransferGroups: 0,
+      duplicateLedgerEntryGroups: 0,
+      activeOperationsAfter: 0,
+    };
+  }
+
+  it("returns no reasons when every gate passes", () => {
+    expect(buildPostRunFailureReasons(base())).toEqual([]);
+  });
+
+  it("terminal-state mismatch produces its own distinct reason", () => {
+    const reasons = buildPostRunFailureReasons({
+      ...base(),
+      terminalVerification: { ok: false, reasons: ["expected status COMPLETED, got FAILED"] },
+    });
+    expect(reasons).toEqual(["expected status COMPLETED, got FAILED"]);
+  });
+
+  it("cursor mismatch produces its own distinct reason", () => {
+    const reasons = buildPostRunFailureReasons({
+      ...base(),
+      cursorGatePost: { ok: false, reason: "expected cursor toBlock 5, got 4" },
+    });
+    expect(reasons).toEqual(["expected cursor toBlock 5, got 4"]);
+  });
+
+  it("active operation remaining produces its own distinct reason", () => {
+    const reasons = buildPostRunFailureReasons({ ...base(), activeOperationsAfter: 2 });
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain("2 active");
+  });
+
+  it("fabricated contamination count > 0 produces its own distinct reason", () => {
+    const reasons = buildPostRunFailureReasons({ ...base(), postContaminationRowCount: 3 });
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0].toLowerCase()).toContain("contamination");
+    expect(reasons[0]).toContain("3");
+  });
+
+  it("duplicate RawTransaction groups > 0 produces its own distinct reason", () => {
+    const reasons = buildPostRunFailureReasons({ ...base(), duplicateRawTransactionGroups: 1 });
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain("RawTransaction");
+  });
+
+  it("duplicate RawTokenTransfer groups > 0 produces its own distinct reason", () => {
+    const reasons = buildPostRunFailureReasons({ ...base(), duplicateRawTokenTransferGroups: 1 });
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain("RawTokenTransfer");
+  });
+
+  it("duplicate LedgerEntry dedupeKey groups > 0 produces its own distinct reason", () => {
+    const reasons = buildPostRunFailureReasons({ ...base(), duplicateLedgerEntryGroups: 1 });
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain("LedgerEntry");
+  });
+
+  it("a combined multi-gate failure reports every failed gate, not just the first", () => {
+    const reasons = buildPostRunFailureReasons({
+      terminalVerification: { ok: false, reasons: ["expected warningCount 0, got 1"] },
+      cursorGatePost: { ok: false, reason: "cursor did not advance" },
+      postContaminationRowCount: 2,
+      duplicateRawTransactionGroups: 1,
+      duplicateRawTokenTransferGroups: 1,
+      duplicateLedgerEntryGroups: 1,
+      activeOperationsAfter: 1,
+    });
+    expect(reasons).toHaveLength(7);
+    expect(reasons.some((r) => r.includes("warningCount"))).toBe(true);
+    expect(reasons.some((r) => r.includes("cursor did not advance"))).toBe(true);
+    expect(reasons.some((r) => r.toLowerCase().includes("contamination"))).toBe(true);
+    expect(reasons.some((r) => r.includes("RawTransaction"))).toBe(true);
+    expect(reasons.some((r) => r.includes("RawTokenTransfer"))).toBe(true);
+    expect(reasons.some((r) => r.includes("LedgerEntry"))).toBe(true);
+    expect(reasons.some((r) => r.includes("active"))).toBe(true);
+  });
+
+  it("via the real orchestrator: active-operation-remains-after-run alone stops with a specific detail (not the generic message)", async () => {
+    const db = makeFakeDb({ runsById: { "run-1": completedManualRun() } });
+    let countCall = 0;
+    (db.syncRun.count as unknown) = async () => {
+      countCall += 1;
+      return countCall === 1 ? 0 : 2; // pre-submit gate passes (0), post-run check fails (2)
+    };
+    const { deps } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        db.advanceCursorTo(25_079_548n);
+        return { status: 202, body: { data: { runId: "run-1" } } };
+      },
+    });
+
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions({ execute: true, maxWindows: 1 }), deps);
+
+    expect(summary.stoppedReason).toBe("invariant_failed_after_run");
+    expect(summary.detail).not.toBe("post-run invariant check failed");
+    expect(summary.detail).toContain("2 active");
+  });
+
+  it("via the real orchestrator: duplicate RawTransaction groups alone stop with a specific, distinct detail", async () => {
+    const db = makeFakeDb({
+      runsById: { "run-1": completedManualRun() },
+      duplicateTransactionRows: 1,
+    });
+    const { deps } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        db.advanceCursorTo(25_079_548n);
+        return { status: 202, body: { data: { runId: "run-1" } } };
+      },
+    });
+
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions({ execute: true, maxWindows: 1 }), deps);
+
+    expect(summary.stoppedReason).toBe("invariant_failed_after_run");
+    expect(summary.detail).toContain("RawTransaction");
+  });
+});
+
+// ─── Exit-code allowlist regression (P2 follow-up) ─────────────────────────────
+
+describe("exit-code allowlist regression", () => {
+  it("max_windows_reached still exits 0 and every hard stop still exits 1 after the P2 fixes", () => {
+    expect(computeExitCode("max_windows_reached")).toBe(0);
+    for (const reason of [
+      "wallet_not_found",
+      "cursor_expectation_mismatch",
+      "first_window_start_mismatch",
+      "adjacency_violation",
+      "active_operation_conflict",
+      "policy_label_collision",
+      "server_unhealthy",
+      "fabricated_contamination_pre_gate",
+      "manual_sync_submit_failed",
+      "poll_timeout",
+      "invariant_failed_after_run",
+      "totally_unknown_reason",
+    ]) {
+      expect(computeExitCode(reason)).toBe(1);
+    }
   });
 });

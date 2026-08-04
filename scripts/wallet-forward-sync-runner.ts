@@ -351,6 +351,57 @@ export function verifyForwardCursorPostcondition(args: {
   return { ok: true };
 }
 
+/**
+ * Builds one distinct, operator-readable failure reason per failed post-run
+ * safety gate — never just the generic "post-run invariant check failed"
+ * with an empty list. Every gate is independent: a run can fail multiple
+ * gates simultaneously (e.g. contamination AND a duplicate group), and every
+ * one of them must show up here, not just the first one checked.
+ */
+export function buildPostRunFailureReasons(args: {
+  terminalVerification: { ok: true } | { ok: false; reasons: string[] };
+  cursorGatePost: GateResult;
+  postContaminationRowCount: number;
+  duplicateRawTransactionGroups: number;
+  duplicateRawTokenTransferGroups: number;
+  duplicateLedgerEntryGroups: number;
+  activeOperationsAfter: number;
+}): string[] {
+  const reasons: string[] = [];
+
+  if (!args.terminalVerification.ok) {
+    reasons.push(...args.terminalVerification.reasons);
+  }
+  if (!args.cursorGatePost.ok) {
+    reasons.push(args.cursorGatePost.reason);
+  }
+  if (args.postContaminationRowCount > 0) {
+    reasons.push(
+      `post-run fabricated-transfer contamination: ${args.postContaminationRowCount} row(s) detected in the completed window's range`,
+    );
+  }
+  if (args.duplicateRawTransactionGroups > 0) {
+    reasons.push(
+      `duplicate RawTransaction identity (chainId+txHash+blockHash) groups: ${args.duplicateRawTransactionGroups}`,
+    );
+  }
+  if (args.duplicateRawTokenTransferGroups > 0) {
+    reasons.push(
+      `duplicate RawTokenTransfer identity (chainId+txHash+logIndex+blockHash) groups: ${args.duplicateRawTokenTransferGroups}`,
+    );
+  }
+  if (args.duplicateLedgerEntryGroups > 0) {
+    reasons.push(`duplicate LedgerEntry dedupeKey groups: ${args.duplicateLedgerEntryGroups}`);
+  }
+  if (args.activeOperationsAfter > 0) {
+    reasons.push(
+      `${args.activeOperationsAfter} active (PENDING/RUNNING) SyncRun(s) remain after the run completed`,
+    );
+  }
+
+  return reasons;
+}
+
 // ─── CLI argument parsing ──────────────────────────────────────────────────────
 
 export type RunnerCliOptions = {
@@ -611,6 +662,53 @@ export async function writeEvidenceLine(evidenceFile: string, record: EvidenceRe
   await appendFile(evidenceFile, `${serializeEvidence(record)}\n`, "utf8");
 }
 
+// ─── Backend response sanitization (for stop evidence only) ───────────────────
+
+const SANITIZED_RESPONSE_TEXT_MAX_LENGTH = 2_000;
+
+/** Key names that must never appear verbatim in evidence, even if a backend
+ * response body somehow included one (defense in depth — the API routes this
+ * runner calls do not emit these fields today). */
+const SECRET_LIKE_KEY_PATTERN =
+  /(database_url|redis_url|password|secret|token|api[-_]?key|authorization|cookie)/i;
+
+function redactSecretLikeFields(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactSecretLikeFields);
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = SECRET_LIKE_KEY_PATTERN.test(key) ? "[redacted]" : redactSecretLikeFields(val);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Prepares a backend HTTP response body for inclusion in stop evidence: caps
+ * an oversized/non-JSON string body, redacts any secret-like key a JSON body
+ * might carry, and never throws — an unparseable or missing body degrades to
+ * a safe placeholder rather than being silently dropped, so the original HTTP
+ * failure (status code, caller-provided detail string) is never masked.
+ */
+export function sanitizeBackendResponseBody(body: unknown): unknown {
+  if (body === undefined) {
+    return null;
+  }
+  if (typeof body === "string") {
+    return body.length > SANITIZED_RESPONSE_TEXT_MAX_LENGTH
+      ? `${body.slice(0, SANITIZED_RESPONSE_TEXT_MAX_LENGTH)}...[truncated]`
+      : body;
+  }
+  try {
+    return redactSecretLikeFields(body);
+  } catch {
+    return "[unavailable: response body could not be sanitized]";
+  }
+}
+
 // ─── Runner DB client (narrow, injectable) ─────────────────────────────────────
 
 export type RunnerDbClient = {
@@ -733,6 +831,29 @@ export type HttpResponse = { status: number; body: unknown };
 export type HttpPost = (url: string, body: unknown) => Promise<HttpResponse>;
 export type HttpGet = (url: string) => Promise<HttpResponse>;
 
+/**
+ * Reads an HTTP response body safely regardless of content type: JSON is
+ * parsed; a non-JSON or malformed body falls back to the raw text (still
+ * useful in stop evidence, capped later by sanitizeBackendResponseBody)
+ * rather than being silently discarded as `undefined`. Never throws.
+ */
+export async function readHttpResponseBody(res: { text: () => Promise<string> }): Promise<unknown> {
+  let text: string;
+  try {
+    text = await res.text();
+  } catch {
+    return undefined;
+  }
+  if (text.length === 0) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
 export async function checkServerHealth(httpGet: HttpGet, baseUrl: string): Promise<GateResult> {
   let response: HttpResponse;
   try {
@@ -770,6 +891,38 @@ export async function pollSyncRunToTerminal(
     }
     await deps.sleep(deps.pollIntervalMs);
   }
+}
+
+// ─── Wallet lookup (local Prisma client only — no global DB resolver) ─────────
+//
+// Deliberately narrow and self-contained: takes only the one Prisma method it
+// needs, so the CLI can pass its single already-open local client instead of
+// pulling in a service function that opens the module-global getDb() client.
+// Mirrors resolveTrackedWalletByAddress's exact where/select shape.
+
+export type WalletLookupClient = {
+  wallet: {
+    findUnique: (args: {
+      where: { chainId_addressLower: { chainId: number; addressLower: string } };
+      select: { id: true; address: true; chainId: true };
+    }) => Promise<{ id: string; address: string; chainId: number } | null>;
+  };
+};
+
+export async function resolveWalletUsingPrismaClient(
+  client: WalletLookupClient,
+  args: { walletAddress: string; chainId: number },
+): Promise<{ id: string; address: string } | null> {
+  const wallet = await client.wallet.findUnique({
+    where: {
+      chainId_addressLower: {
+        chainId: args.chainId,
+        addressLower: args.walletAddress.toLowerCase(),
+      },
+    },
+    select: { id: true, address: true, chainId: true },
+  });
+  return wallet ? { id: wallet.id, address: wallet.address } : null;
 }
 
 // ─── Orchestrator ───────────────────────────────────────────────────────────────
@@ -941,13 +1094,23 @@ export async function runWalletForwardSyncRunner(
     const postResponse = await deps.httpPost(`${options.baseUrl}/api/sync/manual`, requestBody);
     const runId = (postResponse.body as { data?: { runId?: string } } | undefined)?.data?.runId;
     if (postResponse.status !== 202 || !runId) {
+      // Preserve the sanitized backend response body (operation-conflict and
+      // validation error envelopes carry a `code`/`details` the operator
+      // needs) without ever leaking secrets or letting a malformed/missing
+      // body mask the primary HTTP-status failure.
       return stop(
         deps,
         "manual_sync_submit_failed",
         `POST /api/sync/manual returned status ${postResponse.status}`,
         windowsCompleted,
         lastWindowNumber,
-        { kind: "window", windowNumber: plan.windowNumber, policyLabel: plan.policyLabel, submittedAt },
+        {
+          windowNumber: plan.windowNumber,
+          policyLabel: plan.policyLabel,
+          submittedAt,
+          httpStatus: postResponse.status,
+          responseBody: sanitizeBackendResponseBody(postResponse.body),
+        },
       );
     }
 
@@ -964,7 +1127,7 @@ export async function runWalletForwardSyncRunner(
         `SyncRun ${runId} did not reach a terminal state within ${options.pollTimeoutMs}ms`,
         windowsCompleted,
         lastWindowNumber,
-        { kind: "window", windowNumber: plan.windowNumber, policyLabel: plan.policyLabel, runId, submittedAt },
+        { windowNumber: plan.windowNumber, policyLabel: plan.policyLabel, runId, submittedAt },
       );
     }
     const terminalAt = deps.now().toISOString();
@@ -1009,14 +1172,16 @@ export async function runWalletForwardSyncRunner(
     });
     const activeAfterCount = await countActiveOperations(deps.db);
 
-    const allOk =
-      terminalVerification.ok &&
-      cursorGatePost.ok &&
-      postContamination.rowCount === 0 &&
-      duplicateTransactions.rowCount === 0 &&
-      duplicateTransfers.rowCount === 0 &&
-      duplicateLedgerEntries.rowCount === 0 &&
-      activeAfterCount === 0;
+    const postRunFailureReasons = buildPostRunFailureReasons({
+      terminalVerification,
+      cursorGatePost,
+      postContaminationRowCount: postContamination.rowCount,
+      duplicateRawTransactionGroups: duplicateTransactions.rowCount,
+      duplicateRawTokenTransferGroups: duplicateTransfers.rowCount,
+      duplicateLedgerEntryGroups: duplicateLedgerEntries.rowCount,
+      activeOperationsAfter: activeAfterCount,
+    });
+    const allOk = postRunFailureReasons.length === 0;
 
     await deps.writeEvidence({
       kind: "window",
@@ -1048,17 +1213,13 @@ export async function runWalletForwardSyncRunner(
       duplicateRawTokenTransferGroups: duplicateTransfers.rowCount,
       duplicateLedgerEntryGroups: duplicateLedgerEntries.rowCount,
       activeOperationsAfter: activeAfterCount,
-      invariantFailures: !terminalVerification.ok ? terminalVerification.reasons : [],
+      invariantFailures: postRunFailureReasons,
     });
 
     if (!allOk) {
-      const reasons = [
-        ...(!terminalVerification.ok ? terminalVerification.reasons : []),
-        ...(!cursorGatePost.ok ? [cursorGatePost.reason] : []),
-      ];
       return {
         stoppedReason: "invariant_failed_after_run",
-        detail: reasons.join("; ") || "post-run invariant check failed",
+        detail: postRunFailureReasons.join("; "),
         windowsCompleted,
         lastWindowNumber: plan.windowNumber,
       };
@@ -1083,7 +1244,15 @@ export async function runWalletForwardSyncRunner(
   return { stoppedReason: "max_windows_reached", windowsCompleted, lastWindowNumber };
 }
 
-async function stop(
+/**
+ * Writes a "stop" evidence record and returns the stop summary. `extra` is
+ * spread FIRST so the fixed identity fields below (`kind`, `at`, `reason`,
+ * `detail`) always win, regardless of what a caller passes in `extra` —
+ * a caller can never override the record's `kind` to something other than
+ * `"stop"`, which would otherwise let an evidence consumer filtering for stop
+ * records silently miss a hard stop.
+ */
+export async function stop(
   deps: RunnerDeps,
   reason: string,
   detail: string | undefined,
@@ -1091,7 +1260,13 @@ async function stop(
   lastWindowNumber: number | null,
   extra?: Record<string, unknown>,
 ): Promise<RunnerSummary> {
-  await deps.writeEvidence({ kind: "stop", at: deps.now().toISOString(), reason, detail, ...extra });
+  await deps.writeEvidence({
+    ...extra,
+    kind: "stop",
+    at: deps.now().toISOString(),
+    reason,
+    detail,
+  });
   return { stoppedReason: reason, detail, windowsCompleted, lastWindowNumber };
 }
 
@@ -1136,19 +1311,22 @@ async function main(): Promise<void> {
   }
 
   // Deferred imports so argument/env validation always runs first and the
-  // server-only service modules never load for an invalid invocation.
+  // server-only service modules never load for an invalid invocation. Note:
+  // the wallet lookup uses this same local `prisma` instance directly
+  // (resolveWalletUsingPrismaClient) rather than a service function backed by
+  // the module-global getDb() client, so the process has exactly one open
+  // Prisma client to disconnect in the `finally` block below.
   const { PrismaClient } = await import("@prisma/client");
   const { createPrismaAdapter } = await import("@/lib/prisma-adapter");
-  const { resolveTrackedWalletByAddress } = await import("@/services/api/wallets");
 
   const prisma = new PrismaClient({ adapter: createPrismaAdapter() });
 
   const deps: RunnerDeps = {
     db: prisma as unknown as RunnerDbClient,
-    resolveWallet: resolveTrackedWalletByAddress,
+    resolveWallet: (args) => resolveWalletUsingPrismaClient(prisma as unknown as WalletLookupClient, args),
     httpGet: async (url) => {
       const res = await fetch(url);
-      return { status: res.status, body: await res.json().catch(() => undefined) };
+      return { status: res.status, body: await readHttpResponseBody(res) };
     },
     httpPost: async (url, body) => {
       const res = await fetch(url, {
@@ -1156,7 +1334,7 @@ async function main(): Promise<void> {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      return { status: res.status, body: await res.json().catch(() => undefined) };
+      return { status: res.status, body: await readHttpResponseBody(res) };
     },
     now: () => new Date(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
