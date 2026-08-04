@@ -7,12 +7,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CLEAN_STOP_REASONS,
   DEFAULT_MAX_WINDOWS,
   MAX_WINDOWS_HARD_CAP,
   SUPPORTED_CHAIN_ID,
   WINDOW_SIZE_HARD_CAP_BLOCKS,
   buildManualSyncRequestBody,
   checkEnv,
+  computeExitCode,
   computeForwardWindowPlan,
   parseRunnerCliArgs,
   policyLabelForBatchWindow,
@@ -171,6 +173,7 @@ function completedManualRun(overrides: Partial<RunnerSyncRunRecord> = {}): Runne
     stage: "COMPLETED",
     chainId: FIXTURE_CHAIN_ID,
     walletId: FIXTURE_WALLET_ID,
+    policyLabel: "wallet-forward-sync-window-1",
     sourceFamilies: ["TRANSFERS"],
     startBlock: 25_078_549n,
     endBlock: 25_079_548n,
@@ -386,13 +389,18 @@ describe("cursor expectation and adjacency gates", () => {
 // ─── Terminal state / cursor postcondition verification ────────────────────────
 
 describe("terminal state and cursor postcondition verification", () => {
-  it("verifyWindowTerminalState passes for a clean COMPLETED run", () => {
+  const expectedIdentity = {
+    expectedWalletId: FIXTURE_WALLET_ID,
+    expectedChainId: FIXTURE_CHAIN_ID,
+    expectedPolicyLabel: "wallet-forward-sync-window-1",
+    expectedStartBlock: 25_078_549n,
+    expectedEndBlock: 25_079_548n,
+  };
+
+  it("verifyWindowTerminalState passes for a clean COMPLETED run with correct walletId and policyLabel", () => {
     const result = verifyWindowTerminalState({
       run: completedManualRun(),
-      expectedWalletId: FIXTURE_WALLET_ID,
-      expectedChainId: FIXTURE_CHAIN_ID,
-      expectedStartBlock: 25_078_549n,
-      expectedEndBlock: 25_079_548n,
+      ...expectedIdentity,
     });
     expect(result.ok).toBe(true);
   });
@@ -400,10 +408,7 @@ describe("terminal state and cursor postcondition verification", () => {
   it("fails on any warning", () => {
     const result = verifyWindowTerminalState({
       run: completedManualRun({ warningCount: 1, warningDetails: ["some-warning"] }),
-      expectedWalletId: FIXTURE_WALLET_ID,
-      expectedChainId: FIXTURE_CHAIN_ID,
-      expectedStartBlock: 25_078_549n,
-      expectedEndBlock: 25_079_548n,
+      ...expectedIdentity,
     });
     expect(result.ok).toBe(false);
   });
@@ -411,10 +416,7 @@ describe("terminal state and cursor postcondition verification", () => {
   it("fails on non-COMPLETED status", () => {
     const result = verifyWindowTerminalState({
       run: completedManualRun({ status: "FAILED", errorMessage: "boom" }),
-      expectedWalletId: FIXTURE_WALLET_ID,
-      expectedChainId: FIXTURE_CHAIN_ID,
-      expectedStartBlock: 25_078_549n,
-      expectedEndBlock: 25_079_548n,
+      ...expectedIdentity,
     });
     expect(result.ok).toBe(false);
   });
@@ -422,33 +424,70 @@ describe("terminal state and cursor postcondition verification", () => {
   it("fails on unexpected source family", () => {
     const result = verifyWindowTerminalState({
       run: completedManualRun({ sourceFamilies: ["DEX"] }),
-      expectedWalletId: FIXTURE_WALLET_ID,
-      expectedChainId: FIXTURE_CHAIN_ID,
-      expectedStartBlock: 25_078_549n,
-      expectedEndBlock: 25_079_548n,
+      ...expectedIdentity,
     });
     expect(result.ok).toBe(false);
   });
 
-  it("fails on unexpected wallet or chain", () => {
-    expect(
-      verifyWindowTerminalState({
-        run: completedManualRun({ walletId: "other-wallet" }),
-        expectedWalletId: FIXTURE_WALLET_ID,
-        expectedChainId: FIXTURE_CHAIN_ID,
-        expectedStartBlock: 25_078_549n,
-        expectedEndBlock: 25_079_548n,
-      }).ok,
-    ).toBe(false);
+  // ─── Blocker 1: exact SyncRun identity (walletId + policyLabel) ────────────
+
+  it("fails when walletId is null (a chain-wide run) even though every other field matches", () => {
+    const result = verifyWindowTerminalState({
+      run: completedManualRun({ walletId: null }),
+      ...expectedIdentity,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.reasons.some((r) => r.includes("walletId"))).toBe(true);
+  });
+
+  it("fails on a wrong (non-null) walletId", () => {
+    const result = verifyWindowTerminalState({
+      run: completedManualRun({ walletId: "other-wallet" }),
+      ...expectedIdentity,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.reasons.some((r) => r.includes("walletId"))).toBe(true);
+  });
+
+  it("fails on a wrong chainId", () => {
     expect(
       verifyWindowTerminalState({
         run: completedManualRun({ chainId: 8453 }),
-        expectedWalletId: FIXTURE_WALLET_ID,
-        expectedChainId: FIXTURE_CHAIN_ID,
-        expectedStartBlock: 25_078_549n,
-        expectedEndBlock: 25_079_548n,
+        ...expectedIdentity,
       }).ok,
     ).toBe(false);
+  });
+
+  it("fails on a wrong policyLabel", () => {
+    const result = verifyWindowTerminalState({
+      run: completedManualRun({ policyLabel: "wallet-forward-sync-window-2" }),
+      ...expectedIdentity,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.reasons.some((r) => r.includes("policyLabel"))).toBe(true);
+  });
+
+  it("fails when policyLabel is empty (nullable-equivalent for this field)", () => {
+    const result = verifyWindowTerminalState({
+      run: completedManualRun({ policyLabel: "" }),
+      ...expectedIdentity,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("a chain-wide run (walletId: null) can never satisfy a wallet-scoped window verification, regardless of every other field matching exactly", () => {
+    const chainWideRun = completedManualRun({ walletId: null });
+    // Every other field (chainId, policyLabel, range, sourceFamilies, status,
+    // warnings, errors) matches expectedIdentity exactly — only walletId
+    // differs — proving walletId alone is a sufficient and necessary gate.
+    const result = verifyWindowTerminalState({
+      run: chainWideRun,
+      ...expectedIdentity,
+    });
+    expect(result.ok).toBe(false);
   });
 
   it("verifyForwardCursorPostcondition requires the anchor unchanged and toBlock advanced exactly", () => {
@@ -642,7 +681,13 @@ describe("orchestrator — execute", () => {
         (db.syncRun.findUnique as unknown) = async (args: unknown) => {
           const id = (args as { where: { id: string } }).where.id;
           if (id !== runId) return null;
-          return completedManualRun({ id: runId, startBlock, endBlock, latestSafeBlock: endBlock });
+          return completedManualRun({
+            id: runId,
+            policyLabel: `wallet-forward-sync-window-${callCount}`,
+            startBlock,
+            endBlock,
+            latestSafeBlock: endBlock,
+          });
         };
         cursorTo = endBlock;
         return { status: 202, body: { data: { runId } } };
@@ -813,5 +858,106 @@ describe("orchestrator — execute", () => {
       const serialized = serializeEvidence(record as EvidenceRecord);
       expect(() => JSON.parse(serialized)).not.toThrow();
     }
+  });
+});
+
+// ─── Blocker 2: exit-code allowlist at the CLI/main boundary ───────────────────
+//
+// main() itself calls process.exit and isn't unit-testable directly, but
+// computeExitCode(summary.stoppedReason) is the exact expression main() uses
+// to set process.exitCode. Exercising it directly against both literal stop
+// reasons and real runWalletForwardSyncRunner() outcomes proves the CLI
+// boundary's exit behavior without spawning a subprocess.
+
+describe("exit-code allowlist (CLI/main boundary)", () => {
+  it("CLEAN_STOP_REASONS is limited to genuine non-error completion", () => {
+    expect(CLEAN_STOP_REASONS.has("max_windows_reached")).toBe(true);
+    expect(CLEAN_STOP_REASONS.size).toBe(1);
+  });
+
+  it("clean dry-run completion (max_windows_reached) exits 0", () => {
+    expect(computeExitCode("max_windows_reached")).toBe(0);
+  });
+
+  it("clean max-window completion exits 0", () => {
+    expect(computeExitCode("max_windows_reached")).toBe(0);
+  });
+
+  it("every documented hard-stop reason exits 1, including ones that do not end with _failed", () => {
+    const hardStopReasons = [
+      "wallet_not_found",
+      "cursor_expectation_mismatch",
+      "first_window_start_mismatch",
+      "adjacency_violation",
+      "active_operation_conflict",
+      "policy_label_collision",
+      "server_unhealthy",
+      "fabricated_contamination_pre_gate",
+      "manual_sync_submit_failed",
+      "poll_timeout",
+      "invariant_failed_after_run",
+    ];
+    for (const reason of hardStopReasons) {
+      expect(computeExitCode(reason)).toBe(1);
+    }
+  });
+
+  it("fails closed for any unknown/future stop reason", () => {
+    expect(computeExitCode("some_new_reason_nobody_added_to_the_allowlist")).toBe(1);
+    expect(computeExitCode("")).toBe(1);
+  });
+
+  it("cursor mismatch (via the real orchestrator) exits 1", async () => {
+    const db = makeFakeDb({ cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: FIXTURE_CURSOR_TO + 1n } });
+    const { deps } = makeFakeDeps({ db });
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions(), deps);
+    expect(summary.stoppedReason).toBe("cursor_expectation_mismatch");
+    expect(computeExitCode(summary.stoppedReason)).toBe(1);
+  });
+
+  it("contamination (via the real orchestrator) exits 1", async () => {
+    const db = makeFakeDb({ contaminationRows: 1 });
+    const { deps } = makeFakeDeps({ db });
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions(), deps);
+    expect(summary.stoppedReason).toBe("fabricated_contamination_pre_gate");
+    expect(computeExitCode(summary.stoppedReason)).toBe(1);
+  });
+
+  it("active-operation conflict (via the real orchestrator) exits 1", async () => {
+    const db = makeFakeDb({ activeRunCount: 1 });
+    const { deps } = makeFakeDeps({ db });
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions(), deps);
+    expect(summary.stoppedReason).toBe("active_operation_conflict");
+    expect(computeExitCode(summary.stoppedReason)).toBe(1);
+  });
+
+  it("poll timeout (via the real orchestrator) exits 1", async () => {
+    const db = makeFakeDb({ runsById: {} }); // findUnique never resolves to a terminal run
+    const { deps } = makeFakeDeps({ db });
+    const summary = await runWalletForwardSyncRunner(
+      baseRunnerOptions({ execute: true, maxWindows: 1, pollTimeoutMs: 5, pollIntervalMs: 1 }),
+      deps,
+    );
+    expect(summary.stoppedReason).toBe("poll_timeout");
+    expect(computeExitCode(summary.stoppedReason)).toBe(1);
+  });
+
+  it("wallet not found (via the real orchestrator) exits 1", async () => {
+    const db = makeFakeDb();
+    const { deps } = makeFakeDeps({ db });
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions(), {
+      ...deps,
+      resolveWallet: async () => null,
+    });
+    expect(summary.stoppedReason).toBe("wallet_not_found");
+    expect(computeExitCode(summary.stoppedReason)).toBe(1);
+  });
+
+  it("clean batch completion (via the real orchestrator, dry-run) exits 0", async () => {
+    const db = makeFakeDb();
+    const { deps } = makeFakeDeps({ db });
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions({ maxWindows: 5 }), deps);
+    expect(summary.stoppedReason).toBe("max_windows_reached");
+    expect(computeExitCode(summary.stoppedReason)).toBe(0);
   });
 });

@@ -252,6 +252,7 @@ export type RunnerSyncRunRecord = {
   stage: string;
   chainId: number;
   walletId: string | null;
+  policyLabel: string;
   sourceFamilies: readonly string[];
   startBlock: bigint | null;
   endBlock: bigint | null;
@@ -268,6 +269,7 @@ export function verifyWindowTerminalState(args: {
   run: RunnerSyncRunRecord;
   expectedWalletId: string;
   expectedChainId: number;
+  expectedPolicyLabel: string;
   expectedStartBlock: bigint;
   expectedEndBlock: bigint;
 }): { ok: true } | { ok: false; reasons: string[] } {
@@ -301,11 +303,17 @@ export function verifyWindowTerminalState(args: {
   ) {
     reasons.push(`expected sourceFamilies ["TRANSFERS"], got ${JSON.stringify(run.sourceFamilies)}`);
   }
-  if (run.walletId !== null && run.walletId !== args.expectedWalletId) {
+  // The runner always submits a wallet-scoped request, so the reserved
+  // SyncRun must carry the exact resolved wallet id — a null walletId (e.g.
+  // a chain-wide run) must never satisfy a wallet-scoped window verification.
+  if (run.walletId !== args.expectedWalletId) {
     reasons.push(`expected walletId ${args.expectedWalletId}, got ${run.walletId}`);
   }
   if (run.chainId !== args.expectedChainId) {
     reasons.push(`expected chainId ${args.expectedChainId}, got ${run.chainId}`);
+  }
+  if (run.policyLabel !== args.expectedPolicyLabel) {
+    reasons.push(`expected policyLabel ${args.expectedPolicyLabel}, got ${run.policyLabel}`);
   }
   if (run.startBlock !== args.expectedStartBlock) {
     reasons.push(`expected startBlock ${args.expectedStartBlock}, got ${run.startBlock}`);
@@ -965,6 +973,7 @@ export async function runWalletForwardSyncRunner(
       run: polled.run,
       expectedWalletId: wallet.id,
       expectedChainId: options.chainId,
+      expectedPolicyLabel: plan.policyLabel,
       expectedStartBlock: plan.startBlock,
       expectedEndBlock: plan.endBlock,
     });
@@ -1086,6 +1095,22 @@ async function stop(
   return { stoppedReason: reason, detail, windowsCompleted, lastWindowNumber };
 }
 
+// ─── Exit-code gate ─────────────────────────────────────────────────────────────
+
+/**
+ * The only stoppedReason values that represent genuine, non-error completion.
+ * Every other reason — including any reason not in this set, whether it
+ * exists in this file today or is added later — is treated as a hard stop
+ * and exits nonzero. This is an explicit allowlist, not a suffix/pattern
+ * match: adding a new stop reason to the orchestrator without adding it here
+ * fails closed (exit 1) rather than silently succeeding.
+ */
+export const CLEAN_STOP_REASONS: ReadonlySet<string> = new Set(["max_windows_reached"]);
+
+export function computeExitCode(stoppedReason: string): 0 | 1 {
+  return CLEAN_STOP_REASONS.has(stoppedReason) ? 0 : 1;
+}
+
 // ─── CLI entrypoint ────────────────────────────────────────────────────────────
 
 function safeStringify(value: unknown): string {
@@ -1141,9 +1166,7 @@ async function main(): Promise<void> {
   try {
     const summary = await runWalletForwardSyncRunner(parsed.options, deps);
     console.log(safeStringify(summary));
-    if (summary.stoppedReason === "invariant_failed_after_run" || summary.stoppedReason.endsWith("_failed")) {
-      process.exitCode = 1;
-    }
+    process.exitCode = computeExitCode(summary.stoppedReason);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`wallet-forward-sync-runner error: ${message}`);
