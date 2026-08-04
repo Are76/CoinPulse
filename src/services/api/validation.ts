@@ -113,6 +113,11 @@ export const rebuildRequestSchema = z
     },
   );
 
+export const walletOnboardingStatusRequestSchema = z.object({
+  walletAddress: walletAddressSchema,
+  chainId: chainIdSchema,
+});
+
 export const walletImportRequestSchema = z.object({
   walletAddress: walletAddressSchema,
   chainId: chainIdSchema,
@@ -154,6 +159,7 @@ export const priceIngestRequestSchema = z.object({
 });
 
 export type DashboardRequestInput = z.infer<typeof dashboardRequestSchema>;
+export type WalletOnboardingStatusRequestInput = z.infer<typeof walletOnboardingStatusRequestSchema>;
 export type ManualSyncRequestInput = z.infer<typeof manualSyncRequestSchema>;
 export type RebuildRequestInput = z.infer<typeof rebuildRequestSchema>;
 export type WalletImportRequestInput = z.infer<typeof walletImportRequestSchema>;

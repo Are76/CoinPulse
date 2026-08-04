@@ -21,6 +21,7 @@ import {
   SubmittedWalletSourceIndicator,
   TokenPositionsTable,
   TrackedWalletSelector,
+  WalletOnboardingStatusSection,
   WalletQueryForm,
 } from "@/components/dashboard/dashboard-presenters";
 import {
@@ -42,6 +43,7 @@ import { useDebugHealthQuery } from "@/lib/query/use-debug-health-query";
 import { useDebugStatusQuery } from "@/lib/query/use-debug-status-query";
 import { useLiveSnapshotQuery } from "@/lib/query/use-live-snapshot-query";
 import { useTrackedWalletsQuery } from "@/lib/query/use-tracked-wallets-query";
+import { useWalletOnboardingStatusQuery } from "@/lib/query/use-wallet-onboarding-status-query";
 
 const DEFAULT_CHAIN_ID = "369";
 const DEFAULT_QUOTE_ASSET = "fiat:usd";
@@ -107,6 +109,12 @@ function DashboardScreenContent() {
     dashboardQuery.data !== undefined &&
     dashboardQuery.data.materialization.status === null &&
     !hasMaterializedPositions;
+
+  const onboardingStatusQuery = useWalletOnboardingStatusQuery({
+    walletAddress: submittedParams?.walletAddress ?? "",
+    chainId: submittedParams?.chainId ?? 0,
+    enabled: submittedParams !== null,
+  });
 
   const liveSnapshotQuery = useLiveSnapshotQuery({
     walletAddress: submittedParams?.walletAddress ?? "",
@@ -280,6 +288,13 @@ function DashboardScreenContent() {
 
       {isIdle ? <IdleStateCard /> : null}
       <SubmittedWalletSourceIndicator source={submittedWalletSource} />
+      {submittedParams !== null ? (
+        <WalletOnboardingStatusSection
+          onboarding={onboardingStatusQuery.data?.onboarding}
+          isLoading={onboardingStatusQuery.isLoading}
+          isError={onboardingStatusQuery.isError}
+        />
+      ) : null}
       {errorMessage !== null ? <ErrorStateCard message={errorMessage} /> : null}
       {submittedParams !== null && dashboardQuery.isLoading ? <LoadingStateCard /> : null}
 

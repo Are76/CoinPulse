@@ -35,6 +35,8 @@ export const queryKeys = {
     ["transactions", schemaVersion, filters] as const,
   wallets: {
     tracked: (chainId: number) => ["wallets", "tracked", chainId] as const,
+    onboardingStatus: (params: { walletAddress: string; chainId: number }) =>
+      ["wallets", "onboarding-status", params.chainId, params.walletAddress.trim().toLowerCase()] as const,
   },
   liveSnapshot: (params: { chainId: number; walletAddress: string; quoteAsset: string }) =>
     [

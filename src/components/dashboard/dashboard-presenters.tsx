@@ -21,6 +21,7 @@ import { TimestampLabel } from "@/components/ui/value/timestamp-label";
 import { ValueDisplay } from "@/components/ui/value/value-display";
 import type { TrackedWalletDto } from "@/lib/api/debug-client";
 import { findTrackedWalletMatch } from "@/components/dashboard/dashboard-screen-helpers";
+import type { WalletOnboardingStatusDto } from "@/services/operations/wallet-onboarding-status";
 import type {
   DashboardLedgerCoverageDto,
   DashboardLpPositionDto,
@@ -222,6 +223,75 @@ export function TrackedWalletSelector(args: {
 export function SubmittedWalletSourceIndicator({ source }: { source: string | null }) {
   if (source === null) return null;
   return <p className="text-sm" style={{ color: "#586070" }}>{source}</p>;
+}
+
+/* ── Wallet onboarding status ────────────────────────────────────────────── */
+
+const ONBOARDING_STATUS_LABEL: Record<WalletOnboardingStatusDto["status"], string> = {
+  TRACKED_NOT_SYNCED: "Not synced",
+  SYNC_IN_PROGRESS: "Sync in progress",
+  SYNC_FAILED: "Sync failed",
+  CANONICAL_STATE_PARTIAL: "Partial coverage",
+  CANONICAL_STATE_READY: "Ready",
+  CANONICAL_STATE_WARNING: "Needs review",
+};
+
+const ONBOARDING_STATUS_TONE: Record<WalletOnboardingStatusDto["status"], BadgeTone> = {
+  TRACKED_NOT_SYNCED: "neutral",
+  SYNC_IN_PROGRESS: "info",
+  SYNC_FAILED: "danger",
+  CANONICAL_STATE_PARTIAL: "stale",
+  CANONICAL_STATE_READY: "fresh",
+  CANONICAL_STATE_WARNING: "warn",
+};
+
+/**
+ * Canonical, backend-derived onboarding/sync-readiness status for the
+ * selected wallet. Always rendered above any live-snapshot or ledger-derived
+ * sections so the wallet's real backend state stays visible regardless of
+ * which fallback path the dashboard body takes below it (see D-035 — a live
+ * RPC snapshot is never accounting truth and must never hide this status).
+ */
+export function WalletOnboardingStatusSection({
+  onboarding,
+  isLoading,
+  isError,
+}: {
+  onboarding: WalletOnboardingStatusDto | undefined;
+  isLoading: boolean;
+  isError: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <SurfaceCard>
+        <p className="text-sm" style={{ color: "#586070" }}>Loading onboarding status…</p>
+      </SurfaceCard>
+    );
+  }
+
+  if (isError || onboarding === undefined) {
+    return (
+      <SurfaceCard>
+        <p className="text-sm" style={{ color: "#586070" }}>Could not load onboarding status.</p>
+      </SurfaceCard>
+    );
+  }
+
+  return (
+    <SurfaceCard className="flex flex-col gap-2">
+      <div className="flex items-center gap-3">
+        <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: "#586070", letterSpacing: "0.08em" }}>
+          Onboarding status
+        </span>
+        <LabelBadge
+          label={ONBOARDING_STATUS_LABEL[onboarding.status]}
+          tone={ONBOARDING_STATUS_TONE[onboarding.status]}
+          size="sm"
+        />
+      </div>
+      <p className="text-xs" style={{ color: "#a0a8c0" }}>{onboarding.reason}</p>
+    </SurfaceCard>
+  );
 }
 
 /* ── State cards ─────────────────────────────────────────────────────────── */
