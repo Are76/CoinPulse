@@ -147,8 +147,37 @@ const execFileAsync = promisify(execFile);
  * 1000-window live campaign; live rollout is staged separately. */
 export const CAMPAIGN_MAX_WINDOWS_HARD_CAP = 1000;
 export const DEFAULT_CAMPAIGN_CHECKPOINT_INTERVAL = 25;
+/** 25 is the MAXIMUM allowed checkpoint spacing, not merely a default
+ * suggestion — an operator may checkpoint more often, never less. */
+export const MAX_CAMPAIGN_CHECKPOINT_INTERVAL = 25;
+
+/** Fixed HTTP request timeout for the campaign runner's default real HTTP
+ * client (GET /api/debug/health, POST /api/sync/manual). A stuck POST is
+ * especially dangerous because pollTimeoutMs only starts after the POST
+ * resolves — without this, a hung request could block a campaign
+ * indefinitely before the poll-timeout gate ever engages. */
+export const HTTP_REQUEST_TIMEOUT_MS = 60_000;
 
 export const CAMPAIGN_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+
+/** The approved campaign architecture fixes the atomic window at exactly
+ * 1,000 blocks so that the 1,000-window implementation ceiling maps exactly
+ * to a 1,000,000-block maximum campaign span. The shared
+ * `validateWindowSize` primitive intentionally keeps the existing 5-window
+ * runner's broader (up to 1,001 inclusive blocks) semantics — that runner's
+ * external behavior is out of scope here — so the campaign runner enforces
+ * its own stricter, additional gate on top of it. */
+export const CAMPAIGN_REQUIRED_WINDOW_SIZE_BLOCKS = 1_000n;
+
+export function validateCampaignWindowSize(args: { windowSizeBlocks: bigint }): GateResult {
+  if (args.windowSizeBlocks !== CAMPAIGN_REQUIRED_WINDOW_SIZE_BLOCKS) {
+    return {
+      ok: false,
+      reason: `--window-size must equal exactly ${CAMPAIGN_REQUIRED_WINDOW_SIZE_BLOCKS} for the campaign runner (the atomic window is fixed at 1,000 blocks so that ${CAMPAIGN_MAX_WINDOWS_HARD_CAP} windows maps exactly to a 1,000,000-block maximum campaign span); got ${args.windowSizeBlocks}`,
+    };
+  }
+  return { ok: true };
+}
 
 // ─── Campaign window planning (pure) ───────────────────────────────────────────
 
@@ -234,9 +263,22 @@ export function validateCampaignId(args: { campaignId: string }): GateResult {
   return { ok: true };
 }
 
+/**
+ * Checkpoint spacing is bounded to `[1, MAX_CAMPAIGN_CHECKPOINT_INTERVAL]`.
+ * An operator may checkpoint MORE often than every 25 windows (tighter
+ * spacing only strengthens the safety net); a wider spacing is rejected
+ * outright, since it would defeat the approved 25-window checkpoint
+ * baseline.
+ */
 export function validateCheckpointInterval(args: { checkpointIntervalWindows: number }): GateResult {
   if (!Number.isInteger(args.checkpointIntervalWindows) || args.checkpointIntervalWindows < 1) {
     return { ok: false, reason: "--checkpoint-interval must be a positive integer" };
+  }
+  if (args.checkpointIntervalWindows > MAX_CAMPAIGN_CHECKPOINT_INTERVAL) {
+    return {
+      ok: false,
+      reason: `--checkpoint-interval must not exceed ${MAX_CAMPAIGN_CHECKPOINT_INTERVAL} (that is the maximum allowed checkpoint spacing, not merely a default); got ${args.checkpointIntervalWindows}`,
+    };
   }
   return { ok: true };
 }
@@ -446,26 +488,31 @@ export type CampaignCliParseResult =
 export const CAMPAIGN_CLI_USAGE = [
   "Usage: wallet-forward-campaign-runner --wallet-address <0x..> --chain-id <n>",
   "         --expected-cursor-from <blockNumber> --expected-cursor-to <blockNumber>",
-  "         --first-window-start <blockNumber> --window-size <blocks>",
+  "         --first-window-start <blockNumber> --window-size 1000",
   "         --max-windows <1-1000> --authorized-final-block <blockNumber>",
   "         --campaign-id <id> --policy-label-prefix <label>",
-  "         [--checkpoint-interval <n>] [--execute]",
-  "         [--base-url <url>] [--evidence-file <path>]",
+  "         --base-url <url> [--checkpoint-interval <1-25>] [--execute]",
+  "         [--evidence-file <path>]",
   "         [--poll-interval-ms <n>] [--poll-timeout-ms <n>]",
   "",
   "  Dry-run is the default and never submits an HTTP POST.",
   "  --max-windows is bounded to [1, 1000] (implementation ceiling only —",
   "  see docs/wallet-forward-campaign-runbook.md for staged live rollout).",
+  "  --window-size must equal exactly 1000 — the campaign atomic window is",
+  "  fixed, unlike the generic positive --window-size accepted elsewhere.",
   "  --authorized-final-block must align to full --window-size windows",
   "  starting at --first-window-start.",
-  "  --checkpoint-interval defaults to 25.",
+  "  --checkpoint-interval defaults to 25 and may not exceed 25 (that is a",
+  "  maximum spacing, not merely a default — more frequent is allowed).",
+  "  --base-url is REQUIRED and explicit for the campaign runner — it does",
+  "  NOT fall back to OPERATOR_RUNNER_BASE_URL or a localhost default.",
   "  All of --wallet-address, --chain-id, --expected-cursor-from,",
   "  --expected-cursor-to, --first-window-start, --window-size,",
-  "  --max-windows, --authorized-final-block, --campaign-id, and",
-  "  --policy-label-prefix are required — nothing is inferred.",
+  "  --max-windows, --authorized-final-block, --campaign-id,",
+  "  --policy-label-prefix, and --base-url are required — nothing is",
+  "  inferred or defaulted.",
 ].join("\n");
 
-const DEFAULT_BASE_URL = process.env.OPERATOR_RUNNER_BASE_URL ?? "http://localhost:3000";
 const DEFAULT_EVIDENCE_FILE = "operator-evidence/wallet-forward-campaign-runner/evidence.jsonl";
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_POLL_TIMEOUT_MS = 20 * 60 * 1000;
@@ -491,7 +538,10 @@ export function parseCampaignCliArgs(argv: readonly string[]): CampaignCliParseR
   let campaignId: string | undefined;
   let policyLabelPrefix: string | undefined;
   let checkpointIntervalWindows = DEFAULT_CAMPAIGN_CHECKPOINT_INTERVAL;
-  let baseUrl = DEFAULT_BASE_URL;
+  // No default — --base-url must be explicit for the campaign runner (see
+  // Blocker 3 / docs/wallet-forward-campaign-runbook.md). Unlike the
+  // 5-window runner, OPERATOR_RUNNER_BASE_URL is never consulted here.
+  let baseUrl: string | undefined;
   let evidenceFile = DEFAULT_EVIDENCE_FILE;
   let pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
   let pollTimeoutMs = DEFAULT_POLL_TIMEOUT_MS;
@@ -584,8 +634,20 @@ export function parseCampaignCliArgs(argv: readonly string[]): CampaignCliParseR
     }
     if (arg === "--policy-label-prefix") {
       const value = readValue(argv, index);
-      if (value === null || value.trim().length === 0) {
+      if (value === null || value.length === 0) {
         return { ok: false, error: "--policy-label-prefix must be a non-empty string." };
+      }
+      // Reject rather than silently normalize: manualSyncRequestSchema trims
+      // policyLabel server-side, so a prefix with leading/trailing
+      // whitespace would make the runner's collision-check identity differ
+      // from the backend-persisted identity. This also rejects a
+      // whitespace-only value (its trimmed form is empty, so it always
+      // differs from the raw value).
+      if (value !== value.trim()) {
+        return {
+          ok: false,
+          error: "--policy-label-prefix must not have leading or trailing whitespace (it would not match the backend's trimmed policyLabel identity).",
+        };
       }
       policyLabelPrefix = value;
       index += 1;
@@ -654,12 +716,22 @@ export function parseCampaignCliArgs(argv: readonly string[]): CampaignCliParseR
   if (policyLabelPrefix === undefined) {
     return { ok: false, error: "--policy-label-prefix is required." };
   }
+  if (baseUrl === undefined) {
+    return {
+      ok: false,
+      error:
+        "--base-url is required and must be passed explicitly for the campaign runner (it does not fall back to OPERATOR_RUNNER_BASE_URL or a localhost default).",
+    };
+  }
 
   const chainGate = validateSupportedChain({ chainId });
   if (!chainGate.ok) return { ok: false, error: chainGate.reason };
 
   const windowSizeGate = validateWindowSize({ windowSizeBlocks });
   if (!windowSizeGate.ok) return { ok: false, error: windowSizeGate.reason };
+
+  const campaignWindowSizeGate = validateCampaignWindowSize({ windowSizeBlocks });
+  if (!campaignWindowSizeGate.ok) return { ok: false, error: campaignWindowSizeGate.reason };
 
   const maxWindowsGate = validateCampaignMaxWindows({ maxWindows });
   if (!maxWindowsGate.ok) return { ok: false, error: maxWindowsGate.reason };
@@ -757,8 +829,18 @@ async function writeEvidenceOrNull(
   }
 }
 
+/**
+ * Central stop-writing path. `campaignId` is always included in the written
+ * stop record — callers do not need to remember to add it themselves, since
+ * append-only campaign evidence may contain records from multiple
+ * invocations and a stop record without campaignId could not reliably be
+ * attributed to this campaign. `campaignId` is the raw operator-supplied
+ * value (even when the campaign itself is being rejected for an invalid
+ * campaignId) — never an invented identity.
+ */
 async function stopCampaign(
   deps: CampaignDeps,
+  campaignId: string,
   reason: string,
   detail: string | undefined,
   windowsCompleted: number,
@@ -770,7 +852,7 @@ async function stopCampaign(
   // original stop reason, and must never trigger a further POST.
   await writeEvidenceOrNull(
     deps,
-    buildStopEvidenceRecord({ at: deps.now().toISOString(), reason, detail, extra }),
+    buildStopEvidenceRecord({ at: deps.now().toISOString(), reason, detail, extra: { campaignId, ...extra } }),
   );
   return { stoppedReason: reason, detail, windowsCompleted, lastWindowNumber, checkpointsPassed };
 }
@@ -804,35 +886,42 @@ export async function runWalletForwardCampaignRunner(
   deps: CampaignDeps,
 ): Promise<CampaignSummary> {
   const campaignStartAt = deps.now().toISOString();
+  const campaignId = options.campaignId;
 
-  // Re-derive alignment at runtime — never trust that CLI parsing already
-  // validated it, since orchestrator callers (including tests) may construct
-  // CampaignCliOptions directly.
+  // ── Step 1: validate immutable options. Re-derived at runtime — never
+  // trust that CLI parsing already validated these, since orchestrator
+  // callers (including tests) may construct CampaignCliOptions directly. ──
   const alignment = validateAuthorizedFinalBlockAlignment({
     firstWindowStart: options.firstWindowStart,
     windowSizeBlocks: options.windowSizeBlocks,
     authorizedFinalBlock: options.authorizedFinalBlock,
   });
   if (!alignment.ok) {
-    return stopCampaign(deps, "authorized_final_block_misaligned", alignment.reason, 0, null, 0);
+    return stopCampaign(deps, campaignId, "authorized_final_block_misaligned", alignment.reason, 0, null, 0);
   }
   const maxWindowsGate = validateCampaignMaxWindows({ maxWindows: options.maxWindows });
   if (!maxWindowsGate.ok) {
-    return stopCampaign(deps, "invalid_max_windows", maxWindowsGate.reason, 0, null, 0);
+    return stopCampaign(deps, campaignId, "invalid_max_windows", maxWindowsGate.reason, 0, null, 0);
   }
   const campaignIdGate = validateCampaignId({ campaignId: options.campaignId });
   if (!campaignIdGate.ok) {
-    return stopCampaign(deps, "invalid_campaign_id", campaignIdGate.reason, 0, null, 0);
+    return stopCampaign(deps, campaignId, "invalid_campaign_id", campaignIdGate.reason, 0, null, 0);
+  }
+  const campaignWindowSizeGate = validateCampaignWindowSize({ windowSizeBlocks: options.windowSizeBlocks });
+  if (!campaignWindowSizeGate.ok) {
+    return stopCampaign(deps, campaignId, "invalid_window_size", campaignWindowSizeGate.reason, 0, null, 0);
   }
 
   const effectiveMaxWindows = Math.min(options.maxWindows, alignment.windowCount);
 
+  // ── Step 2: obtain approved local HEAD. ──
   let campaignStartHead: string;
   try {
     campaignStartHead = await deps.getGitHead();
   } catch (err) {
     return stopCampaign(
       deps,
+      campaignId,
       "git_head_unavailable",
       err instanceof Error ? err.message : String(err),
       0,
@@ -841,14 +930,59 @@ export async function runWalletForwardCampaignRunner(
     );
   }
 
-  const startHealth = await checkServerHealthDetailed(deps.httpGet, options.baseUrl);
-  const campaignStartAppEnv = startHealth.appEnv;
+  // ── Step 3: verify clean worktree. This is a mandatory STARTUP gate,
+  // independent of the periodic checkpoint gate — with Stage 1 = 10 windows
+  // and a default checkpoint interval of 25, a short campaign could
+  // otherwise complete entirely from a dirty working tree without this ever
+  // being checked. No window may reach POST before this passes. ──
+  const workingTreeCleanAtStart = await deps.isWorkingTreeClean();
+  if (!workingTreeCleanAtStart) {
+    return stopCampaign(
+      deps,
+      campaignId,
+      "working_tree_dirty",
+      "working tree is not clean at campaign start",
+      0,
+      null,
+      0,
+    );
+  }
 
+  // ── Step 4: establish a healthy environment baseline. Fail closed — a
+  // campaign must never begin from an unreachable or non-OK backend, and
+  // campaignStartAppEnv (used by every later checkpoint's drift check) must
+  // only ever be captured from a verified-OK baseline, never from a failed
+  // check. ──
+  const startHealth = await checkServerHealthDetailed(deps.httpGet, options.baseUrl);
+  if (!startHealth.gate.ok) {
+    return stopCampaign(
+      deps,
+      campaignId,
+      "initial_health_baseline_failed",
+      (startHealth.gate as { ok: false; reason: string }).reason,
+      0,
+      null,
+      0,
+    );
+  }
+  const campaignStartAppEnv = startHealth.appEnv;
+  const campaignStartBaseUrl = options.baseUrl;
+
+  // ── Step 5: resolve wallet / canonical preflight. ──
+  const wallet = await deps.resolveWallet({ walletAddress: options.walletAddress, chainId: options.chainId });
+  if (!wallet) {
+    return stopCampaign(deps, campaignId, "wallet_not_found", undefined, 0, null, 0);
+  }
+
+  // ── Step 6: persist campaign_start evidence. Only reached once every
+  // mandatory startup safety gate above has passed — a written
+  // campaign_start record therefore never implies a valid campaign started
+  // before those gates ran. ──
   const startWrite = await writeEvidenceOrNull(deps, {
     kind: "campaign_start",
     at: campaignStartAt,
     mode: options.execute ? "execute" : "dry-run",
-    campaignId: options.campaignId,
+    campaignId,
     walletAddress: options.walletAddress,
     chainId: options.chainId,
     sourceFamilies: [...WALLET_FORWARD_SYNC_SOURCE_FAMILIES],
@@ -864,17 +998,13 @@ export async function runWalletForwardCampaignRunner(
     policyLabelPrefix: options.policyLabelPrefix,
     checkpointIntervalWindows: options.checkpointIntervalWindows,
     campaignStartHead,
-    baseUrl: options.baseUrl,
+    baseUrl: campaignStartBaseUrl,
   });
   if (!startWrite.ok) {
     return { stoppedReason: "evidence_append_failed", detail: startWrite.message, windowsCompleted: 0, lastWindowNumber: null, checkpointsPassed: 0 };
   }
 
-  const wallet = await deps.resolveWallet({ walletAddress: options.walletAddress, chainId: options.chainId });
-  if (!wallet) {
-    return stopCampaign(deps, "wallet_not_found", undefined, 0, null, 0);
-  }
-
+  // ── Step 7: begin window planning. ──
   let windowsCompleted = 0;
   let lastWindowNumber: number | null = null;
   let checkpointsPassed = 0;
@@ -897,7 +1027,7 @@ export async function runWalletForwardCampaignRunner(
         expectedCursorToBlock,
       });
       if (!cursorGate.ok) {
-        return stopCampaign(deps, "cursor_expectation_mismatch", cursorGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
+        return stopCampaign(deps, campaignId, "cursor_expectation_mismatch", cursorGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
       }
 
       const planningToBlock =
@@ -922,7 +1052,7 @@ export async function runWalletForwardCampaignRunner(
           expectedFirstWindowStart: options.firstWindowStart,
         });
         if (!firstWindowGate.ok) {
-          return stopCampaign(deps, "first_window_start_mismatch", firstWindowGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
+          return stopCampaign(deps, campaignId, "first_window_start_mismatch", firstWindowGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
         }
       }
 
@@ -931,7 +1061,7 @@ export async function runWalletForwardCampaignRunner(
         proposedStartBlock: range.startBlock,
       });
       if (!adjacencyGate.ok) {
-        return stopCampaign(deps, "adjacency_violation", adjacencyGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
+        return stopCampaign(deps, campaignId, "adjacency_violation", adjacencyGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
       }
 
       const plan = computeCampaignWindowPlan({
@@ -949,18 +1079,18 @@ export async function runWalletForwardCampaignRunner(
         authorizedFinalBlock: options.authorizedFinalBlock,
       });
       if (!finalBlockGate.ok) {
-        return stopCampaign(deps, "authorized_final_block_exceeded", finalBlockGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
+        return stopCampaign(deps, campaignId, "authorized_final_block_exceeded", finalBlockGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
       }
 
       const labelLengthGate = validatePolicyLabelLength({ policyLabel: plan.policyLabel });
       if (!labelLengthGate.ok) {
-        return stopCampaign(deps, "policy_label_overlong", labelLengthGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
+        return stopCampaign(deps, campaignId, "policy_label_overlong", labelLengthGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
       }
 
       const activeRunCount = await countActiveOperations(deps.db);
       const activeOpGate = validateNoActiveOperation({ activeRunCount });
       if (!activeOpGate.ok) {
-        return stopCampaign(deps, "active_operation_conflict", activeOpGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
+        return stopCampaign(deps, campaignId, "active_operation_conflict", activeOpGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
       }
 
       const existingLabels = await listActivePolicyLabels(deps.db, options.chainId);
@@ -969,12 +1099,12 @@ export async function runWalletForwardCampaignRunner(
         existingPolicyLabels: existingLabels,
       });
       if (!labelGate.ok) {
-        return stopCampaign(deps, "policy_label_collision", labelGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
+        return stopCampaign(deps, campaignId, "policy_label_collision", labelGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
       }
 
       const healthCheck = await checkServerHealthDetailed(deps.httpGet, options.baseUrl);
       if (!healthCheck.gate.ok) {
-        return stopCampaign(deps, "server_unhealthy", (healthCheck.gate as { ok: false; reason: string }).reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
+        return stopCampaign(deps, campaignId, "server_unhealthy", (healthCheck.gate as { ok: false; reason: string }).reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
       }
 
       const preContamination = await checkFabricatedContamination(deps.db, {
@@ -986,6 +1116,7 @@ export async function runWalletForwardCampaignRunner(
       if (preContamination.rowCount > 0) {
         return stopCampaign(
           deps,
+          campaignId,
           "fabricated_contamination_pre_gate",
           `${preContamination.rowCount} contaminated row(s) detected in the proposed range; do not submit`,
           windowsCompleted,
@@ -1043,6 +1174,7 @@ export async function runWalletForwardCampaignRunner(
           if (!recovery.ok) {
             return stopCampaign(
               deps,
+              campaignId,
               "ambiguous_submission_unrecoverable",
               `POST /api/sync/manual threw (${err instanceof Error ? err.message : String(err)}); ${recovery.reason}`,
               windowsCompleted,
@@ -1061,6 +1193,7 @@ export async function runWalletForwardCampaignRunner(
         if (!recoveredRunId && (!postResponse || postResponse.status !== 202 || !runId)) {
           return stopCampaign(
             deps,
+            campaignId,
             "manual_sync_submit_failed",
             `POST /api/sync/manual returned status ${postResponse?.status ?? "unknown"}`,
             windowsCompleted,
@@ -1085,6 +1218,7 @@ export async function runWalletForwardCampaignRunner(
         if (!polled.ok) {
           return stopCampaign(
             deps,
+            campaignId,
             "poll_timeout",
             `SyncRun ${runId} did not reach a terminal state within ${options.pollTimeoutMs}ms`,
             windowsCompleted,
@@ -1195,6 +1329,7 @@ export async function runWalletForwardCampaignRunner(
         if (!allOk) {
           return stopCampaign(
             deps,
+            campaignId,
             "invariant_failed_after_run",
             postRunFailureReasons.join("; "),
             windowsCompleted,
@@ -1224,7 +1359,7 @@ export async function runWalletForwardCampaignRunner(
           workingTreeClean,
           healthGate: checkpointHealth.gate,
           baseUrl: options.baseUrl,
-          campaignStartBaseUrl: options.baseUrl,
+          campaignStartBaseUrl,
           appEnv: checkpointHealth.appEnv,
           campaignStartAppEnv,
           expectedCursor: { fromBlock: options.expectedCursorFromBlock, toBlock: expectedCursorToBlock },
@@ -1256,6 +1391,7 @@ export async function runWalletForwardCampaignRunner(
         if (!checkpointResult.ok) {
           return stopCampaign(
             deps,
+            campaignId,
             "checkpoint_failed",
             checkpointResult.reasons.join("; "),
             windowsCompleted,
@@ -1272,7 +1408,12 @@ export async function runWalletForwardCampaignRunner(
       // out of this function.
       await writeEvidenceOrNull(
         deps,
-        buildStopEvidenceRecord({ at: deps.now().toISOString(), reason: "unexpected_error", detail: message }),
+        buildStopEvidenceRecord({
+          at: deps.now().toISOString(),
+          reason: "unexpected_error",
+          detail: message,
+          extra: { campaignId },
+        }),
       );
       return { stoppedReason: "unexpected_error", detail: message, windowsCompleted, lastWindowNumber, checkpointsPassed };
     }
@@ -1281,10 +1422,16 @@ export async function runWalletForwardCampaignRunner(
   const stoppedReason =
     options.maxWindows <= alignment.windowCount ? "max_windows_reached" : "authorized_final_block_reached";
 
-  await writeEvidenceOrNull(deps, {
+  // Capture the campaign_summary write result. All canonical windows have
+  // already completed at this point — there is no further POST to gate —
+  // but the operator must never receive a clean completion status (exit 0)
+  // when this mandatory final provenance record was not actually written.
+  // Canonical completed windows are never rolled back or retried because of
+  // this; only the reported outcome changes.
+  const summaryWrite = await writeEvidenceOrNull(deps, {
     kind: "campaign_summary",
     at: deps.now().toISOString(),
-    campaignId: options.campaignId,
+    campaignId,
     stoppedReason,
     windowsCompleted,
     lastWindowNumber,
@@ -1292,6 +1439,15 @@ export async function runWalletForwardCampaignRunner(
     approvedMaxWindows: options.maxWindows,
     authorizedFinalBlock: options.authorizedFinalBlock.toString(),
   });
+  if (!summaryWrite.ok) {
+    return {
+      stoppedReason: "evidence_append_failed",
+      detail: summaryWrite.message,
+      windowsCompleted,
+      lastWindowNumber,
+      checkpointsPassed,
+    };
+  }
 
   return { stoppedReason, windowsCompleted, lastWindowNumber, checkpointsPassed };
 }
@@ -1349,8 +1505,14 @@ async function main(): Promise<void> {
   const deps: CampaignDeps = {
     db: prisma as unknown as RunnerDbClient,
     resolveWallet: (args) => resolveWalletUsingPrismaClient(prisma as unknown as WalletLookupClient, args),
+    // Fixed request timeout on both calls (see HTTP_REQUEST_TIMEOUT_MS doc
+    // comment). A timed-out GET fails the health gate closed (identical to
+    // any other network error). A timed-out POST throws exactly like any
+    // other network failure, so it flows through the existing
+    // ambiguous-submission recovery path unchanged — never an automatic
+    // retry of the POST itself.
     httpGet: async (url) => {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS) });
       return { status: res.status, body: await readHttpResponseBody(res) };
     },
     httpPost: async (url, body) => {
@@ -1358,6 +1520,7 @@ async function main(): Promise<void> {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
       });
       return { status: res.status, body: await readHttpResponseBody(res) };
     },

@@ -9,7 +9,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   CAMPAIGN_MAX_WINDOWS_HARD_CAP,
+  CAMPAIGN_REQUIRED_WINDOW_SIZE_BLOCKS,
   DEFAULT_CAMPAIGN_CHECKPOINT_INTERVAL,
+  MAX_CAMPAIGN_CHECKPOINT_INTERVAL,
+  HTTP_REQUEST_TIMEOUT_MS,
   CAMPAIGN_CLEAN_STOP_REASONS,
   campaignWindowPolicyLabel,
   classifyAmbiguousSubmissionRecovery,
@@ -22,6 +25,7 @@ import {
   validateAuthorizedFinalBlockAlignment,
   validateCampaignId,
   validateCampaignMaxWindows,
+  validateCampaignWindowSize,
   validateCheckpointInterval,
   validateLongestGeneratedLabel,
   validateWithinAuthorizedFinalBlock,
@@ -78,6 +82,7 @@ function requiredArgv(overrides: Record<string, string> = {}, omit: string[] = [
     "--authorized-final-block": finalBlockForWindows(3).toString(),
     "--campaign-id": FIXTURE_CAMPAIGN_ID,
     "--policy-label-prefix": FIXTURE_PREFIX,
+    "--base-url": "http://localhost:3100",
     ...overrides,
   };
   const argv: string[] = [];
@@ -183,8 +188,13 @@ function makeFakeDb(
 function makeFakeDeps(args: {
   db: RunnerDbClient;
   httpPost?: CampaignDeps["httpPost"];
+  httpGet?: CampaignDeps["httpGet"];
   clockStart?: number;
   workingTreeClean?: boolean;
+  /** If provided, overrides `workingTreeClean` and returns one value per
+   * successive `isWorkingTreeClean()` call (startup, then each checkpoint),
+   * holding the last entry once exhausted. */
+  workingTreeCleanSequence?: boolean[];
   headSequence?: string[];
   evidenceWritable?: boolean;
   failEvidenceAfter?: number;
@@ -195,6 +205,8 @@ function makeFakeDeps(args: {
   let writeCount = 0;
   const heads = args.headSequence ?? ["head-1"];
   let headIndex = 0;
+  const treeCleanSequence = args.workingTreeCleanSequence;
+  let treeCleanIndex = 0;
 
   const defaultHttpPost: CampaignDeps["httpPost"] = async () => ({ status: 202, body: { data: { runId: "run-1" } } });
 
@@ -206,7 +218,7 @@ function makeFakeDeps(args: {
   const deps: CampaignDeps = {
     db: args.db,
     resolveWallet: async () => ({ id: FIXTURE_WALLET_ID, address: FIXTURE_WALLET }),
-    httpGet: async () => ({ status: 200, body: { data: { status: "ok", app: { env: "test" } } } }),
+    httpGet: args.httpGet ?? (async () => ({ status: 200, body: { data: { status: "ok", app: { env: "test" } } } })),
     httpPost: recordingHttpPost,
     now: () => new Date(clock),
     sleep: async (ms) => {
@@ -224,7 +236,14 @@ function makeFakeDeps(args: {
       headIndex += 1;
       return head;
     },
-    isWorkingTreeClean: async () => args.workingTreeClean ?? true,
+    isWorkingTreeClean: async () => {
+      if (treeCleanSequence) {
+        const value = treeCleanSequence[Math.min(treeCleanIndex, treeCleanSequence.length - 1)];
+        treeCleanIndex += 1;
+        return value;
+      }
+      return args.workingTreeClean ?? true;
+    },
     checkEvidenceWritable: async () => args.evidenceWritable ?? true,
   };
 
@@ -725,9 +744,11 @@ describe("checkpoints", () => {
     expect(checkpointRecords.every((r) => r.ok === true)).toBe(true);
   });
 
-  it("checkpoint failure stops before the next POST (via dirty working tree)", async () => {
+  it("checkpoint failure stops before the next POST (via dirty working tree discovered only at the checkpoint, not startup)", async () => {
     const db = makeFakeDb();
-    const { deps, httpPostCalls } = makeFakeDeps({ db, workingTreeClean: false });
+    // Clean at startup (so the startup gate passes), dirty from the first
+    // checkpoint onward.
+    const { deps, httpPostCalls } = makeFakeDeps({ db, workingTreeCleanSequence: [true, false] });
 
     const summary = await runWalletForwardCampaignRunner(
       baseOptions({ maxWindows: 4, authorizedFinalBlock: finalBlockForWindows(4), checkpointIntervalWindows: 1 }),
@@ -1061,5 +1082,397 @@ describe("validateCheckpointInterval", () => {
   });
   it("accepts the default of 25", () => {
     expect(validateCheckpointInterval({ checkpointIntervalWindows: 25 }).ok).toBe(true);
+  });
+
+  it.each([1, 5, 10, 25])("accepts %d (more frequent than or equal to the 25-window maximum)", (n) => {
+    expect(validateCheckpointInterval({ checkpointIntervalWindows: n }).ok).toBe(true);
+  });
+
+  it.each([26, 100, 1000])("rejects %d (wider than the approved 25-window maximum spacing)", (n) => {
+    expect(validateCheckpointInterval({ checkpointIntervalWindows: n }).ok).toBe(false);
+    expect(parseCampaignCliArgs(requiredArgv({ "--checkpoint-interval": String(n) })).ok).toBe(false);
+  });
+
+  it("MAX_CAMPAIGN_CHECKPOINT_INTERVAL is exactly 25", () => {
+    expect(MAX_CAMPAIGN_CHECKPOINT_INTERVAL).toBe(25);
+  });
+});
+
+// ─── Blocker 9: campaign atomic window fixed at exactly 1000 blocks ────────────
+
+describe("campaign window size is fixed at exactly 1000 blocks", () => {
+  it("CAMPAIGN_REQUIRED_WINDOW_SIZE_BLOCKS is exactly 1000", () => {
+    expect(CAMPAIGN_REQUIRED_WINDOW_SIZE_BLOCKS).toBe(1_000n);
+  });
+
+  it("accepts exactly 1000", () => {
+    expect(validateCampaignWindowSize({ windowSizeBlocks: 1_000n }).ok).toBe(true);
+  });
+
+  it.each([999n, 1001n, 1n])("rejects %s", (n) => {
+    expect(validateCampaignWindowSize({ windowSizeBlocks: n }).ok).toBe(false);
+  });
+
+  it("the CLI rejects a campaign --window-size other than exactly 1000", () => {
+    expect(parseCampaignCliArgs(requiredArgv({ "--window-size": "999" })).ok).toBe(false);
+    expect(parseCampaignCliArgs(requiredArgv({ "--window-size": "1001" })).ok).toBe(false);
+    expect(parseCampaignCliArgs(requiredArgv({ "--window-size": "1" })).ok).toBe(false);
+    expect(parseCampaignCliArgs(requiredArgv({ "--window-size": "1000" })).ok).toBe(true);
+  });
+
+  it("the orchestrator itself rejects a non-1000 window size even when constructed directly (defense in depth)", async () => {
+    const db = makeFakeDb();
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({
+        windowSizeBlocks: 500n,
+        firstWindowStart: FIXTURE_FIRST_WINDOW_START,
+        authorizedFinalBlock: FIXTURE_FIRST_WINDOW_START + 500n * 3n - 1n,
+        maxWindows: 3,
+      }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("invalid_window_size");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+});
+
+// ─── Blocker 3: --base-url must be explicit for the campaign runner ────────────
+
+describe("--base-url must be explicit (no OPERATOR_RUNNER_BASE_URL / localhost default)", () => {
+  it("omitted --base-url is rejected", () => {
+    const parsed = parseCampaignCliArgs(requiredArgv({}, ["--base-url"]));
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("an explicit localhost --base-url is accepted", () => {
+    const parsed = parseCampaignCliArgs(requiredArgv({ "--base-url": "http://localhost:3000" }));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.options.baseUrl).toBe("http://localhost:3000");
+  });
+
+  it("OPERATOR_RUNNER_BASE_URL alone does not satisfy the requirement (the campaign parser never reads it)", () => {
+    const previous = process.env.OPERATOR_RUNNER_BASE_URL;
+    process.env.OPERATOR_RUNNER_BASE_URL = "http://example-should-not-be-used:9999";
+    try {
+      const parsed = parseCampaignCliArgs(requiredArgv({}, ["--base-url"]));
+      expect(parsed.ok).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.OPERATOR_RUNNER_BASE_URL;
+      else process.env.OPERATOR_RUNNER_BASE_URL = previous;
+    }
+  });
+});
+
+// ─── Blocker 7: --policy-label-prefix whitespace is rejected, not normalized ───
+
+describe("--policy-label-prefix whitespace handling", () => {
+  it("rejects leading whitespace", () => {
+    expect(parseCampaignCliArgs(requiredArgv({ "--policy-label-prefix": " prefix" })).ok).toBe(false);
+  });
+  it("rejects trailing whitespace", () => {
+    expect(parseCampaignCliArgs(requiredArgv({ "--policy-label-prefix": "prefix " })).ok).toBe(false);
+  });
+  it("rejects a whitespace-only value", () => {
+    expect(parseCampaignCliArgs(requiredArgv({ "--policy-label-prefix": "   " })).ok).toBe(false);
+  });
+  it("accepts a valid prefix unchanged", () => {
+    const parsed = parseCampaignCliArgs(requiredArgv({ "--policy-label-prefix": FIXTURE_PREFIX }));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.options.policyLabelPrefix).toBe(FIXTURE_PREFIX);
+  });
+});
+
+// ─── Blocker 2 & 4: mandatory startup gates (worktree, health) before campaign_start ──
+
+describe("mandatory startup gates run before campaign_start and before any POST", () => {
+  it("a dirty working tree at campaign start stops with working_tree_dirty and zero POSTs, even for a short (Stage-1-sized) campaign with the default 25-window checkpoint interval", async () => {
+    const db = makeFakeDb();
+    const { deps, httpPostCalls, evidence } = makeFakeDeps({ db, workingTreeClean: false });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ execute: true, maxWindows: 10, authorizedFinalBlock: finalBlockForWindows(10) }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("working_tree_dirty");
+    expect(httpPostCalls).toHaveLength(0);
+    // No campaign_start record should exist — the startup gate ran and
+    // failed before campaign_start was ever written.
+    expect(evidence.some((e) => e.kind === "campaign_start")).toBe(false);
+  });
+
+  it("a clean working tree at campaign start allows the campaign to proceed", async () => {
+    const db = makeFakeDb();
+    const { deps, evidence } = makeFakeDeps({ db, workingTreeClean: true });
+
+    const summary = await runWalletForwardCampaignRunner(baseOptions({ maxWindows: 1, authorizedFinalBlock: finalBlockForWindows(1) }), deps);
+
+    expect(summary.stoppedReason).toBe("max_windows_reached");
+    expect(evidence.some((e) => e.kind === "campaign_start")).toBe(true);
+  });
+
+  it("initial HTTP health-check failure (non-200) stops with initial_health_baseline_failed and zero POSTs", async () => {
+    const db = makeFakeDb();
+    const { deps, httpPostCalls, evidence } = makeFakeDeps({
+      db,
+      httpGet: async () => ({ status: 503, body: { data: { status: "degraded" } } }),
+    });
+
+    const summary = await runWalletForwardCampaignRunner(baseOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("initial_health_baseline_failed");
+    expect(httpPostCalls).toHaveLength(0);
+    expect(evidence.some((e) => e.kind === "campaign_start")).toBe(false);
+  });
+
+  it("initial non-ok status body stops with initial_health_baseline_failed and zero POSTs", async () => {
+    const db = makeFakeDb();
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpGet: async () => ({ status: 200, body: { data: { status: "not-ok" } } }),
+    });
+
+    const summary = await runWalletForwardCampaignRunner(baseOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("initial_health_baseline_failed");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("a valid initial health check allows the campaign to proceed", async () => {
+    const db = makeFakeDb();
+    const { deps, evidence } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(baseOptions({ maxWindows: 1, authorizedFinalBlock: finalBlockForWindows(1) }), deps);
+
+    expect(summary.stoppedReason).toBe("max_windows_reached");
+    expect(evidence.some((e) => e.kind === "campaign_start")).toBe(true);
+  });
+
+  it("later app.env drift is still caught at a checkpoint (startup baseline established from the initial OK check)", async () => {
+    const db = makeFakeDb();
+    let call = 0;
+    const { deps } = makeFakeDeps({
+      db,
+      httpGet: async () => {
+        call += 1;
+        // First call: startup baseline (ok, env "test"). Second call:
+        // checkpoint health check reporting a different environment.
+        return call === 1
+          ? { status: 200, body: { data: { status: "ok", app: { env: "test" } } } }
+          : { status: 200, body: { data: { status: "ok", app: { env: "production" } } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ maxWindows: 2, authorizedFinalBlock: finalBlockForWindows(2), checkpointIntervalWindows: 1 }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("checkpoint_failed");
+  });
+});
+
+// ─── Blocker 5: final campaign_summary evidence failure exits nonzero ─────────
+
+describe("final campaign_summary evidence failure", () => {
+  it("a write failure on the final campaign_summary record returns evidence_append_failed and exits nonzero, without rolling back or retrying completed windows", async () => {
+    const db = makeFakeDb({ runsById: { "run-1": completedRun() } });
+    let writeCount = 0;
+    const evidence: EvidenceRecord[] = [];
+    const httpPostCalls: Array<{ url: string; body: unknown }> = [];
+    const deps: CampaignDeps = {
+      db,
+      resolveWallet: async () => ({ id: FIXTURE_WALLET_ID, address: FIXTURE_WALLET }),
+      httpGet: async () => ({ status: 200, body: { data: { status: "ok", app: { env: "test" } } } }),
+      httpPost: async (url, body) => {
+        httpPostCalls.push({ url, body });
+        db.advanceCursorTo(25_079_548n);
+        return { status: 202, body: { data: { runId: "run-1" } } };
+      },
+      now: () => new Date(0),
+      sleep: async () => {},
+      writeEvidence: async (record) => {
+        writeCount += 1;
+        if (record.kind === "campaign_summary") {
+          throw new Error("simulated campaign_summary write failure");
+        }
+        evidence.push(record);
+      },
+      getGitHead: async () => "head-1",
+      isWorkingTreeClean: async () => true,
+      checkEvidenceWritable: async () => true,
+    };
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ execute: true, maxWindows: 1, authorizedFinalBlock: finalBlockForWindows(1) }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("evidence_append_failed");
+    expect(computeCampaignExitCode(summary.stoppedReason)).toBe(1);
+    // Exactly one POST happened and completed — canonical state is not
+    // retried or rolled back because of the summary-write failure.
+    expect(httpPostCalls).toHaveLength(1);
+    expect(writeCount).toBeGreaterThan(0);
+  });
+});
+
+// ─── Blocker 8: every stop record includes campaignId ──────────────────────────
+
+describe("every campaign stop record includes campaignId", () => {
+  it("wallet_not_found stop contains campaignId", async () => {
+    const db = makeFakeDb();
+    const { deps, evidence } = makeFakeDeps({ db });
+    await runWalletForwardCampaignRunner(baseOptions(), { ...deps, resolveWallet: async () => null });
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "wallet_not_found");
+    expect(stopRecord?.campaignId).toBe(FIXTURE_CAMPAIGN_ID);
+  });
+
+  it("cursor mismatch stop contains campaignId", async () => {
+    const db = makeFakeDb({ cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: FIXTURE_CURSOR_TO + 1n } });
+    const { deps, evidence } = makeFakeDeps({ db });
+    await runWalletForwardCampaignRunner(baseOptions(), deps);
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "cursor_expectation_mismatch");
+    expect(stopRecord?.campaignId).toBe(FIXTURE_CAMPAIGN_ID);
+  });
+
+  it("initial health-baseline stop contains campaignId", async () => {
+    const db = makeFakeDb();
+    const { deps, evidence } = makeFakeDeps({ db, httpGet: async () => ({ status: 500, body: {} }) });
+    await runWalletForwardCampaignRunner(baseOptions({ execute: true }), deps);
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "initial_health_baseline_failed");
+    expect(stopRecord?.campaignId).toBe(FIXTURE_CAMPAIGN_ID);
+  });
+
+  it("checkpoint_failed stop contains campaignId", async () => {
+    const db = makeFakeDb();
+    const { deps, evidence } = makeFakeDeps({ db, workingTreeCleanSequence: [true, false] });
+    await runWalletForwardCampaignRunner(
+      baseOptions({ maxWindows: 4, authorizedFinalBlock: finalBlockForWindows(4), checkpointIntervalWindows: 1 }),
+      deps,
+    );
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "checkpoint_failed");
+    expect(stopRecord?.campaignId).toBe(FIXTURE_CAMPAIGN_ID);
+  });
+
+  it("invariant_failed_after_run stop contains campaignId", async () => {
+    const db = makeFakeDb({ runsById: { "run-1": completedRun({ warningCount: 1, warningDetails: ["w"] }) } });
+    const { deps, evidence } = makeFakeDeps({ db });
+    await runWalletForwardCampaignRunner(baseOptions({ execute: true }), deps);
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "invariant_failed_after_run");
+    expect(stopRecord?.campaignId).toBe(FIXTURE_CAMPAIGN_ID);
+  });
+
+  it("ambiguous_submission_unrecoverable stop contains campaignId", async () => {
+    const db = makeFakeDb({ ambiguousCandidates: [] });
+    const { deps, evidence } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        throw new Error("simulated network failure");
+      },
+    });
+    await runWalletForwardCampaignRunner(baseOptions({ execute: true }), deps);
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "ambiguous_submission_unrecoverable");
+    expect(stopRecord?.campaignId).toBe(FIXTURE_CAMPAIGN_ID);
+  });
+
+  it("unexpected_error stop contains campaignId where campaign identity is known", async () => {
+    const db = makeFakeDb();
+    (db.syncCursor.findUnique as unknown) = async () => {
+      throw new Error("simulated DB outage");
+    };
+    const { deps, evidence } = makeFakeDeps({ db });
+    await runWalletForwardCampaignRunner(baseOptions({ execute: true }), deps);
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "unexpected_error");
+    expect(stopRecord?.campaignId).toBe(FIXTURE_CAMPAIGN_ID);
+  });
+});
+
+// ─── Blocker 1: HTTP request timeout ───────────────────────────────────────────
+
+describe("HTTP request timeout and timeout-triggered ambiguous recovery", () => {
+  it("HTTP_REQUEST_TIMEOUT_MS is a fixed 60-second bound", () => {
+    expect(HTTP_REQUEST_TIMEOUT_MS).toBe(60_000);
+  });
+
+  it("a GET (health check) timeout fails closed — treated identically to any other network error", async () => {
+    const db = makeFakeDb();
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpGet: async () => {
+        throw new DOMException("The operation was aborted.", "TimeoutError");
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(baseOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("initial_health_baseline_failed");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("a timed-out POST enters ambiguous recovery and recovers when exactly one full-identity match exists (no auto-resubmit)", async () => {
+    const recoveredRun = completedRun();
+    const db = makeFakeDb({ runsById: { "run-1": recoveredRun }, ambiguousCandidates: [recoveredRun] });
+    let postCalls = 0;
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        db.advanceCursorTo(25_079_548n);
+        throw new DOMException("The operation was aborted.", "TimeoutError");
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ execute: true, maxWindows: 1, authorizedFinalBlock: finalBlockForWindows(1) }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("max_windows_reached");
+    expect(summary.windowsCompleted).toBe(1);
+    expect(httpPostCalls).toHaveLength(1);
+    expect(postCalls).toBe(1); // no auto-resubmit
+  });
+
+  it("a timed-out POST with zero matching candidates fails closed and never retries", async () => {
+    const db = makeFakeDb({ ambiguousCandidates: [] });
+    let postCalls = 0;
+    const { deps } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        throw new DOMException("The operation was aborted.", "TimeoutError");
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(baseOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("ambiguous_submission_unrecoverable");
+    expect(postCalls).toBe(1);
+  });
+
+  it("a timed-out POST with multiple matching candidates fails closed and never retries", async () => {
+    const plan1Label = campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 1);
+    const candidate = completedRun({ policyLabel: plan1Label });
+    const db = makeFakeDb({ ambiguousCandidates: [candidate, { ...candidate, id: "run-2" }] });
+    let postCalls = 0;
+    const { deps } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        throw new DOMException("The operation was aborted.", "TimeoutError");
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ execute: true, maxWindows: 1, authorizedFinalBlock: finalBlockForWindows(1) }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("ambiguous_submission_unrecoverable");
+    expect(postCalls).toBe(1);
   });
 });

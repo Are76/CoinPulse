@@ -43,7 +43,12 @@ explicit product-owner approval per the staged rollout below.
 
 ## Architecture
 
-- **Atomic window:** 1,000 blocks, unchanged. `MANUAL_SYNC_MAX_BLOCK_SPAN`
+- **Atomic window:** exactly 1,000 blocks. `--window-size` must equal exactly
+  `1000` for the campaign runner — a stricter, campaign-specific gate
+  (`validateCampaignWindowSize`) than the shared `validateWindowSize`
+  primitive the 5-window runner keeps using unchanged. This is what makes the
+  1,000-window implementation ceiling map exactly to a 1,000,000-block
+  maximum campaign span. `MANUAL_SYNC_MAX_BLOCK_SPAN`
   (`src/services/api/validation.ts`) is not modified.
 - **Sequence, per window (identical to the existing runner):** pre-submit
   gates → one `POST /api/sync/manual` → exact submitted `runId` → exact
@@ -77,10 +82,12 @@ explicit product-owner approval per the staged rollout below.
   every planned label is collision-checked against existing `SyncRun` rows
   using the same query the 5-window runner already uses — `policyLabel` is
   not assumed to be a database-unique column.
-- **Checkpoints:** every `--checkpoint-interval` windows (default and
-  required baseline: 25). A checkpoint re-verifies campaign-level
-  properties not already covered by the per-window gates: local `git HEAD`
-  unchanged since campaign start, working tree still clean, backend
+- **Checkpoints:** every `--checkpoint-interval` windows (default 25).
+  **25 is a maximum spacing, not merely a default suggestion** —
+  `--checkpoint-interval` is bounded to `[1, 25]`; an operator may checkpoint
+  more often, never less. A checkpoint re-verifies campaign-level properties
+  not already covered by the per-window gates: local `git HEAD` unchanged
+  since campaign start, working tree still clean, backend
   `/api/debug/health` still reports `ok`, the `--base-url`/environment
   classification (`app.env`) unchanged, the expected campaign cursor still
   matches live state exactly, campaign boundaries remain valid, and the
@@ -90,6 +97,29 @@ explicit product-owner approval per the staged rollout below.
   but it does stop the run. `origin/main` moving while local `HEAD` stays
   unchanged is explicitly **not** a checkpoint failure — only local `HEAD`
   identity is checked.
+- **Startup gates (before `campaign_start` and before any window can reach
+  POST):** in order — validate immutable options (alignment, `--max-windows`,
+  `--campaign-id`, fixed `--window-size`), obtain local `git HEAD`, require a
+  clean working tree (`working_tree_dirty` otherwise), establish a healthy
+  environment baseline via `/api/debug/health` (`initial_health_baseline_failed`
+  otherwise — this also captures the `app.env` value every later checkpoint's
+  drift check compares against), resolve the wallet
+  (`wallet_not_found` otherwise), and only then persist the `campaign_start`
+  evidence record. These are independent of, and run strictly before, the
+  periodic checkpoint gate — with Stage 1 sized at 10 windows and a default
+  checkpoint interval of 25, a short campaign could otherwise complete
+  entirely from a dirty working tree or an unverified backend without either
+  ever being checked.
+- **HTTP request timeout:** the default real HTTP client
+  (`GET /api/debug/health`, `POST /api/sync/manual`) applies a fixed 60-second
+  request timeout (`HTTP_REQUEST_TIMEOUT_MS`, via `AbortSignal.timeout`). A
+  timed-out GET fails the relevant health gate closed, identically to any
+  other network error. A timed-out POST throws exactly like any other network
+  failure and flows through the same ambiguous-submission recovery path
+  below — never an automatic retry of the POST itself. This matters because
+  `pollTimeoutMs` only starts once the POST call resolves; without a request
+  timeout, a stuck POST could otherwise block a campaign indefinitely before
+  the poll-timeout gate ever engages.
 
 ## Ambiguous-submission recovery
 
@@ -116,14 +146,24 @@ size, approved `--max-windows`, `--authorized-final-block`, `policyLabel`,
 the exact submitted `runId` when available, the range, cursor before/after,
 gate outcome, and `stoppedReason` where applicable. No secrets are ever
 written (the same redaction/sanitization used by the 5-window runner is
-reused unchanged).
+reused unchanged). **Every `stop` record includes `campaignId`** — this is
+enforced centrally by the stop-writing path itself, not left to individual
+call sites to remember, since append-only evidence may span multiple
+invocations and a stop record without campaign identity could not be
+reliably attributed.
 
 **Evidence append failure is itself a gate.** If a canonical window
 completes successfully but its evidence record cannot be written, the
 already-committed PostgreSQL state is never rolled back, but the runner
 never submits the next window — it exits non-zero with
 `evidence_append_failed` and requires a fresh recovery/approval decision
-before any continuation.
+before any continuation. This also applies to the final `campaign_summary`
+record: if every canonical window in the approved batch completed but the
+summary record itself fails to write, the runner still reports
+`evidence_append_failed` and exits non-zero rather than a clean
+`max_windows_reached` / `authorized_final_block_reached` — an operator must
+never see a clean completion status when mandatory final provenance was not
+actually recorded.
 
 ## Process errors and crash/restart
 
@@ -145,9 +185,16 @@ and a new, explicitly bounded product-owner approval.
 
 ## Environment
 
-`--base-url` must always be passed explicitly (same rule as the 5-window
-runner — see "Target-environment binding" in
-`docs/wallet-scoped-historical-sync-runbook.md`). This PR does not build
+`--base-url` is a **required** CLI argument for the campaign runner with no
+default — unlike the 5-window runner (which falls back to
+`OPERATOR_RUNNER_BASE_URL` or `http://localhost:3000` if `--base-url` is
+omitted), the campaign CLI parser rejects the command outright when
+`--base-url` is not supplied, and `OPERATOR_RUNNER_BASE_URL` is never
+consulted. This is a stricter rule than "always pass it explicitly" (the
+5-window runner's rule — see "Target-environment binding" in
+`docs/wallet-scoped-historical-sync-runbook.md`): for the campaign runner it
+is enforced by the parser itself, not merely documented practice. This PR
+does not build
 production deployment infrastructure and does not attempt to solve
 dev-vs-production server-mode detection beyond the existing
 `/api/debug/health` `app.env` check already reused from the 5-window runner
