@@ -217,8 +217,14 @@ npm run backfill:wallet-forward -- \
   --chain-id 369 \
   --expected-cursor-from 25077549 --expected-cursor-to 25078548 \
   --first-window-start 25078549 --window-size 1000 \
-  --max-windows 5 --policy-label-prefix wallet-forward-sync-window
+  --max-windows 5 --policy-label-prefix wallet-forward-sync-window \
+  --base-url http://localhost:3000
 ```
+
+`--base-url` is passed explicitly here rather than relying on the default —
+see "Target-environment binding" below for why an implicit default (which
+`OPERATOR_RUNNER_BASE_URL` can silently change) must never be trusted for a
+multi-window batch.
 
 Dry-run is the default — no `--execute` flag needed. It reads the live
 TRANSFERS cursor, verifies it matches `--expected-cursor-from`/
@@ -327,17 +333,32 @@ a separately authorized runtime change to this runner (out of scope for this
 docs-only PR) before relying on a multi-window batch approval against a
 non-default target.
 
+**Always pass `--base-url` explicitly — never rely on the default.** The CLI
+parser (`parseRunnerCliArgs`) initializes `baseUrl` from
+`OPERATOR_RUNNER_BASE_URL ?? "http://localhost:3000"` and then, if
+`--base-url` is present on the command line, unconditionally overwrites it
+with that flag's value — so an explicit `--base-url` reliably wins over
+`OPERATOR_RUNNER_BASE_URL` when both are set. That confirmed precedence is
+exactly why an *implicit* default must not be trusted: whether the effective
+target is the intended `http://localhost:3000` depends on whatever
+`OPERATOR_RUNNER_BASE_URL` happens to be set to in that shell, which is
+invisible in a copied command that omits `--base-url`. Every batch dry-run
+and `--execute` invocation must therefore pass `--base-url
+http://localhost:3000` explicitly (or whatever the approved local target
+is) — never a bare command that depends on `OPERATOR_RUNNER_BASE_URL` being
+unset.
+
 **What the approval must record** (non-secret only — never `DATABASE_URL`,
 `REDIS_URL`, credentials, or RPC URLs, per this runbook's existing secret
 rules): the intended operator environment (e.g. "local operator workstation
-per `docs/operator-environments.md` §2.1"), the exact `--base-url` value, and
-a plain confirmation that the runner's `DATABASE_URL`/`REDIS_URL` are that
-same operator's local `.env`-configured values for that machine — never
-their literal contents. The health gate that already runs before every
-window is the fresh live preflight check against the approved `--base-url`;
-a change in `--base-url` or an unexpected `app.env` between dry-run and
-execute is itself a reason to stop and re-verify, not something to wave
-past.
+per `docs/operator-environments.md` §2.1"), the exact explicit `--base-url`
+value used on both the dry-run and the `--execute` command, and a plain
+confirmation that the runner's `DATABASE_URL`/`REDIS_URL` are that same
+operator's local `.env`-configured values for that machine — never their
+literal contents. The health gate that already runs before every window is
+the fresh live preflight check against the approved `--base-url`; a change
+in `--base-url` or an unexpected `app.env` between dry-run and execute is
+itself a reason to stop and re-verify, not something to wave past.
 
 **Same-environment requirement.** A successful dry-run against one
 environment does not authorize `--execute` against a different one, even
@@ -377,6 +398,15 @@ problem. Re-running the original invocation's exact command is therefore not
 just unauthorized under Case C — it will usually be technically wrong,
 because the live state it validates against has moved.
 
+A "hard stop" here is a **runner/batch-level** event — the runner's own
+post-run gate check failed and it will not submit the next window. It is
+distinct from a `SyncRun`-level `FAILED` status: the exact submitted
+`SyncRun` can be `COMPLETED` (the sync pipeline finished and the cursor
+advanced) while the runner still hard-stops because of a nonzero
+`warningCount` or a post-run contamination/duplicate finding. Do not assume
+either terminal state going in — read the actual persisted `SyncRun.status`
+per the identity procedure below before drawing any conclusion.
+
 **What stays fixed**, unless the product owner deliberately authorizes a
 different operation entirely:
 
@@ -391,18 +421,39 @@ different operation entirely:
 attempt** — never reused from the failed invocation's parameters or evidence
 file:
 
-1. Inspect the failed `SyncRun`: exact `status`, `walletId`, `chainId`,
-   `sourceFamilies`, `startBlock`/`endBlock`, `latestSafeBlock`,
+1. **Identify the exact submitted attempt first — never assume it.** Read
+   the submitted window's `runId` and `policyLabel` from the runner's own
+   evidence: `POST /api/sync/manual` returns `202 { data: { runId } }`, and
+   the runner immediately polls that exact `runId` to a terminal state
+   (`pollSyncRunToTerminal`) and then writes it into the `kind: "window"`
+   evidence record (`--evidence-file`, default
+   `operator-evidence/wallet-forward-sync-batch-runner/evidence.jsonl`)
+   alongside the window's exact `policyLabel` (e.g. `prefix-3`) — read both
+   from that record (or, if inspecting live before the evidence write
+   completes, from the submission response itself). A different historical
+   `SyncRun` can share the same wallet, chain, source family, and block
+   range and must never substitute for the actual submitted attempt —
+   matching range alone is never identity.
+2. Inspect that **exact** `SyncRun` row in canonical PostgreSQL by primary
+   key (`SELECT * FROM "SyncRun" WHERE id = <runId>`), and cross-check
+   `SyncRun.policyLabel` equals the approved/generated `policyLabel` from
+   step 1 — both `id` and `policyLabel` must match; do not rely on an
+   assumed uniqueness constraint instead of checking both fields directly.
+   Do not assume the status is `FAILED` or `COMPLETED` before reading it —
+   a runner/batch hard stop can occur with the exact submitted `SyncRun`
+   itself `COMPLETED` (see above). Read: exact `status`, `walletId`,
+   `chainId`, `sourceFamilies`, `startBlock`/`endBlock`, `latestSafeBlock`,
    `warningCount`/`warningDetails`, `errorMessage`, `failedSourceFamily` /
    `failedFromBlock` / `failedToBlock`.
-2. Inspect the live `SyncCursor` for this wallet/chain/`TRANSFERS` directly
+3. Inspect the live `SyncCursor` for this wallet/chain/`TRANSFERS` directly
    (read-only `SELECT`) — do not assume it matches any value from the
    original approval, dry-run, or evidence file.
-3. Re-run the fabricated-contamination, duplicate-`RawTransaction`,
+4. Re-run the fabricated-contamination, duplicate-`RawTransaction`,
    duplicate-`RawTokenTransfer`, and duplicate-`LedgerEntry` checks over the
-   failed window's range (the same checks the runner itself runs post-run).
-4. Confirm no `PENDING`/`RUNNING` `SyncRun` remains active.
-5. From all of the above, classify the window per the "Coverage proof" and
+   identified window's exact range (the same checks the runner itself runs
+   post-run).
+5. Confirm no `PENDING`/`RUNNING` `SyncRun` remains active.
+6. From all of the above, classify the window per the "Coverage proof" and
    "Integrity proof" definitions below — do not derive a next range from
    raw/canonical row inspection alone (see "Empty-block semantics" below).
 
@@ -412,12 +463,24 @@ a source family is only upserted (`cursorStore.upsertCursor`) after that
 source family's ingest → normalize → persist-ledger steps have all completed
 without throwing, and `SyncRun.status` is only set to `COMPLETED` after every
 requested source family's loop iteration — including that cursor upsert —
-finished without throwing. That means the following, checked together,
-positively proves the exact submitted range was processed and persisted
-end-to-end by the existing sync pipeline — **not** an inference from the
-presence or count of raw rows:
+finished without throwing. That is meaningful proof only once it is bound to
+the exact submitted attempt: a different `SyncRun` with a matching wallet,
+chain, source family, and block range is **not** substitute evidence, even
+if it happens to be `COMPLETED` too. Coverage proof therefore has two
+required parts, checked in order, on top of the identity procedure above:
 
-- the submitted `SyncRun`'s `walletId`, `chainId`,
+**A. Submitted-run identity proof** (from steps 1–2 above; required before
+part B means anything):
+
+- the inspected row's `SyncRun.id` equals the exact `runId` returned by
+  `POST /api/sync/manual` for that submitted window,
+- the inspected row's `SyncRun.policyLabel` equals the exact
+  approved/generated `policyLabel` for that submitted window.
+
+**B. Processing/coverage proof** (once A holds), checked together — not an
+inference from the presence or count of raw rows:
+
+- the identified `SyncRun`'s `walletId`, `chainId`,
   `sourceFamilies === ["TRANSFERS"]`, `startBlock`, and `endBlock` match the
   proposed window exactly,
 - `SyncRun.status === "COMPLETED"` (not merely non-`"FAILED"` — a run stuck
@@ -429,17 +492,19 @@ presence or count of raw rows:
   `SyncCursor.toBlock === endBlock` exactly (not merely "the highest
   observed block," and not inferred from any raw table).
 
-If all of the above hold, coverage through the exact submitted `endBlock` is
+If A and B all hold, coverage through the exact submitted `endBlock` is
 proven — `--first-window-start = live SyncCursor.toBlock + 1` is safe with
-respect to coverage. If any one of them does not hold — including a `status`
-that is not `COMPLETED`, a cursor that has not moved to exactly `endBlock`,
-or a mismatched identity field — coverage is **not** proven, regardless of
-what raw or ledger rows exist for the range; treat the window as case 2 of
-the "Failed-range rule" below.
+respect to coverage. If any one of them does not hold — including a
+mismatched `runId` or `policyLabel`, a `status` that is not `COMPLETED`, a
+cursor that has not moved to exactly `endBlock`, or a mismatched identity
+field — coverage is **not** proven, regardless of what raw or ledger rows
+exist for the range; treat the window as case 2 of the "Failed-range rule"
+below.
 
-**Integrity proof — separate from coverage, and required in addition to
-it.** A range can be fully coverage-proven per the checks above and still be
-unsafe to build on top of. Integrity proof requires, independently:
+**C. Integrity proof — separate from coverage (A + B), and required in
+addition to it.** A range can be fully coverage-proven per the checks above
+and still be unsafe to build on top of. Integrity proof requires,
+independently:
 
 - `SyncRun.warningCount === 0` and `warningDetails` empty (a nonzero warning
   count does not mean the range is unprocessed — the sync pipeline records
@@ -543,26 +608,32 @@ logical block range being resumed (for example, "continuing forward from
 block X"), not just the runner's internal window-number, to avoid conflating
 the two.
 
-**Example — allowed batch (Case B):** the operator confirms `--base-url`
-targets the same local operator workstation's `npm run dev` server whose
-`.env` also supplies the runner's own `DATABASE_URL`/`REDIS_URL` (see
-"Target-environment binding" above). A fresh dry-run against that same
-target with `--max-windows 5 --first-window-start 25078549 --window-size
-1000` exits 0 and previews exactly windows 1–5 covering
-`[25078549, 25083548]` with no collisions or gaps. The product owner approves
-that exact wallet, chain, cursor, range, `--max-windows 5`, and target
-environment in one message. The operator runs the same command with
-`--execute` against the same `--base-url`. All 5 windows complete and pass
-every per-window gate; the runner stops cleanly after window 5
+**Example — allowed batch (Case B):** the operator explicitly passes
+`--base-url http://localhost:3000` on the command line (never relying on the
+`OPERATOR_RUNNER_BASE_URL` default being unset — see "Target-environment
+binding" above for why an explicit flag is required) — that server's `.env`
+also supplies the runner's own `DATABASE_URL`/`REDIS_URL`. A fresh dry-run
+against that same explicit target,
+`--max-windows 5 --first-window-start 25078549 --window-size 1000
+--base-url http://localhost:3000`, exits 0 and previews exactly windows 1–5
+covering `[25078549, 25083548]` with no collisions or gaps. The product owner
+approves that exact wallet, chain, cursor, range, `--max-windows 5`, and
+`--base-url http://localhost:3000` in one message. The operator runs the
+same command with `--execute` and the identical
+`--base-url http://localhost:3000`. All 5 windows complete and pass every
+per-window gate; the runner stops cleanly after window 5
 (`stoppedReason: "max_windows_reached"`). No further approval is needed for
 windows 1–5 individually — one approval covered the batch.
 
 **Example — hard stop (Case C):** the same approved 5-window batch is
-running; window 3's `POST` is submitted and its `SyncRun`/`SyncCursor` writes
+running (submitted with `--base-url http://localhost:3000` explicitly, on
+both the dry-run and the `--execute` invocation); window 3's `POST` returns
+`202 { data: { runId: <runId-X> } }`, and its `SyncRun`/`SyncCursor` writes
 advance as normal, but the window then fails a post-run gate (say,
-`warningCount !== 0`). The runner writes a `kind: "stop"` evidence record with
-`reason: "invariant_failed_after_run"` and exits nonzero. It does **not**
-submit window 4 or window 5 — the remaining 2 windows of that approval are no
+`warningCount !== 0`). The runner writes a `kind: "stop"` evidence record
+with `reason: "invariant_failed_after_run"` (including `runId: <runId-X>`
+and `policyLabel: "prefix-3"`) and exits nonzero. It does **not** submit
+window 4 or window 5 — the remaining 2 windows of that approval are no
 longer authorized, and reusing the original `--expected-cursor-to` /
 `--first-window-start` / `--policy-label-prefix` verbatim in a fresh
 invocation would fail immediately: the live cursor has already moved past the
@@ -571,10 +642,16 @@ exist as `COMPLETED` `SyncRun`s.
 
 Before any resume attempt, the operator reads canonical state per "Resuming
 after a hard stop" above — the decision is never based on "a high block
-exists" or "the cursor moved," only on the exact coverage-proof and
-integrity-proof checks defined there:
+exists" or "the cursor moved," only on the exact identity, coverage-proof,
+and integrity-proof checks defined there:
 
-- Coverage proof: window 3's `SyncRun` shows `status === "COMPLETED"`,
+- Identity proof: the evidence file's `kind: "window"` record for window 3
+  gives `runId: <runId-X>` and `policyLabel: "prefix-3"`. The operator reads
+  `SELECT * FROM "SyncRun" WHERE id = <runId-X>` and confirms
+  `policyLabel === "prefix-3"` on that exact row — not any other
+  `COMPLETED` run that happens to share this wallet/chain/range. Only that
+  exact row is used for the checks below.
+- Coverage proof (on that exact identified row): `status === "COMPLETED"`,
   matching `walletId`/`chainId`/`sourceFamilies`/`startBlock`/`endBlock`,
   `latestSafeBlock === endBlock`, `failedSourceFamily`/`failedFromBlock`/
   `failedToBlock` all `null`, and the live `SyncCursor.toBlock` equals
@@ -584,20 +661,25 @@ integrity-proof checks defined there:
   is triaged per `docs/transfer-history-backfill-operator-plan.md` §7's
   existing checklist and resolved/explicitly classified as safe, and the
   contamination/duplicate/active-operation checks are all clean.
-- Only once **both** proofs hold does the next candidate range start at
-  `live SyncCursor.toBlock + 1` (immediately after window 3's `endBlock`),
-  under a fresh dry-run — against the same verified target environment —
-  with a new `--expected-cursor-from`/`--expected-cursor-to` read from that
-  live cursor, a new `--first-window-start` equal to that same value, and a
-  new collision-free `--policy-label-prefix` (for example a `-resume-1`
-  suffix) — then a fresh product-owner approval of those exact new
-  parameters and that same environment, matched exactly by the fresh
-  dry-run and the subsequent `--execute` invocation.
-- If coverage cannot be proven (for example `status !== "COMPLETED"` or the
-  cursor did not reach exactly window 3's `endBlock`), or the warning/
-  integrity concern is not resolved, forward execution stops entirely until
-  the state is reconciled through a separately approved recovery/repair
-  path — no new forward-batch dry-run or approval is proposed until then.
+- Only once identity, coverage, **and** integrity all hold does the next
+  candidate range start at `live SyncCursor.toBlock + 1` (immediately after
+  window 3's `endBlock`), under a fresh dry-run — against the same verified
+  target environment, with the same explicit
+  `--base-url http://localhost:3000` on both the dry-run and the subsequent
+  `--execute` — with a new `--expected-cursor-from`/`--expected-cursor-to`
+  read from that live cursor, a new `--first-window-start` equal to that
+  same value, and a new collision-free `--policy-label-prefix` (for example
+  a `-resume-1` suffix) — then a fresh product-owner approval of those exact
+  new parameters, that same `--base-url`, and that same environment, matched
+  exactly by the fresh dry-run and the subsequent `--execute` invocation.
+- If identity cannot be established (the inspected row's `id` or
+  `policyLabel` does not match the evidence file exactly), or coverage
+  cannot be proven on the correctly identified row (for example
+  `status !== "COMPLETED"` or the cursor did not reach exactly window 3's
+  `endBlock`), or the warning/integrity concern is not resolved, forward
+  execution stops entirely until the state is reconciled through a
+  separately approved recovery/repair path — no new forward-batch dry-run or
+  approval is proposed until then.
 
 ### Executing
 
@@ -608,8 +690,14 @@ npm run backfill:wallet-forward -- \
   --expected-cursor-from 25077549 --expected-cursor-to 25078548 \
   --first-window-start 25078549 --window-size 1000 \
   --max-windows 5 --policy-label-prefix wallet-forward-sync-window \
+  --base-url http://localhost:3000 \
   --execute
 ```
+
+`--base-url` must be the exact same value used on the dry-run above —
+matching invocation parameters do not by themselves prove the same target
+was used if `--base-url` was left implicit on either command (see
+"Target-environment binding" above).
 
 `--max-windows` defaults to `1` and is **hard-capped at 5** — a value above 5
 is rejected before anything runs. Windows execute strictly sequentially.
