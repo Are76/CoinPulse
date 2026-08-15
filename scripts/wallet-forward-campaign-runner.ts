@@ -30,14 +30,16 @@
  *     deterministic, collision-checked, length-verified policy labels whose
  *     logical window numbering is derived from block position (not this
  *     invocation's loop counter),
- *   - a fixed checkpoint every `--checkpoint-interval` windows (default 25)
- *     that re-verifies campaign-level invariants (local HEAD unchanged,
- *     clean working tree, backend health, environment/base-url
+ *   - a fixed checkpoint every `--checkpoint-interval` windows (default 25,
+ *     capped at 25) that re-verifies campaign-level invariants (local HEAD
+ *     unchanged, clean working tree, backend health, environment/base-url
  *     classification unchanged, exact cursor, valid boundaries, writable
- *     evidence destination) before continuing — a checkpoint failure is a
- *     hard stop before the next POST, and does not require fresh
- *     product-owner approval as long as the campaign remains inside its
- *     already-approved authorization,
+ *     evidence destination) before continuing. A PASSING checkpoint requires
+ *     no fresh product-owner approval — the campaign continues automatically
+ *     inside its already-approved boundaries. Any checkpoint FAILURE is a
+ *     hard stop before the next POST like any other hard stop: remaining
+ *     campaign authorization expires immediately (see below), and resuming
+ *     requires a fresh bounded approval,
  *   - append-only JSONL evidence with `campaign_start` / `window` /
  *     `checkpoint` / `stop` / `campaign_summary` records — evidence append
  *     failure is itself a gate: canonical PostgreSQL state is never rolled
@@ -910,6 +912,17 @@ export async function runWalletForwardCampaignRunner(
   const campaignWindowSizeGate = validateCampaignWindowSize({ windowSizeBlocks: options.windowSizeBlocks });
   if (!campaignWindowSizeGate.ok) {
     return stopCampaign(deps, campaignId, "invalid_window_size", campaignWindowSizeGate.reason, 0, null, 0);
+  }
+  // Re-derive at runtime — same validator the CLI parser already uses
+  // (validateCheckpointInterval), never a duplicated check. CLI parsing
+  // alone is not sufficient because a direct caller (including a test) can
+  // construct a CampaignCliOptions object and bypass parseCampaignCliArgs
+  // entirely.
+  const checkpointIntervalGate = validateCheckpointInterval({
+    checkpointIntervalWindows: options.checkpointIntervalWindows,
+  });
+  if (!checkpointIntervalGate.ok) {
+    return stopCampaign(deps, campaignId, "invalid_checkpoint_interval", checkpointIntervalGate.reason, 0, null, 0);
   }
 
   const effectiveMaxWindows = Math.min(options.maxWindows, alignment.windowCount);

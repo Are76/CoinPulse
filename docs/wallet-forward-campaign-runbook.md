@@ -91,12 +91,15 @@ explicit product-owner approval per the staged rollout below.
   `/api/debug/health` still reports `ok`, the `--base-url`/environment
   classification (`app.env`) unchanged, the expected campaign cursor still
   matches live state exactly, campaign boundaries remain valid, and the
-  evidence destination remains writable. A checkpoint failure is a hard stop
-  before the next POST — it does not require a fresh product-owner approval
-  as long as the campaign remains inside its already-approved boundaries,
-  but it does stop the run. `origin/main` moving while local `HEAD` stays
-  unchanged is explicitly **not** a checkpoint failure — only local `HEAD`
-  identity is checked.
+  evidence destination remains writable. **A PASSING checkpoint requires no
+  fresh product-owner approval** — the campaign continues automatically
+  inside its already-approved boundaries. **Any checkpoint FAILURE is a hard
+  stop before the next POST, exactly like any other hard stop described in
+  "Process errors and crash/restart" below: remaining campaign authorization
+  expires immediately, and resuming requires canonical-state inspection, a
+  fresh dry-run, and a new explicit product-owner approval.** `origin/main`
+  moving while local `HEAD` stays unchanged is explicitly **not** a
+  checkpoint failure — only local `HEAD` identity is checked.
 - **Startup gates (before `campaign_start` and before any window can reach
   POST):** in order — validate immutable options (alignment, `--max-windows`,
   `--campaign-id`, fixed `--window-size`), obtain local `git HEAD`, require a

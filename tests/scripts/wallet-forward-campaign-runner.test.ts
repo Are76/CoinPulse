@@ -1057,11 +1057,15 @@ describe("campaign exit-code allowlist", () => {
       "authorized_final_block_misaligned",
       "invalid_max_windows",
       "invalid_campaign_id",
+      "invalid_window_size",
+      "invalid_checkpoint_interval",
       "checkpoint_failed",
       "evidence_append_failed",
       "ambiguous_submission_unrecoverable",
       "unexpected_error",
       "git_head_unavailable",
+      "working_tree_dirty",
+      "initial_health_baseline_failed",
     ];
     for (const reason of hardStopReasons) {
       expect(computeCampaignExitCode(reason)).toBe(1);
@@ -1095,6 +1099,54 @@ describe("validateCheckpointInterval", () => {
 
   it("MAX_CAMPAIGN_CHECKPOINT_INTERVAL is exactly 25", () => {
     expect(MAX_CAMPAIGN_CHECKPOINT_INTERVAL).toBe(25);
+  });
+});
+
+// ─── Runtime checkpoint-interval gate (bypasses the CLI parser entirely) ───────
+//
+// parseCampaignCliArgs already rejects checkpointIntervalWindows > 25, but a
+// caller that constructs CampaignCliOptions directly (as every orchestrator
+// test in this file does via baseOptions()) bypasses that gate entirely.
+// runWalletForwardCampaignRunner must independently re-validate this
+// immutable option before any startup gate, before campaign_start evidence,
+// and before any POST — using the exact same validateCheckpointInterval the
+// CLI already uses, never a duplicated check.
+
+describe("runtime checkpoint-interval validation (direct orchestrator call, CLI parser bypassed)", () => {
+  it("checkpointIntervalWindows: 26 constructed directly hard-stops before any POST, with zero windows executed and no campaign_start evidence", async () => {
+    const db = makeFakeDb();
+    const { deps, httpPostCalls, evidence } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ execute: true, maxWindows: 10, authorizedFinalBlock: finalBlockForWindows(10), checkpointIntervalWindows: 26 }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("invalid_checkpoint_interval");
+    expect(summary.windowsCompleted).toBe(0);
+    expect(summary.lastWindowNumber).toBeNull();
+    expect(httpPostCalls).toHaveLength(0);
+    expect(evidence.some((e) => e.kind === "campaign_start")).toBe(false);
+    expect(evidence.some((e) => e.kind === "window")).toBe(false);
+    // The stop record still carries campaignId, consistent with Blocker 8.
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "invalid_checkpoint_interval");
+    expect(stopRecord?.campaignId).toBe(FIXTURE_CAMPAIGN_ID);
+  });
+
+  it("checkpointIntervalWindows: 25 constructed directly remains valid and the campaign proceeds", async () => {
+    const db = makeFakeDb();
+    const { deps } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ maxWindows: 1, authorizedFinalBlock: finalBlockForWindows(1), checkpointIntervalWindows: 25 }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("max_windows_reached");
+  });
+
+  it("computeCampaignExitCode fails closed for invalid_checkpoint_interval", () => {
+    expect(computeCampaignExitCode("invalid_checkpoint_interval")).toBe(1);
   });
 });
 
