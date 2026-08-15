@@ -229,13 +229,84 @@ fabricated-contamination pre-gate) for each of up to `--max-windows` proposed
 windows, writes one evidence record per proposed window, and **never**
 submits an HTTP POST or mutates any state.
 
-### Explicit approval gate
+### Approval semantics: default rule vs. the bounded batch exception
 
-This runner never executes without the operator passing `--execute`
-explicitly, and every execute invocation still requires the same product-owner
-approval and dry-run-first discipline described earlier in this document —
-implementing the runner is not itself authorization to run it against
-production.
+The default operator rule is **one live mutation window per explicit
+product-owner approval** — that is what the "Recommended sequence" section
+above describes (propose one window, get approval, execute it, verify it,
+only then propose the next). That default remains in force for manual
+per-window operations, raw direct `POST /api/sync/manual` calls, the backward
+campaign runner (`scripts/transfer-backfill-runner.ts`), and any workflow not
+explicitly covered by the exception below. Implementing
+`wallet-forward-sync-runner.ts` does not change that default and does not by
+itself authorize running it against production.
+
+This runner is the one narrow, explicit exception. Three cases:
+
+- **Case A — manual/single-window operation** (raw API call, the "Recommended
+  sequence" above, or `wallet-forward-sync-runner.ts` run with
+  `--max-windows 1`): fresh approval per window, as always.
+- **Case B — `wallet-forward-sync-runner.ts` with an explicit approved
+  batch:** one explicit product-owner approval MAY authorize up to 5
+  sequential windows in a single invocation (`--max-windows` between 1 and 5),
+  and only when all of the following hold:
+  1. A fresh dry-run of the **exact same** wallet, chain, expected cursor,
+     first-window start, window size, `--max-windows`, and policy-label
+     prefix has completed successfully first — exits 0, plans exactly the
+     approved windows, shows no policy-label collision, no gap or overlap,
+     produces no mutation, and leaves repository/database state untouched
+     apart from its own evidence-file append.
+  2. The live `--execute` approval states the exact walletAddress, chainId,
+     expected cursor, first-window start, window size, `--max-windows`,
+     policy-label prefix, and authorized final block/range — not a vague
+     "go ahead."
+  3. Each window is still independently submitted and verified by the
+     runner's own per-window stop gates (below) — the batch approval does not
+     relax any single-window gate.
+  4. Execution never exceeds the exact approved `--max-windows` or approved
+     final block.
+  5. The runner's existing hard cap of 5 windows per invocation is unchanged
+     by this policy — it does not raise or bypass the cap, it only says one
+     approval may cover up to that existing cap in one invocation.
+- **Case C — hard stop inside an approved batch:** the moment any per-window
+  stop gate fails, the runner halts before the next `POST` (see "Per-window
+  stop gates" below). The remaining, unused portion of that batch
+  authorization **expires immediately** — nothing auto-retries, and no later
+  window in that batch remains authorized. Resuming requires, in order: fresh
+  state verification, a fresh dry-run with the same exact parameters, and a
+  fresh explicit product-owner approval. A hard stop is never treated as
+  "skip this window and continue."
+
+This exception is scoped tightly to `wallet-forward-sync-runner.ts` because of
+its specific safety properties (fixed hard cap, mandatory dry-run-first,
+per-window pre- and post-submit gates, fail-closed non-zero exit, no
+auto-retry). It does **not** mean: every backfill may now batch 5 windows;
+every operator command may batch windows; one approval covers an unlimited
+campaign; runner failures can be skipped; later windows remain authorized
+after a hard stop; dry-run is optional; `--max-windows 5` should be the
+default (it is still `1`); manual API calls inherit this batch exception; or
+that `scripts/transfer-backfill-runner.ts` inherits this policy. That runner's
+own paused-campaign posture (`docs/transfer-history-backfill-operator-plan.md`,
+paused after Window 60 pending explicit Window 61 approval) is unchanged.
+
+**Example — allowed batch (Case B):** a fresh dry-run with
+`--max-windows 5 --first-window-start 25078549 --window-size 1000` exits 0
+and previews exactly windows 1–5 covering `[25078549, 25083548]` with no
+collisions or gaps. The product owner approves that exact wallet, chain,
+cursor, range, and `--max-windows 5` in one message. The operator runs the
+same command with `--execute`. All 5 windows complete and pass every
+per-window gate; the runner stops cleanly after window 5
+(`stoppedReason: "max_windows_reached"`). No further approval is needed for
+windows 1–5 individually — one approval covered the batch.
+
+**Example — hard stop (Case C):** the same approved 5-window batch is
+running; window 3 completes its `POST` but fails a post-run gate (say,
+`warningCount !== 0`). The runner writes a `kind: "stop"` evidence record with
+`reason: "invariant_failed_after_run"` and exits nonzero. It does **not**
+submit window 4 or window 5 — the remaining 2 windows of that approval are no
+longer authorized. Resuming requires fresh state verification, a fresh
+dry-run, and a fresh explicit approval before any further window (4 or
+otherwise) can be submitted.
 
 ### Executing
 
