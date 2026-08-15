@@ -865,6 +865,76 @@ describe("evidence", () => {
     expect(summary.stoppedReason).toBe("evidence_append_failed");
     expect(httpPostCalls).toHaveLength(1);
   });
+
+  // ─── Blocker 2: canonical window outcome preserved when the window
+  // evidence write itself fails (after POST + terminal verification) ────────
+
+  it("(A) canonically clean COMPLETED window + window-evidence append failure: exact runId/window identity retained, canonical completion represented, no second POST", async () => {
+    const db = makeFakeDb({ runsById: { "run-1": completedRun() } });
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      failEvidenceAfter: 1,
+      httpPost: async () => {
+        db.advanceCursorTo(25_079_548n);
+        return { status: 202, body: { data: { runId: "run-1" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ execute: true, maxWindows: 1, authorizedFinalBlock: finalBlockForWindows(1) }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("evidence_append_failed");
+    expect(httpPostCalls).toHaveLength(1);
+    // windowsCompleted is NOT incremented (its evidence was never durably
+    // recorded), but the attempt's canonical identity/outcome survives.
+    expect(summary.windowsCompleted).toBe(0);
+    expect(summary.lastAttemptedWindow).toMatchObject({
+      logicalWindowNumber: 1,
+      policyLabel: campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 1),
+      runId: "run-1",
+      terminalStatus: "COMPLETED",
+      canonicallyClean: true,
+      invariantFailures: [],
+    });
+    expect(summary.lastAttemptedWindow?.expectedRange).toEqual({
+      startBlock: "25078549",
+      endBlock: "25079548",
+    });
+  });
+
+  // ─── Blocker 2: (B) invariant/warning failure + evidence append failure ──
+
+  it("(B) canonical terminal window with a warning + evidence append failure: original invariant failure reasons are not lost, exact run/window identity retained, no next POST", async () => {
+    const db = makeFakeDb({ runsById: { "run-1": completedRun({ warningCount: 1, warningDetails: ["some-warning"] }) } });
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      failEvidenceAfter: 1,
+      httpPost: async () => {
+        db.advanceCursorTo(25_079_548n);
+        return { status: 202, body: { data: { runId: "run-1" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ execute: true, maxWindows: 1, authorizedFinalBlock: finalBlockForWindows(1) }),
+      deps,
+    );
+
+    // Evidence failure remains the reported stop trigger, not the
+    // underlying invariant failure — but the invariant failure detail is
+    // not lost, it is preserved inside lastAttemptedWindow.
+    expect(summary.stoppedReason).toBe("evidence_append_failed");
+    expect(httpPostCalls).toHaveLength(1);
+    expect(summary.lastAttemptedWindow).toMatchObject({
+      logicalWindowNumber: 1,
+      policyLabel: campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 1),
+      runId: "run-1",
+      canonicallyClean: false,
+    });
+    expect(summary.lastAttemptedWindow?.invariantFailures?.some((r) => r.includes("warningCount"))).toBe(true);
+  });
 });
 
 // ─── Recovery / failure ─────────────────────────────────────────────────────────
@@ -919,6 +989,28 @@ describe("ambiguous-submission recovery", () => {
       expectedEndBlock: candidate.endBlock!,
     });
     expect(result.ok).toBe(false);
+  });
+
+  it("fails closed on one full-identity match PLUS one conflicting same-label candidate — the candidate SET size is checked before identity, so the presence of any other same-label row is itself disqualifying", () => {
+    const fullMatch = completedRun();
+    const conflicting = completedRun({
+      id: "run-conflict",
+      walletId: "some-other-wallet-id",
+      startBlock: 999_999n,
+      endBlock: 1_000_998n,
+    });
+    const result = classifyAmbiguousSubmissionRecovery({
+      candidates: [fullMatch, conflicting],
+      expectedPolicyLabel: fullMatch.policyLabel,
+      expectedWalletId: fullMatch.walletId!,
+      expectedChainId: fullMatch.chainId,
+      expectedStartBlock: fullMatch.startBlock!,
+      expectedEndBlock: fullMatch.endBlock!,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain("2 SyncRun candidates share this policyLabel");
+    }
   });
 
   it("via the real orchestrator: an ambiguous POST recovers when exactly one full-identity match exists", async () => {
@@ -986,6 +1078,144 @@ describe("ambiguous-submission recovery", () => {
     );
 
     expect(summary.stoppedReason).toBe("ambiguous_submission_unrecoverable");
+  });
+
+  it("via the real orchestrator: one full-identity match plus one conflicting same-label candidate fails closed and never retries", async () => {
+    const plan1Label = campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 1);
+    const fullMatch = completedRun({ policyLabel: plan1Label });
+    const conflicting = completedRun({
+      id: "run-conflict",
+      policyLabel: plan1Label,
+      walletId: "some-other-wallet-id",
+      startBlock: 999_999n,
+      endBlock: 1_000_998n,
+    });
+    const db = makeFakeDb({ ambiguousCandidates: [fullMatch, conflicting] });
+    let postCalls = 0;
+    const { deps } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        throw new Error("simulated network failure");
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ execute: true, maxWindows: 1, authorizedFinalBlock: finalBlockForWindows(1) }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("ambiguous_submission_unrecoverable");
+    expect(postCalls).toBe(1);
+  });
+});
+
+// ─── Blocker 3: attempt-identity preservation on an unexpected error ──────────
+
+describe("unexpected-error attempt-identity preservation", () => {
+  it("(1) exception after successful POST/runId acquisition but before terminal verification: stop record and summary contain runId + policyLabel + logical window + range", async () => {
+    const db = makeFakeDb();
+    (db.syncRun.findUnique as unknown) = async () => {
+      throw new Error("simulated DB outage during polling");
+    };
+    const { deps, evidence } = makeFakeDeps({
+      db,
+      httpPost: async () => ({ status: 202, body: { data: { runId: "run-1" } } }),
+    });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ execute: true, maxWindows: 1, authorizedFinalBlock: finalBlockForWindows(1), pollTimeoutMs: 50 }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("unexpected_error");
+    expect(summary.lastAttemptedWindow).toMatchObject({
+      logicalWindowNumber: 1,
+      policyLabel: campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 1),
+      runId: "run-1",
+    });
+    expect(summary.lastAttemptedWindow?.expectedRange).toEqual({
+      startBlock: "25078549",
+      endBlock: "25079548",
+    });
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "unexpected_error");
+    expect(stopRecord).toBeDefined();
+    const attempt = stopRecord?.lastAttemptedWindow as { runId?: string; policyLabel?: string } | undefined;
+    expect(attempt?.runId).toBe("run-1");
+    expect(attempt?.policyLabel).toBe(campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 1));
+  });
+
+  it("(2) exception before runId exists: stop record and summary contain known window identity but do not fabricate a runId", async () => {
+    const db = makeFakeDb();
+    (db.syncCursor.findUnique as unknown) = async () => {
+      throw new Error("simulated DB outage before POST");
+    };
+    const { deps, evidence, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(baseOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("unexpected_error");
+    expect(httpPostCalls).toHaveLength(0);
+    // The exception happened before window planning ever ran (the very
+    // first DB read in the loop throws), so no attempt context exists yet
+    // at all — nothing is fabricated.
+    expect(summary.lastAttemptedWindow).toBeUndefined();
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "unexpected_error");
+    expect(stopRecord?.lastAttemptedWindow).toBeUndefined();
+  });
+
+  it("(2b) exception after window identity is known but before the POST (or its runId) exists: known identity is retained, runId is not fabricated", async () => {
+    const db = makeFakeDb();
+    const { deps } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        throw new Error("network failure — never reaches recovery because the candidate lookup itself throws");
+      },
+    });
+    // Force the ambiguous-recovery candidate lookup itself to throw, so the
+    // exception occurs after currentAttempt is seeded (policyLabel/range
+    // known) but strictly before any runId could ever become known.
+    (db.syncRun.findMany as unknown) = async (args: unknown) => {
+      const where = (args as { where?: { policyLabel?: string } }).where;
+      if (where?.policyLabel) {
+        throw new Error("simulated candidate lookup failure");
+      }
+      return [];
+    };
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({ execute: true, maxWindows: 1, authorizedFinalBlock: finalBlockForWindows(1) }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("unexpected_error");
+    expect(summary.lastAttemptedWindow).toMatchObject({
+      logicalWindowNumber: 1,
+      policyLabel: campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 1),
+      runId: null,
+    });
+  });
+
+  it("(3) no retry and no next POST after an unexpected error", async () => {
+    const db = makeFakeDb();
+    let postCalls = 0;
+    const { deps } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        return { status: 202, body: { data: { runId: "run-1" } } };
+      },
+    });
+    (db.syncRun.findUnique as unknown) = async () => {
+      throw new Error("simulated DB outage");
+    };
+
+    await runWalletForwardCampaignRunner(
+      baseOptions({ execute: true, maxWindows: 5, authorizedFinalBlock: finalBlockForWindows(5), pollTimeoutMs: 50 }),
+      deps,
+    );
+
+    expect(postCalls).toBe(1);
   });
 });
 

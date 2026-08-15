@@ -359,12 +359,25 @@ export function validateLongestGeneratedLabel(args: {
  * Classifies whether an ambiguous POST (the HTTP call itself threw — the
  * runner never received a `runId`, but the server may have already accepted
  * and persisted the request) can be safely treated as the exact submitted
- * attempt. Recovery is accepted ONLY when exactly one candidate matches the
- * full expected identity: policyLabel, walletId, chainId,
- * sourceFamilies === ["TRANSFERS"], startBlock, endBlock. Zero matches, more
- * than one match, or a candidate that matches on policyLabel but differs on
- * any other identity field all fail closed — never an automatic resubmit,
- * and never an inference from range alone.
+ * attempt.
+ *
+ * `candidates` must be every canonical `SyncRun` row sharing the exact
+ * expected `policyLabel` (the caller's DB query is not narrowed by any other
+ * field) — `policyLabel` is not database-unique
+ * (`prisma/schema.prisma`: no `@unique`), so more than one row can share a
+ * label. The candidate-SET size is checked FIRST, independent of identity:
+ * zero rows or more than one row sharing the label both fail closed
+ * immediately, even if exactly one of several same-label rows would
+ * otherwise match the full expected identity. Only when the label uniquely
+ * identifies a single canonical row is that sole row then checked against
+ * the full expected identity (policyLabel, walletId, chainId,
+ * sourceFamilies === ["TRANSFERS"], startBlock, endBlock); any mismatch
+ * there also fails closed. This ordering means the mere presence of an
+ * unrelated same-label row is itself treated as a red flag — proof that the
+ * label-collision discipline broke down somewhere — rather than something a
+ * coincidental full-identity match on a different row can silently paper
+ * over. Never an automatic resubmit, and never an inference from range
+ * alone.
  */
 export function classifyAmbiguousSubmissionRecovery(args: {
   candidates: readonly RunnerSyncRunRecord[];
@@ -374,29 +387,37 @@ export function classifyAmbiguousSubmissionRecovery(args: {
   expectedStartBlock: bigint;
   expectedEndBlock: bigint;
 }): { ok: true; run: RunnerSyncRunRecord } | { ok: false; reason: string } {
-  const matching = args.candidates.filter(
-    (c) =>
-      c.policyLabel === args.expectedPolicyLabel &&
-      c.walletId === args.expectedWalletId &&
-      c.chainId === args.expectedChainId &&
-      c.sourceFamilies.length === 1 &&
-      c.sourceFamilies[0] === WALLET_FORWARD_SYNC_SOURCE_FAMILIES[0] &&
-      c.startBlock === args.expectedStartBlock &&
-      c.endBlock === args.expectedEndBlock,
-  );
-  if (matching.length === 0) {
+  if (args.candidates.length === 0) {
     return {
       ok: false,
-      reason: `ambiguous submission for policyLabel "${args.expectedPolicyLabel}": zero SyncRun candidates match the full expected identity (walletId, chainId, sourceFamilies, startBlock, endBlock) — failing closed, no auto-resubmit`,
+      reason: `ambiguous submission for policyLabel "${args.expectedPolicyLabel}": zero SyncRun candidates share this policyLabel — failing closed, no auto-resubmit`,
     };
   }
-  if (matching.length > 1) {
+  if (args.candidates.length > 1) {
     return {
       ok: false,
-      reason: `ambiguous submission for policyLabel "${args.expectedPolicyLabel}": ${matching.length} SyncRun candidates match the full expected identity — failing closed, no auto-resubmit`,
+      reason: `ambiguous submission for policyLabel "${args.expectedPolicyLabel}": ${args.candidates.length} SyncRun candidates share this policyLabel (policyLabel is not database-unique) — failing closed regardless of which one, if any, would otherwise match the full expected identity, no auto-resubmit`,
     };
   }
-  return { ok: true, run: matching[0] };
+
+  const [sole] = args.candidates;
+  const matchesFullIdentity =
+    sole.policyLabel === args.expectedPolicyLabel &&
+    sole.walletId === args.expectedWalletId &&
+    sole.chainId === args.expectedChainId &&
+    sole.sourceFamilies.length === 1 &&
+    sole.sourceFamilies[0] === WALLET_FORWARD_SYNC_SOURCE_FAMILIES[0] &&
+    sole.startBlock === args.expectedStartBlock &&
+    sole.endBlock === args.expectedEndBlock;
+
+  if (!matchesFullIdentity) {
+    return {
+      ok: false,
+      reason: `ambiguous submission for policyLabel "${args.expectedPolicyLabel}": the sole matching-policyLabel SyncRun candidate does not match the full expected identity (walletId, chainId, sourceFamilies, startBlock, endBlock) — failing closed, no auto-resubmit`,
+    };
+  }
+
+  return { ok: true, run: sole };
 }
 
 // ─── Checkpoint evaluation (pure) ──────────────────────────────────────────────
@@ -799,12 +820,41 @@ export type CampaignDeps = {
   checkEvidenceWritable: () => Promise<boolean>;
 };
 
+/**
+ * Everything known about the window currently being submitted, tracked in
+ * outer-loop-iteration scope and enriched as more becomes known (plan →
+ * runId → terminal/verification outcome). Carried into the returned
+ * `CampaignSummary` when a failure occurs AFTER canonical PostgreSQL state
+ * has already been mutated but BEFORE that outcome could be durably
+ * recorded as evidence (`evidence_append_failed` on the window write, or an
+ * `unexpected_error` thrown after POST) — so canonical truth about the
+ * attempted window is never silently lost from the operator-facing result,
+ * even though the evidence record itself could not be written. `runId` is
+ * `null`, never fabricated, when the attempt failed before one was
+ * received or recovered.
+ */
+export type CampaignWindowAttempt = {
+  logicalWindowNumber: number;
+  policyLabel: string;
+  expectedRange: { startBlock: string; endBlock: string };
+  runId: string | null;
+  recoveredFromAmbiguousSubmission: boolean;
+  actualRange?: { startBlock: string | null; endBlock: string | null };
+  terminalStatus?: string | null;
+  canonicallyClean?: boolean;
+  invariantFailures?: string[];
+};
+
 export type CampaignSummary = {
   stoppedReason: string;
   detail?: string;
   windowsCompleted: number;
   lastWindowNumber: number | null;
   checkpointsPassed: number;
+  /** Present only when a failure occurred mid-window-attempt after POST —
+   * see `CampaignWindowAttempt`'s doc comment. Absent on every clean
+   * completion and on any pre-POST stop. */
+  lastAttemptedWindow?: CampaignWindowAttempt;
 };
 
 /** Genuine, non-error campaign completion. Every other stoppedReason —
@@ -1030,7 +1080,15 @@ export async function runWalletForwardCampaignRunner(
   let simulatedCursorToBlock: bigint | null = null;
   let expectedCursorToBlock = options.expectedCursorToBlock;
 
+  // Tracks the current iteration's execute-mode attempt so a failure after
+  // POST (evidence-append failure or an unexpected exception) can still
+  // report canonical attempt identity — see CampaignWindowAttempt's doc
+  // comment. Reset at the top of every iteration; never carried across
+  // iterations.
+  let currentAttempt: CampaignWindowAttempt | null = null;
+
   for (let iteration = 0; iteration < effectiveMaxWindows; iteration += 1) {
+    currentAttempt = null;
     try {
       const cursor = await getLiveTransfersCursor(deps.db, wallet.id, options.chainId);
 
@@ -1167,6 +1225,17 @@ export async function runWalletForwardCampaignRunner(
           window: plan,
         });
 
+        // Seed the attempt context as soon as window identity is known —
+        // before the POST — so any failure from this point forward, however
+        // it happens, has at least this much to report.
+        currentAttempt = {
+          logicalWindowNumber: plan.windowNumber,
+          policyLabel: plan.policyLabel,
+          expectedRange: { startBlock: plan.startBlock.toString(), endBlock: plan.endBlock.toString() },
+          runId: null,
+          recoveredFromAmbiguousSubmission: false,
+        };
+
         let postResponse: HttpResponse | undefined;
         let recoveredRunId: string | undefined;
 
@@ -1202,6 +1271,18 @@ export async function runWalletForwardCampaignRunner(
         const runId =
           recoveredRunId ??
           (postResponse?.body as { data?: { runId?: string } } | undefined)?.data?.runId;
+
+        // runId is now known (whether from a normal 202 response or from
+        // ambiguous-submission recovery) — record it. Left null on the
+        // manual_sync_submit_failed path below, since no runId was ever
+        // actually received or recovered there.
+        if (runId) {
+          currentAttempt = {
+            ...currentAttempt!,
+            runId,
+            recoveredFromAmbiguousSubmission: recoveredRunId !== undefined,
+          };
+        }
 
         if (!recoveredRunId && (!postResponse || postResponse.status !== 202 || !runId)) {
           return stopCampaign(
@@ -1293,6 +1374,20 @@ export async function runWalletForwardCampaignRunner(
         });
         const allOk = postRunFailureReasons.length === 0;
 
+        // Canonical terminal verification is now fully known — enrich the
+        // attempt context so it survives even if the evidence write below
+        // fails.
+        currentAttempt = {
+          ...currentAttempt!,
+          actualRange: {
+            startBlock: polled.run.startBlock?.toString() ?? null,
+            endBlock: polled.run.endBlock?.toString() ?? null,
+          },
+          terminalStatus: polled.run.status,
+          canonicallyClean: allOk,
+          invariantFailures: postRunFailureReasons,
+        };
+
         // Evidence-failure-is-a-gate: canonical PostgreSQL state (the just-
         // completed SyncRun/SyncCursor writes) is never rolled back, but if
         // this record cannot be appended, the next window must never be
@@ -1330,12 +1425,22 @@ export async function runWalletForwardCampaignRunner(
           invariantFailures: postRunFailureReasons,
         });
         if (!windowWrite.ok) {
+          // Canonical PostgreSQL state (the SyncRun/SyncCursor writes this
+          // window just made) is authoritative and is never rolled back or
+          // retried — but the caller must still be able to see exactly what
+          // was attempted (window identity, runId, terminal status, and
+          // whether it was canonically clean or already had invariant
+          // failures) even though the evidence record itself could not be
+          // written. windowsCompleted/lastWindowNumber are deliberately NOT
+          // advanced here: they track windows whose evidence was durably
+          // recorded, and this one's was not.
           return {
             stoppedReason: "evidence_append_failed",
             detail: windowWrite.message,
             windowsCompleted,
             lastWindowNumber,
             checkpointsPassed,
+            lastAttemptedWindow: currentAttempt ?? undefined,
           };
         }
 
@@ -1418,17 +1523,29 @@ export async function runWalletForwardCampaignRunner(
       const message = err instanceof Error ? err.message : String(err);
       // Never auto-retry, never submit another window. Best-effort stop
       // record — its own failure must not mask the original error or throw
-      // out of this function.
+      // out of this function. currentAttempt carries whatever window
+      // identity (policyLabel, range, and — only if actually known —
+      // runId) was established before the exception, so canonical recovery
+      // never has to guess which window/run may have mutated PostgreSQL.
+      // runId is left null/absent rather than fabricated when the exception
+      // happened before one was received or recovered.
       await writeEvidenceOrNull(
         deps,
         buildStopEvidenceRecord({
           at: deps.now().toISOString(),
           reason: "unexpected_error",
           detail: message,
-          extra: { campaignId },
+          extra: { campaignId, lastAttemptedWindow: currentAttempt ?? undefined },
         }),
       );
-      return { stoppedReason: "unexpected_error", detail: message, windowsCompleted, lastWindowNumber, checkpointsPassed };
+      return {
+        stoppedReason: "unexpected_error",
+        detail: message,
+        windowsCompleted,
+        lastWindowNumber,
+        checkpointsPassed,
+        lastAttemptedWindow: currentAttempt ?? undefined,
+      };
     }
   }
 
