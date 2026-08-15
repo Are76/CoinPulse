@@ -273,9 +273,12 @@ This runner is the one narrow, explicit exception. Three cases:
   stop gates" below). The remaining, unused portion of that batch
   authorization **expires immediately** — nothing auto-retries, and no later
   window in that batch remains authorized. Resuming requires, in order: fresh
-  state verification, a fresh dry-run with the same exact parameters, and a
-  fresh explicit product-owner approval. A hard stop is never treated as
-  "skip this window and continue."
+  state verification, a fresh dry-run whose parameters are derived from that
+  live state (see "Resuming after a hard stop" below — **not** the original
+  batch's `--expected-cursor-to`, `--first-window-start`, or
+  `--policy-label-prefix` reused verbatim), and a fresh explicit
+  product-owner approval matching those newly derived parameters exactly. A
+  hard stop is never treated as "skip this window and continue."
 
 This exception is scoped tightly to `wallet-forward-sync-runner.ts` because of
 its specific safety properties (fixed hard cap, mandatory dry-run-first,
@@ -289,6 +292,99 @@ that `scripts/transfer-backfill-runner.ts` inherits this policy. That runner's
 own paused-campaign posture (`docs/transfer-history-backfill-operator-plan.md`,
 paused after Window 60 pending explicit Window 61 approval) is unchanged.
 
+### Resuming after a hard stop
+
+A hard stop can occur only after a window's `POST /api/sync/manual` has
+already been submitted — earlier windows in the batch, and possibly part of
+the failing window itself, may have already mutated `SyncCursor`, raw
+tables, and canonical ledger rows before the post-run gates caught the
+problem. Re-running the original invocation's exact command is therefore not
+just unauthorized under Case C — it will usually be technically wrong,
+because the live state it validates against has moved.
+
+**What stays fixed**, unless the product owner deliberately authorizes a
+different operation entirely:
+
+- `--wallet-address` / the resolved `walletId`
+- `--chain-id`
+- the source family (`TRANSFERS`, fixed by this runner)
+- the `--window-size` policy
+- the operator's overall intent (continuing this wallet's forward TRANSFERS
+  coverage)
+
+**What MUST be re-derived from canonical persisted state before any resume
+attempt** — never reused from the failed invocation's parameters or evidence
+file:
+
+1. Inspect the failed `SyncRun`: exact `status`, `warningCount` /
+   `warningDetails`, `errorMessage`, `failedSourceFamily` /
+   `failedFromBlock` / `failedToBlock`.
+2. Inspect the live `SyncCursor` for this wallet/chain/`TRANSFERS` directly
+   (read-only `SELECT`) — do not assume it matches any value from the
+   original approval, dry-run, or evidence file.
+3. Inspect the raw/canonical rows the submitted window wrote
+   (`RawTransaction`, `RawTokenTransfer`, `LedgerEntry`) for the failed
+   window's range.
+4. Re-run the fabricated-contamination, duplicate-`RawTransaction`,
+   duplicate-`RawTokenTransfer`, and duplicate-`LedgerEntry` checks over the
+   failed window's range.
+5. From all of the above, determine the actual highest canonical covered
+   block for this wallet/chain/`TRANSFERS`.
+
+Only then derive the next invocation's parameters from that live truth:
+
+- new `--expected-cursor-from` = the live cursor's current `fromBlock` (should
+  equal the original anchor, but verify from step 2 — do not assume)
+- new `--expected-cursor-to` = the live cursor's current `toBlock`, as just
+  read — **not** the value from the original approval or dry-run
+- new `--first-window-start` = `live cursor.toBlock + 1`, **only if** step 5
+  above proves it is safe to move forward from that block (see "Failed-range
+  rule" below)
+- a new, collision-free `--policy-label-prefix` — verify against existing
+  `SyncRun.policyLabel` values for this chain; do not assume the original
+  prefix, or its per-window labels (e.g. `prefix-1`), are still free, since
+  some of them are now `COMPLETED` `SyncRun`s
+- a new `--max-windows` matching whatever bounded resume scope the product
+  owner explicitly approves for this fresh invocation — it does not need to
+  equal, and is not implicitly capped by, how many windows remained
+  unauthorized in the original batch
+
+**Failed-range rule.** A submitted window that later fails a post-run gate
+must **not** be automatically retried, and must **not** be automatically
+skipped. From the state gathered above, determine which of two cases
+applies:
+
+1. **The submitted range was actually fully persisted and the cursor
+   advanced correctly** (for example, the failure was a warning-only
+   invariant rather than a partial write) — in that case, retrying that same
+   range would be wrong or duplicative; the next safe forward range is
+   derived from the live cursor as described above.
+2. **The range is only partially or ambiguously persisted** (for example,
+   the `POST` succeeded but raw/ledger writes look incomplete, or the
+   contamination/duplicate checks cannot confirm a clean state) — in that
+   case, normal forward execution must **not** continue until the state has
+   been reconciled through a separately approved recovery/repair path. This
+   runner has no reconciliation or repair code path; do not invent one
+   operationally.
+
+Never infer "the batch failed" to mean "no mutation happened." Never infer
+"the cursor advanced" to mean "every invariant is safe" — a window can
+advance the cursor and still fail a post-run gate (for example, a nonzero
+warning count) that requires investigation before anything else proceeds.
+Backend/PostgreSQL persisted truth governs the resume decision, not the
+failed invocation's command-line arguments or evidence file.
+
+**Window-number semantics.** The runner's internal `windowNumber` (and
+therefore the generated `prefix-<n>` label) is **invocation-local** — it
+always starts at 1 for a fresh invocation, regardless of how many logical
+windows an earlier batch already completed for this wallet. A resumed
+invocation's internal window 1 is not the campaign's logical "next window" —
+it is whatever forward range the freshly derived `--first-window-start`
+produces. When discussing resume scope with the product owner, state the
+logical block range being resumed (for example, "continuing forward from
+block X"), not just the runner's internal window-number, to avoid conflating
+the two.
+
 **Example — allowed batch (Case B):** a fresh dry-run with
 `--max-windows 5 --first-window-start 25078549 --window-size 1000` exits 0
 and previews exactly windows 1–5 covering `[25078549, 25083548]` with no
@@ -300,13 +396,35 @@ per-window gate; the runner stops cleanly after window 5
 windows 1–5 individually — one approval covered the batch.
 
 **Example — hard stop (Case C):** the same approved 5-window batch is
-running; window 3 completes its `POST` but fails a post-run gate (say,
+running; window 3's `POST` is submitted and its `SyncRun`/`SyncCursor` writes
+advance as normal, but the window then fails a post-run gate (say,
 `warningCount !== 0`). The runner writes a `kind: "stop"` evidence record with
 `reason: "invariant_failed_after_run"` and exits nonzero. It does **not**
 submit window 4 or window 5 — the remaining 2 windows of that approval are no
-longer authorized. Resuming requires fresh state verification, a fresh
-dry-run, and a fresh explicit approval before any further window (4 or
-otherwise) can be submitted.
+longer authorized, and reusing the original `--expected-cursor-to` /
+`--first-window-start` / `--policy-label-prefix` verbatim in a fresh
+invocation would fail immediately: the live cursor has already moved past the
+original `--expected-cursor-to`, and `prefix-1`/`prefix-2`/`prefix-3` already
+exist as `COMPLETED` `SyncRun`s.
+
+Before any resume attempt, the operator reads canonical state per "Resuming
+after a hard stop" above:
+
+- If the live `SyncCursor`, raw tables, and ledger all show window 3's range
+  fully and correctly persisted (only the warning itself needs review, not a
+  partial write), the next candidate range starts at
+  `live cursor.toBlock + 1` (immediately after window 3's `endBlock`), under
+  a fresh dry-run with a new `--expected-cursor-from` / `--expected-cursor-to`
+  read from that live cursor, a new `--first-window-start` equal to that same
+  value, and a new collision-free `--policy-label-prefix` (for example a
+  `-resume-1` suffix) — then a fresh product-owner approval of those exact
+  new parameters, matched exactly by the fresh dry-run and the subsequent
+  `--execute` invocation.
+- If persistence for window 3 is instead partial or ambiguous (for example
+  the contamination/duplicate checks cannot confirm a clean state), forward
+  execution stops entirely until that state is reconciled through a
+  separately approved recovery/repair path — no new forward-batch dry-run or
+  approval is proposed until then.
 
 ### Executing
 
