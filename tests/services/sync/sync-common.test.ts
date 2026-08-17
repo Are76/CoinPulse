@@ -855,6 +855,63 @@ describe("ingestWalletTransferArtifacts wallet-relevance filtering", () => {
       expect(harness.rawBlocks.size).toBe(3);
     });
 
+    it("A2: a concurrent insert by another wallet's sync between the persist call and its result does not cause a false failure", async () => {
+      const harness = createIngestionHarness();
+      // No pre-existing canonical rows before ingestion starts — a pre-read
+      // taken now would find nothing for either scanned identity.
+      const originalCreateMany = harness.db.rawBlock.createMany;
+      harness.db.rawBlock.createMany = async (args: Parameters<typeof originalCreateMany>[0]) => {
+        // Simulate a concurrent sync for a DIFFERENT wallet on the same
+        // chain (RawBlock identity is chain-scoped, and the operation lock
+        // only scopes conflicts to walletId+chainId, so this interleaving is
+        // possible) committing block 10's exact canonical identity right
+        // before this call's own skipDuplicates insert runs.
+        harness.rawBlocks.set("369:10:0xblock10", {
+          chainId: 369,
+          blockNumber: 10n,
+          blockHash: "0xblock10",
+          parentHash: "0xblock9",
+          timestamp: new Date(1_700_000_000 * 1000),
+        });
+        return originalCreateMany(args);
+      };
+      const publicClient = {
+        getLogs: vi.fn(async () => []),
+        getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+          number: blockNumber,
+          hash: `0xblock${blockNumber}`,
+          parentHash: `0xblock${blockNumber - 1n}`,
+          timestamp: 1_700_000_000n,
+          transactions: [],
+        })),
+        readContract: vi.fn(),
+        getTransaction: vi.fn(),
+        getTransactionReceipt: vi.fn(),
+      };
+
+      const artifacts = await ingestWalletTransferArtifacts({
+        db: harness.db as never,
+        publicClient: publicClient as never,
+        maxWindowSize: 2n,
+        wallet: { chainId: 369, address: WALLET_ADDRESS },
+        fromBlock: 10n,
+        toBlock: 11n,
+      });
+
+      // scannedBlockCount (2) !== persistedBlockCount (1, since block 10 was
+      // skipped as a duplicate of the concurrently-inserted row) — but a
+      // post-persist re-read proves both exact scanned identities (10 and
+      // 11) are now canonically present, so this must not throw and must
+      // classify as the benign replay warning, not an unexplained gap.
+      const expectedDetail = "some raw blocks were already persisted for this range";
+      expect(artifacts.warnings).toContain(expectedDetail);
+      expect(artifacts.structuredWarnings).toContainEqual({
+        code: SYNC_WARNING_CODES.RAW_BLOCKS_ALREADY_PERSISTED,
+        detail: expectedDetail,
+      });
+      expect(harness.rawBlocks.size).toBe(2);
+    });
+
     it("B2: a malformed/duplicate RPC block response within the same batch is never classified as benign replay — ingestion fails closed", async () => {
       const harness = createIngestionHarness();
       // No pre-existing canonical rows at all — the DB starts empty.

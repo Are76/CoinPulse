@@ -406,42 +406,48 @@ export async function ingestWalletTransferArtifacts(args: {
       );
     }
 
-    // Structural proof step for RAW_BLOCKS_ALREADY_PERSISTED: capture which
-    // exact (chainId, blockNumber, blockHash) identities already exist in
-    // canonical PostgreSQL state BEFORE this persistence attempt. Only a
-    // post-persist shortfall fully explained by these pre-existing rows may
-    // later be classified as benign replay.
-    const candidateBlocksInRange =
-      blocks.length > 0
-        ? await args.db.rawBlock.findMany({
-            where: {
-              chainId: args.wallet.chainId,
-              blockNumber: { gte: window.fromBlock, lte: window.toBlock },
-            },
-          })
-        : [];
-    const preExistingIdentities = new Set(
-      candidateBlocksInRange
-        .map((block) => blockIdentityKey(block))
-        .filter((key) => uniqueBlockIdentities.has(key)),
-    );
-    const windowPreExistingCount = preExistingIdentities.size;
-
     const windowPersistedCount = (await persistRawBlocks(blocks, args.db as never)).count;
     persistedBlockCount += windowPersistedCount;
 
     const windowShortfall = blocks.length - windowPersistedCount;
-    if (windowShortfall > 0 && windowShortfall !== windowPreExistingCount) {
-      // The shortfall is not fully explained by exact canonical identities
-      // that existed before this attempt — e.g. an unexplained persistence
-      // gap. Do not silently treat this as benign replay evidence.
-      throw new Error(
-        `raw block ingestion for chain ${args.wallet.chainId} window ` +
-          `${window.fromBlock}-${window.toBlock} scanned ${blocks.length} blocks, ` +
-          `persisted ${windowPersistedCount}, but only ${windowPreExistingCount} of the ` +
-          "scanned block identities were already canonical before this attempt; " +
-          "the remaining shortfall is unexplained",
+    if (windowShortfall > 0) {
+      // Structural proof step for RAW_BLOCKS_ALREADY_PERSISTED: a pre-persist
+      // read is not race-safe here. RawBlock identity is chain-scoped, but
+      // operation locking only scopes conflicts to (walletId, chainId), so a
+      // concurrent sync for a DIFFERENT wallet on the same chain can persist
+      // an overlapping block identity between a pre-read and this call to
+      // persistRawBlocks — skipDuplicates would then lower windowPersistedCount
+      // below blocks.length even though nothing is actually missing. Instead,
+      // re-read the exact scanned identities from canonical PostgreSQL state
+      // AFTER persistence completes. A shortfall is benign replay only when
+      // every exact scanned (chainId, blockNumber, blockHash) identity is now
+      // canonically present — proven post-persist, not inferred from a
+      // pre-persist count that a concurrent writer could invalidate.
+      const postPersistBlocksInRange = await args.db.rawBlock.findMany({
+        where: {
+          chainId: args.wallet.chainId,
+          blockNumber: { gte: window.fromBlock, lte: window.toBlock },
+        },
+      });
+      const postPersistIdentities = new Set(
+        postPersistBlocksInRange.map((block) => blockIdentityKey(block)),
       );
+      const missingIdentities = [...uniqueBlockIdentities].filter(
+        (identity) => !postPersistIdentities.has(identity),
+      );
+
+      if (missingIdentities.length > 0) {
+        // At least one exact scanned identity is still absent from canonical
+        // state after persistence — a genuine, unexplained persistence gap.
+        // Do not silently treat this as benign replay evidence.
+        throw new Error(
+          `raw block ingestion for chain ${args.wallet.chainId} window ` +
+            `${window.fromBlock}-${window.toBlock} scanned ${blocks.length} blocks, ` +
+            `persisted ${windowPersistedCount}, but ${missingIdentities.length} of the ` +
+            "scanned block identities are still missing from canonical state " +
+            "after persistence; the remaining shortfall is unexplained",
+        );
+      }
     }
 
     await persistRawTransactions(rawTransactions, args.db as never);

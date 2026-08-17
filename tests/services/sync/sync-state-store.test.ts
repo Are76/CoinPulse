@@ -287,6 +287,168 @@ describe("createPrismaSyncRunStore structured warning persistence", () => {
     );
     expect(persisted.warnings.some((w) => w.detail.startsWith("[truncated"))).toBe(false);
   });
+
+  it("B1: warningCount 0 with empty warningDetails and omitted structuredWarnings persists a known-empty classification", async () => {
+    const client = createFakePrismaClient();
+    const store = createPrismaSyncRunStore(client as never);
+
+    await store.createRun({
+      walletId: "wallet_1",
+      chainId: 369,
+      trigger: "MANUAL",
+      status: "PENDING",
+      stage: "PENDING",
+      sourceFamilies: ["TRANSFERS"],
+      startBlock: 1n,
+      endBlock: 10n,
+      policyLabel: "test",
+      warningCount: 0,
+      warningDetails: [],
+    });
+
+    expect(client.creates[0].structuredWarnings).toEqual({ warnings: [], truncatedCount: 0 });
+  });
+
+  it("B2: warningCount equal to warningDetails.length still derives UNKNOWN for every entry", async () => {
+    const client = createFakePrismaClient();
+    const store = createPrismaSyncRunStore(client as never);
+    const warningDetails = ["skip-dex:0xabc:unsupported-initiator", "skip-lp:0xdef:unknown-pool"];
+
+    await store.createRun({
+      walletId: "wallet_1",
+      chainId: 369,
+      trigger: "MANUAL",
+      status: "PENDING",
+      stage: "PENDING",
+      sourceFamilies: ["TRANSFERS"],
+      startBlock: 1n,
+      endBlock: 10n,
+      policyLabel: "test",
+      warningCount: warningDetails.length,
+      warningDetails,
+      // structuredWarnings intentionally omitted.
+    });
+
+    const persisted = client.creates[0].structuredWarnings as {
+      warnings: SyncWarning[];
+      truncatedCount: number;
+    };
+
+    expect(persisted.truncatedCount).toBe(0);
+    expect(persisted.warnings).toEqual(
+      warningDetails.map((detail) => ({ code: SYNC_WARNING_CODES.UNKNOWN, detail })),
+    );
+  });
+
+  it("B3: warningCount greater than warningDetails.length fails closed instead of persisting a false empty/complete classification", async () => {
+    const client = createFakePrismaClient();
+    const store = createPrismaSyncRunStore(client as never);
+
+    await store.createRun({
+      walletId: "wallet_1",
+      chainId: 369,
+      trigger: "MANUAL",
+      status: "PENDING",
+      stage: "PENDING",
+      sourceFamilies: ["TRANSFERS"],
+      startBlock: 1n,
+      endBlock: 10n,
+      policyLabel: "test",
+      warningCount: 2,
+      warningDetails: [],
+      // structuredWarnings intentionally omitted — this is the exact
+      // reported condition: warningCount declares 2 warnings occurred but
+      // no legacy detail text was ever recorded for them.
+    });
+
+    const persisted = client.creates[0].structuredWarnings as {
+      warnings: SyncWarning[];
+      truncatedCount: number;
+    };
+
+    // MANDATORY INVARIANT: must never claim "classification complete, zero
+    // warnings" when warningCount says otherwise.
+    expect(persisted).not.toEqual({ warnings: [], truncatedCount: 0 });
+    expect(persisted.warnings).toEqual([]);
+    // The unexplained count is represented via truncatedCount, not
+    // fabricated placeholder detail text (SyncWarning.detail must always be
+    // byte-for-byte identical to a real legacy warning string).
+    expect(persisted.truncatedCount).toBe(2);
+  });
+
+  it("B3b: warningCount partially exceeding warningDetails.length folds only the unexplained remainder into truncatedCount", async () => {
+    const client = createFakePrismaClient();
+    const store = createPrismaSyncRunStore(client as never);
+    const warningDetails = ["skip-dex:0xabc:unsupported-initiator"];
+
+    await store.createRun({
+      walletId: "wallet_1",
+      chainId: 369,
+      trigger: "MANUAL",
+      status: "PENDING",
+      stage: "PENDING",
+      sourceFamilies: ["TRANSFERS"],
+      startBlock: 1n,
+      endBlock: 10n,
+      policyLabel: "test",
+      warningCount: 3,
+      warningDetails,
+      // structuredWarnings intentionally omitted — 1 recorded detail, 2
+      // unexplained by warningCount.
+    });
+
+    const persisted = client.creates[0].structuredWarnings as {
+      warnings: SyncWarning[];
+      truncatedCount: number;
+    };
+
+    expect(persisted.warnings).toEqual([
+      { code: SYNC_WARNING_CODES.UNKNOWN, detail: "skip-dex:0xabc:unsupported-initiator" },
+    ]);
+    expect(persisted.truncatedCount).toBe(2);
+  });
+
+  it("B4: warningCount excess combines with the WARNING_DETAIL_LIMIT cap in truncatedCount without a large-array spread", async () => {
+    const client = createFakePrismaClient();
+    const store = createPrismaSyncRunStore(client as never);
+    const warningDetails = Array.from(
+      { length: WARNING_DETAIL_LIMIT + 3 },
+      (_, i) => `warning-${i}`,
+    );
+
+    await store.createRun({
+      walletId: "wallet_1",
+      chainId: 369,
+      trigger: "MANUAL",
+      status: "PENDING",
+      stage: "PENDING",
+      sourceFamilies: ["TRANSFERS"],
+      startBlock: 1n,
+      endBlock: 10n,
+      policyLabel: "test",
+      // warningCount claims 5 more than were even recorded in warningDetails.
+      warningCount: warningDetails.length + 5,
+      warningDetails,
+      // structuredWarnings intentionally omitted.
+    });
+
+    const persisted = client.creates[0].structuredWarnings as {
+      warnings: SyncWarning[];
+      truncatedCount: number;
+    };
+
+    // Retained entries stay correctly ordered and capped at the limit.
+    expect(persisted.warnings).toHaveLength(WARNING_DETAIL_LIMIT);
+    expect(persisted.warnings[0]).toEqual({ code: SYNC_WARNING_CODES.UNKNOWN, detail: "warning-0" });
+    expect(persisted.warnings[WARNING_DETAIL_LIMIT - 1]).toEqual({
+      code: SYNC_WARNING_CODES.UNKNOWN,
+      detail: `warning-${WARNING_DETAIL_LIMIT - 1}`,
+    });
+    // truncatedCount combines the cap-truncated 3 entries with the 5
+    // warningCount-unexplained entries: 8 total, never silently dropped.
+    expect(persisted.truncatedCount).toBe(8);
+    expect(persisted.warnings.some((w) => w.detail.startsWith("[truncated"))).toBe(false);
+  });
 });
 
 describe("mergeCursorWindow", () => {
