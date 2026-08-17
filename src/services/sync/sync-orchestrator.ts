@@ -204,11 +204,18 @@ export async function runWalletSync<TLog = unknown>(args: {
       }
       // Structured classification, kept strictly parallel to warningDetails.
       // A producer's structuredWarnings is only trusted when its length
-      // matches warnings.length exactly — any mismatch fails closed to
+      // matches warnings.length exactly AND every structured detail matches
+      // its corresponding legacy warning string at the same index — equal
+      // length alone does not rule out reordered or mismatched details being
+      // paired with the wrong semantic code. Any mismatch fails closed to
       // UNKNOWN for the whole batch rather than risking a misaligned code.
       const producerStructuredWarnings =
         ingestResult.structuredWarnings &&
-        ingestResult.structuredWarnings.length === ingestResult.warnings.length
+        ingestResult.structuredWarnings.length === ingestResult.warnings.length &&
+        ingestResult.structuredWarnings.every(
+          (structuredWarning, index) =>
+            structuredWarning.detail === ingestResult.warnings[index],
+        )
           ? ingestResult.structuredWarnings
           : ingestResult.warnings.map(unknownWarning);
       for (const structuredWarning of producerStructuredWarnings) {

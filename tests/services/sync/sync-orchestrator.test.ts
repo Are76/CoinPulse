@@ -223,6 +223,62 @@ describe("runWalletSync", () => {
     );
   });
 
+  it("fails closed to UNKNOWN for the whole batch when equal-length structuredWarnings details are reordered or mismatched", async () => {
+    const runStore = createRunStore();
+    const cursorStore = {
+      getCursor: vi.fn(async () => null),
+      upsertCursor: vi.fn(async () => undefined),
+    };
+    const ingest = vi.fn(async () => ({
+      rawLogCount: 0,
+      latestBlockHash: "0xnew",
+      logs: [],
+      fromBlock: 10n,
+      toBlock: 20n,
+      warnings: ["some raw blocks were already persisted for this range", "skip-dex:0xabc:missing-gas-price"],
+      // Same length as warnings, but the detail values are swapped relative
+      // to their corresponding legacy warning strings — the producer's
+      // RAW_BLOCKS_ALREADY_PERSISTED code would land on the wrong warning
+      // if length alone were trusted.
+      structuredWarnings: [
+        { code: SYNC_WARNING_CODES.UNKNOWN, detail: "skip-dex:0xabc:missing-gas-price" },
+        {
+          code: SYNC_WARNING_CODES.RAW_BLOCKS_ALREADY_PERSISTED,
+          detail: "some raw blocks were already persisted for this range",
+        },
+      ],
+    }));
+    const normalize = vi.fn(async () => []);
+    const persistLedger = vi.fn(async () => ({ actionGroupCount: 0, entryCount: 0 }));
+
+    await runWalletSync({
+      wallet: { id: "wallet_1", chainId: 369, address: "0x1111111111111111111111111111111111111111" },
+      sourceFamilies: ["TRANSFERS"],
+      startBlock: 10n,
+      endBlock: 20n,
+      policyLabel: "reordered-window",
+      dependencies: { runStore, cursorStore, ingestSourceFamily: ingest, normalizeSourceFamily: normalize, persistLedger },
+    });
+
+    expect(runStore.updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "COMPLETED",
+        warningCount: 2,
+        warningDetails: [
+          "some raw blocks were already persisted for this range",
+          "skip-dex:0xabc:missing-gas-price",
+        ],
+        structuredWarnings: [
+          {
+            code: SYNC_WARNING_CODES.UNKNOWN,
+            detail: "some raw blocks were already persisted for this range",
+          },
+          { code: SYNC_WARNING_CODES.UNKNOWN, detail: "skip-dex:0xabc:missing-gas-price" },
+        ],
+      }),
+    );
+  });
+
   it("supports rerunning the same explicit range without relying on cursor movement", async () => {
     const runStore = createRunStore();
     const cursorStore = {
