@@ -4,9 +4,10 @@ import { Prisma } from "@prisma/client";
 import type { PrismaClient, SourceFamily, SyncRunStatus, SyncTrigger } from "@prisma/client";
 
 import { getDb } from "@/lib/db";
-import type {
-  StructuredWarningsPayload,
-  SyncWarning,
+import {
+  unknownWarning,
+  type StructuredWarningsPayload,
+  type SyncWarning,
 } from "@/services/sync/sync-warning-codes";
 
 export const WARNING_DETAIL_LIMIT = 200;
@@ -44,6 +45,48 @@ export function capStructuredWarnings(
   };
 }
 
+/**
+ * Resolves the structured-warning payload to persist on `createRun` when the
+ * caller did not explicitly supply `structuredWarnings`.
+ *
+ * A bare `capStructuredWarnings(input.structuredWarnings ?? [])` default is
+ * unsafe here: if the caller passed `warningDetails` (legacy warnings did
+ * occur) but omitted `structuredWarnings` (classification was never
+ * performed for them), collapsing straight to `[]` would persist
+ * `{ warnings: [], truncatedCount: 0 }` — a payload that means "classification
+ * complete, zero warnings" under the documented contract. That directly
+ * contradicts `warningCount > 0` / non-empty `warningDetails` on the same
+ * row, and a future consumer trusting `truncatedCount === 0` could treat
+ * unclassified legacy warnings as safely classified. See AGENTS.md L149-150.
+ *
+ * Instead: when `structuredWarnings` is omitted, derive `UNKNOWN` entries
+ * from the caller-supplied `warningDetails`, preserving exact legacy order
+ * and detail text, then apply the same truncation-safe cap used everywhere
+ * else. `UNKNOWN` is the correct fail-closed code here — this call site has
+ * no structural knowledge of *why* each legacy warning occurred, only that
+ * one occurred. When `warningDetails` is empty (or omitted), there are no
+ * legacy warnings to classify, so a known-empty structured payload is safe
+ * and unambiguous. `capStructuredWarnings` derives `truncatedCount` from the
+ * same `WARNING_DETAIL_LIMIT` and "first N, in order" retention as
+ * `capWarningDetails`, so the two never disagree about how much was
+ * retained vs. truncated. The synthetic "[truncated: N …]" sentinel that
+ * `capWarningDetails` appends to the legacy array is never part of
+ * `warningDetails` at this layer — it is only added by `capWarningDetails`
+ * itself when persisting the legacy column — so it can never leak into a
+ * structured entry here.
+ */
+function resolveCreateStructuredWarnings(input: {
+  structuredWarnings?: readonly SyncWarning[];
+  warningDetails?: readonly string[];
+}): StructuredWarningsPayload {
+  if (input.structuredWarnings !== undefined) {
+    return capStructuredWarnings(input.structuredWarnings);
+  }
+
+  const legacyDetails = input.warningDetails ?? [];
+  return capStructuredWarnings(legacyDetails.map((detail) => unknownWarning(detail)));
+}
+
 type SyncStateClient = PrismaClient | Prisma.TransactionClient;
 type CursorStoreClient = PrismaClient;
 
@@ -73,9 +116,13 @@ export type SyncRunStore = {
     warningDetails?: readonly string[];
     /**
      * Structured classification, in the same order as `warningDetails`. When
-     * omitted, defaults to an empty structured payload (a fresh run with no
-     * warnings is a KNOWN state — never `null`, which is reserved for
-     * historical rows written before this field existed).
+     * omitted and `warningDetails` is empty (or also omitted), a fresh run
+     * with no warnings persists a KNOWN empty structured payload. When
+     * omitted but `warningDetails` is non-empty, the store derives `UNKNOWN`
+     * entries from `warningDetails` rather than persisting a false empty
+     * classification — see `resolveCreateStructuredWarnings`. Persisted
+     * `null` is reserved for historical rows written before this field
+     * existed; this store never writes `null` for a new row.
      */
     structuredWarnings?: readonly SyncWarning[];
     errorMessage?: string;
@@ -141,7 +188,10 @@ export function createPrismaSyncRunStore(
           policyLabel: input.policyLabel,
           warningCount: input.warningCount ?? 0,
           warningDetails: capWarningDetails(input.warningDetails ?? []),
-          structuredWarnings: capStructuredWarnings(input.structuredWarnings ?? []),
+          structuredWarnings: resolveCreateStructuredWarnings({
+            structuredWarnings: input.structuredWarnings,
+            warningDetails: input.warningDetails,
+          }),
           errorMessage: input.errorMessage ?? null,
           failedSourceFamily: input.failedSourceFamily ?? null,
           failedFromBlock: input.failedFromBlock ?? null,

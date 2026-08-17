@@ -796,5 +796,146 @@ describe("ingestWalletTransferArtifacts wallet-relevance filtering", () => {
       expect(genuine.detail).toBe(unrelated.detail);
       expect(genuine.code).not.toBe(unrelated.code);
     });
+
+    // B1 (genuine canonical replay still classified correctly) is already
+    // covered above by "classifies the raw-block-replay warning as
+    // RAW_BLOCKS_ALREADY_PERSISTED, detail unchanged": block 10 is
+    // pre-seeded as an exact canonical (chainId, blockNumber, blockHash)
+    // identity before ingestion runs, block 11 is newly inserted, and the
+    // shortfall (1) is fully explained by the 1 pre-existing identity.
+
+    it("B3: a retry-style recovery where some blocks already existed and the rest are newly inserted still classifies as RAW_BLOCKS_ALREADY_PERSISTED", async () => {
+      const harness = createIngestionHarness();
+      // Simulate a prior partial run that already persisted blocks 10 and 11
+      // canonically; this retry rescans 10-12 and should only newly insert 12.
+      harness.rawBlocks.set("369:10:0xblock10", {
+        chainId: 369,
+        blockNumber: 10n,
+        blockHash: "0xblock10",
+        parentHash: "0xblock9",
+        timestamp: new Date(1_700_000_000 * 1000),
+      });
+      harness.rawBlocks.set("369:11:0xblock11", {
+        chainId: 369,
+        blockNumber: 11n,
+        blockHash: "0xblock11",
+        parentHash: "0xblock10",
+        timestamp: new Date(1_700_000_000 * 1000),
+      });
+      const publicClient = {
+        getLogs: vi.fn(async () => []),
+        getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+          number: blockNumber,
+          hash: `0xblock${blockNumber}`,
+          parentHash: `0xblock${blockNumber - 1n}`,
+          timestamp: 1_700_000_000n,
+          transactions: [],
+        })),
+        readContract: vi.fn(),
+        getTransaction: vi.fn(),
+        getTransactionReceipt: vi.fn(),
+      };
+
+      const artifacts = await ingestWalletTransferArtifacts({
+        db: harness.db as never,
+        publicClient: publicClient as never,
+        maxWindowSize: 3n,
+        wallet: { chainId: 369, address: WALLET_ADDRESS },
+        fromBlock: 10n,
+        toBlock: 12n,
+      });
+
+      const expectedDetail = "some raw blocks were already persisted for this range";
+      expect(artifacts.warnings).toContain(expectedDetail);
+      expect(artifacts.structuredWarnings).toContainEqual({
+        code: SYNC_WARNING_CODES.RAW_BLOCKS_ALREADY_PERSISTED,
+        detail: expectedDetail,
+      });
+      // Only block 12 was newly inserted.
+      expect(harness.rawBlocks.size).toBe(3);
+    });
+
+    it("B2: a malformed/duplicate RPC block response within the same batch is never classified as benign replay — ingestion fails closed", async () => {
+      const harness = createIngestionHarness();
+      // No pre-existing canonical rows at all — the DB starts empty.
+      const publicClient = {
+        getLogs: vi.fn(async () => []),
+        // Stale/malformed RPC: both requested heights (10 and 11) resolve to
+        // the exact same block identity (number 10, hash 0xblock10). This is
+        // representative of the Codex finding — skipDuplicates would discard
+        // one of the two rows on insert, making scanned (2) !== persisted (1)
+        // even though nothing was previously persisted in PostgreSQL.
+        getBlock: vi.fn(async () => ({
+          number: 10n,
+          hash: "0xblock10",
+          parentHash: "0xblock9",
+          timestamp: 1_700_000_000n,
+          transactions: [],
+        })),
+        readContract: vi.fn(),
+        getTransaction: vi.fn(),
+        getTransactionReceipt: vi.fn(),
+      };
+
+      await expect(
+        ingestWalletTransferArtifacts({
+          db: harness.db as never,
+          publicClient: publicClient as never,
+          maxWindowSize: 2n,
+          wallet: { chainId: 369, address: WALLET_ADDRESS },
+          fromBlock: 10n,
+          toBlock: 11n,
+        }),
+      ).rejects.toThrow(/duplicate|conflicting/i);
+
+      // Ingestion must fail closed rather than silently persist a benign
+      // RAW_BLOCKS_ALREADY_PERSISTED classification for an unproven shortfall.
+      expect(harness.rawBlocks.size).toBe(0);
+    });
+
+    it("fails closed on an unexplained raw block persistence shortfall that is not proven by pre-existing canonical identities", async () => {
+      const harness = createIngestionHarness();
+      // Pre-seed a row under a DIFFERENT block hash than what the RPC will
+      // return for block 10, so it does not match the scanned identity.
+      harness.rawBlocks.set("369:10:0xstale-hash", {
+        chainId: 369,
+        blockNumber: 10n,
+        blockHash: "0xstale-hash",
+        parentHash: "0xblock9",
+        timestamp: new Date(1_700_000_000 * 1000),
+      });
+      // Force persistRawBlocks to under-report relative to what was actually
+      // scanned and what canonically pre-existed, simulating an unexplained
+      // persistence gap (e.g. a transient write failure masked by count).
+      // Reports 0 inserted regardless of input, while the pre-existing
+      // lookup (queried beforehand) proves 0 exact matching identities —
+      // scanned 2, persisted 0, pre-existing 0: an unexplained shortfall.
+      harness.db.rawBlock.createMany = async () => ({ count: 0 });
+
+      const publicClient = {
+        getLogs: vi.fn(async () => []),
+        getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+          number: blockNumber,
+          hash: `0xblock${blockNumber}`,
+          parentHash: `0xblock${blockNumber - 1n}`,
+          timestamp: 1_700_000_000n,
+          transactions: [],
+        })),
+        readContract: vi.fn(),
+        getTransaction: vi.fn(),
+        getTransactionReceipt: vi.fn(),
+      };
+
+      await expect(
+        ingestWalletTransferArtifacts({
+          db: harness.db as never,
+          publicClient: publicClient as never,
+          maxWindowSize: 2n,
+          wallet: { chainId: 369, address: WALLET_ADDRESS },
+          fromBlock: 10n,
+          toBlock: 11n,
+        }),
+      ).rejects.toThrow(/unexplained/i);
+    });
   });
 });

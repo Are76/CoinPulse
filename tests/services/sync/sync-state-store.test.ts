@@ -184,6 +184,109 @@ describe("createPrismaSyncRunStore structured warning persistence", () => {
 
     expect(client.updates[1].structuredWarnings).toBeUndefined();
   });
+
+  it("A1: derives UNKNOWN structured entries from warningDetails when structuredWarnings is omitted — never a false empty classification", async () => {
+    const client = createFakePrismaClient();
+    const store = createPrismaSyncRunStore(client as never);
+    const warningDetails = ["skip-dex:0xabc:unsupported-initiator", "skip-lp:0xdef:unknown-pool"];
+
+    await store.createRun({
+      walletId: "wallet_1",
+      chainId: 369,
+      trigger: "MANUAL",
+      status: "PENDING",
+      stage: "PENDING",
+      sourceFamilies: ["TRANSFERS"],
+      startBlock: 1n,
+      endBlock: 10n,
+      policyLabel: "test",
+      warningCount: 2,
+      warningDetails,
+      // structuredWarnings intentionally omitted.
+    });
+
+    const persisted = client.creates[0].structuredWarnings as {
+      warnings: SyncWarning[];
+      truncatedCount: number;
+    };
+
+    // MANDATORY INVARIANT: warningCount > 0 + non-empty warningDetails must
+    // never be paired with a known-empty structured payload.
+    expect(persisted).not.toEqual({ warnings: [], truncatedCount: 0 });
+    expect(persisted.truncatedCount).toBe(0);
+    expect(persisted.warnings).toEqual(
+      warningDetails.map((detail) => ({ code: SYNC_WARNING_CODES.UNKNOWN, detail })),
+    );
+  });
+
+  it("A2: a fresh run with no warnings and omitted structuredWarnings still persists an explicit known-zero classification", async () => {
+    const client = createFakePrismaClient();
+    const store = createPrismaSyncRunStore(client as never);
+
+    await store.createRun({
+      walletId: "wallet_1",
+      chainId: 369,
+      trigger: "MANUAL",
+      status: "PENDING",
+      stage: "PENDING",
+      sourceFamilies: ["TRANSFERS"],
+      startBlock: 1n,
+      endBlock: 10n,
+      policyLabel: "test",
+      warningCount: 0,
+      warningDetails: [],
+    });
+
+    expect(client.creates[0].structuredWarnings).toEqual({ warnings: [], truncatedCount: 0 });
+  });
+
+  it("A3: derived UNKNOWN entries are truncation-safe beyond WARNING_DETAIL_LIMIT and never fabricate the legacy truncation sentinel as a warning", async () => {
+    const client = createFakePrismaClient();
+    const store = createPrismaSyncRunStore(client as never);
+    const warningDetails = Array.from(
+      { length: WARNING_DETAIL_LIMIT + 7 },
+      (_, i) => `warning-${i}`,
+    );
+
+    await store.createRun({
+      walletId: "wallet_1",
+      chainId: 369,
+      trigger: "MANUAL",
+      status: "PENDING",
+      stage: "PENDING",
+      sourceFamilies: ["TRANSFERS"],
+      startBlock: 1n,
+      endBlock: 10n,
+      policyLabel: "test",
+      warningCount: warningDetails.length,
+      warningDetails,
+      // structuredWarnings intentionally omitted.
+    });
+
+    const persisted = client.creates[0].structuredWarnings as {
+      warnings: SyncWarning[];
+      truncatedCount: number;
+    };
+    const persistedLegacyDetails = client.creates[0].warningDetails as string[];
+
+    // Retained ordering matches the legacy cap exactly.
+    expect(persisted.warnings).toHaveLength(WARNING_DETAIL_LIMIT);
+    expect(persisted.warnings[0]).toEqual({ code: SYNC_WARNING_CODES.UNKNOWN, detail: "warning-0" });
+    expect(persisted.warnings[WARNING_DETAIL_LIMIT - 1]).toEqual({
+      code: SYNC_WARNING_CODES.UNKNOWN,
+      detail: `warning-${WARNING_DETAIL_LIMIT - 1}`,
+    });
+    // truncatedCount correctly represents the omitted real warnings — this
+    // is never falsely presented as a complete/zero classification.
+    expect(persisted.truncatedCount).toBe(7);
+    expect(persisted).not.toEqual({ warnings: [], truncatedCount: 0 });
+    // The legacy column's synthetic "[truncated: ...]" sentinel must never
+    // become a semantic (UNKNOWN or otherwise) structured warning entry.
+    expect(persistedLegacyDetails[WARNING_DETAIL_LIMIT]).toBe(
+      "[truncated: 7 additional warnings not stored]",
+    );
+    expect(persisted.warnings.some((w) => w.detail.startsWith("[truncated"))).toBe(false);
+  });
 });
 
 describe("mergeCursorWindow", () => {

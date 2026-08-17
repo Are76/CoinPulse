@@ -385,7 +385,65 @@ export async function ingestWalletTransferArtifacts(args: {
     }
 
     scannedBlockCount += blocks.length;
-    persistedBlockCount += (await persistRawBlocks(blocks, args.db as never)).count;
+
+    const blockIdentityKey = (block: { blockNumber: bigint; blockHash: string }) =>
+      `${block.blockNumber}:${block.blockHash.toLowerCase()}`;
+
+    // skipDuplicates only proves "already canonical" if this batch's own
+    // requested block identities are unique. A stale/malformed RPC response
+    // that returns the same (blockNumber, blockHash) for two different
+    // requested heights would otherwise let skipDuplicates silently collapse
+    // an intra-batch duplicate — which is not evidence of prior persistence
+    // and must never be classified as RAW_BLOCKS_ALREADY_PERSISTED. Fail
+    // closed instead of guessing.
+    const uniqueBlockIdentities = new Set(blocks.map(blockIdentityKey));
+    if (uniqueBlockIdentities.size !== blocks.length) {
+      throw new Error(
+        `raw block ingestion for chain ${args.wallet.chainId} window ` +
+          `${window.fromBlock}-${window.toBlock} returned duplicate/conflicting ` +
+          "block identities within the same scanned batch; refusing to persist " +
+          "or classify this as a benign already-persisted replay",
+      );
+    }
+
+    // Structural proof step for RAW_BLOCKS_ALREADY_PERSISTED: capture which
+    // exact (chainId, blockNumber, blockHash) identities already exist in
+    // canonical PostgreSQL state BEFORE this persistence attempt. Only a
+    // post-persist shortfall fully explained by these pre-existing rows may
+    // later be classified as benign replay.
+    const candidateBlocksInRange =
+      blocks.length > 0
+        ? await args.db.rawBlock.findMany({
+            where: {
+              chainId: args.wallet.chainId,
+              blockNumber: { gte: window.fromBlock, lte: window.toBlock },
+            },
+          })
+        : [];
+    const preExistingIdentities = new Set(
+      candidateBlocksInRange
+        .map((block) => blockIdentityKey(block))
+        .filter((key) => uniqueBlockIdentities.has(key)),
+    );
+    const windowPreExistingCount = preExistingIdentities.size;
+
+    const windowPersistedCount = (await persistRawBlocks(blocks, args.db as never)).count;
+    persistedBlockCount += windowPersistedCount;
+
+    const windowShortfall = blocks.length - windowPersistedCount;
+    if (windowShortfall > 0 && windowShortfall !== windowPreExistingCount) {
+      // The shortfall is not fully explained by exact canonical identities
+      // that existed before this attempt — e.g. an unexplained persistence
+      // gap. Do not silently treat this as benign replay evidence.
+      throw new Error(
+        `raw block ingestion for chain ${args.wallet.chainId} window ` +
+          `${window.fromBlock}-${window.toBlock} scanned ${blocks.length} blocks, ` +
+          `persisted ${windowPersistedCount}, but only ${windowPreExistingCount} of the ` +
+          "scanned block identities were already canonical before this attempt; " +
+          "the remaining shortfall is unexplained",
+      );
+    }
+
     await persistRawTransactions(rawTransactions, args.db as never);
   }
 
