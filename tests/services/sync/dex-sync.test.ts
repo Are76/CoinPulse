@@ -569,6 +569,7 @@ function createMemoryStores() {
     ledgerEntries,
     cursors,
     tokens,
+    runs,
   };
 }
 
@@ -919,5 +920,16 @@ describe("dex sync flow", () => {
     expect(result.warningCount).toBe(1);
     expect(stores.rawDexSwaps.size).toBe(0);
     expect(stores.ledgerEntries.size).toBe(0);
+
+    // Structured taxonomy: a skip-dex warning is not yet classified by any
+    // known code, so it must persist as UNKNOWN — never
+    // RAW_BLOCKS_ALREADY_PERSISTED (that code is reserved exclusively for
+    // sync-common's raw-block-replay producer condition).
+    const completedRun = stores.runs.find(
+      (run) => (run as { status?: string }).status === "COMPLETED",
+    ) as { structuredWarnings?: { warnings: Array<{ code: string; detail: string }> } } | undefined;
+    expect(completedRun?.structuredWarnings?.warnings).toHaveLength(1);
+    expect(completedRun?.structuredWarnings?.warnings[0].code).toBe("UNKNOWN");
+    expect(completedRun?.structuredWarnings?.warnings[0].detail).toContain("skip-dex");
   });
 });

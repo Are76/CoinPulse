@@ -20,6 +20,11 @@ import {
   type WalletTransferSnapshot,
   canonicalizeSnapshotAssetId,
 } from "@/services/sync/sync-common";
+import {
+  pushWarning,
+  SYNC_WARNING_CODES,
+  type SyncWarning,
+} from "@/services/sync/sync-warning-codes";
 
 export const SWAP_EVENT_TOPIC0 =
   "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822";
@@ -46,6 +51,7 @@ export async function ingestDexSwaps(args: {
 }) {
   const artifacts = await ingestWalletTransferArtifacts(args);
   const warnings = [...artifacts.warnings];
+  const structuredWarnings: SyncWarning[] = [...artifacts.structuredWarnings];
   const walletAddress = args.wallet.address.toLowerCase();
   const transfersByTransaction = groupTransfersByTransaction(
     artifacts.transferSnapshots,
@@ -67,7 +73,10 @@ export async function ingestDexSwaps(args: {
     });
 
     if (!swapShape.ok) {
-      warnings.push(
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
         `skip-dex:${transactionTransfers[0]?.txHash ?? "unknown"}:${swapShape.reason}`,
       );
       continue;
@@ -81,12 +90,20 @@ export async function ingestDexSwaps(args: {
     });
 
     if (!transaction.blockHash || transaction.blockNumber === null) {
-      warnings.push(`skip-dex:${transaction.hash.toLowerCase()}:missing-tx-block`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skip-dex:${transaction.hash.toLowerCase()}:missing-tx-block`,
+      );
       continue;
     }
 
     if (transaction.from.toLowerCase() !== walletAddress) {
-      warnings.push(
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
         `skip-dex:${transaction.hash.toLowerCase()}:unsupported-initiator`,
       );
       continue;
@@ -111,14 +128,24 @@ export async function ingestDexSwaps(args: {
       .sort((left, right) => left.logIndex - right.logIndex);
 
     if (swapLogs.length === 0) {
-      warnings.push(`skip-dex:${transaction.hash.toLowerCase()}:missing-swap-log`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skip-dex:${transaction.hash.toLowerCase()}:missing-swap-log`,
+      );
       continue;
     }
 
     const feeGasPrice = receipt.effectiveGasPrice ?? transaction.gasPrice;
 
     if (feeGasPrice === null) {
-      warnings.push(`skip-dex:${transaction.hash.toLowerCase()}:missing-gas-price`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skip-dex:${transaction.hash.toLowerCase()}:missing-gas-price`,
+      );
       continue;
     }
 
@@ -214,6 +241,15 @@ export async function ingestDexSwaps(args: {
     args.db as never,
   );
 
+  if (persistedTransactionCount === 0 && processedSwapCandidates > 0) {
+    pushWarning(
+      warnings,
+      structuredWarnings,
+      SYNC_WARNING_CODES.UNKNOWN,
+      "some dex candidates were already persisted",
+    );
+  }
+
   return {
     rawLogCount: artifacts.rawLogCount + persistedReceiptLogCount,
     latestBlockHash: artifacts.latestBlockHash,
@@ -223,12 +259,8 @@ export async function ingestDexSwaps(args: {
     })),
     fromBlock: args.fromBlock,
     toBlock: args.toBlock,
-    warnings: [
-      ...warnings,
-      ...(persistedTransactionCount === 0 && processedSwapCandidates > 0
-        ? ["some dex candidates were already persisted"]
-        : []),
-    ],
+    warnings,
+    structuredWarnings,
   };
 }
 

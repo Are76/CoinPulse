@@ -9,6 +9,7 @@ import {
   TRANSFER_EVENT_TOPIC0,
   withRawEthGetLogs,
 } from "@/services/sync/sync-common";
+import { SYNC_WARNING_CODES } from "@/services/sync/sync-warning-codes";
 
 describe("withRawEthGetLogs", () => {
   const walletTopic =
@@ -656,5 +657,342 @@ describe("ingestWalletTransferArtifacts wallet-relevance filtering", () => {
     for (const call of publicClient.readContract.mock.calls) {
       expect(call[0].address).not.toBe(REJECTED_ONLY_TOKEN_ADDRESS);
     }
+  });
+
+  describe("structured warning classification", () => {
+    it("classifies a skipped non-transfer log as UNKNOWN with the exact legacy detail", async () => {
+      const { artifacts } = await runIngestion([nonTransferLog]);
+
+      expect(artifacts.warnings).toHaveLength(1);
+      expect(artifacts.structuredWarnings).toHaveLength(1);
+      expect(artifacts.structuredWarnings[0]).toEqual({
+        code: SYNC_WARNING_CODES.UNKNOWN,
+        detail: artifacts.warnings[0],
+      });
+      expect(artifacts.structuredWarnings[0].detail).toContain("non-transfer");
+    });
+
+    it("classifies a skipped unrelated-wallet log as UNKNOWN with the exact legacy detail", async () => {
+      const { artifacts } = await runIngestion([unrelatedLog]);
+
+      expect(artifacts.warnings).toHaveLength(1);
+      expect(artifacts.structuredWarnings).toHaveLength(1);
+      expect(artifacts.structuredWarnings[0]).toEqual({
+        code: SYNC_WARNING_CODES.UNKNOWN,
+        detail: artifacts.warnings[0],
+      });
+      expect(artifacts.structuredWarnings[0].detail).toContain("unrelated-wallet");
+    });
+
+    it("classifies a skipped non-ERC20 log as UNKNOWN, never RAW_BLOCKS_ALREADY_PERSISTED", async () => {
+      const harness = createIngestionHarness();
+      // A wallet-relevant Transfer log (topics reference the tracked wallet)
+      // whose token contract fails ERC20 metadata resolution — the exact
+      // producer condition for the "skipped non-ERC20 log" warning.
+      const UNSEEDED_TOKEN_ADDRESS = "0xcccccccccccccccccccccccccccccccccccccccc";
+      const nonErc20Log = {
+        address: UNSEEDED_TOKEN_ADDRESS,
+        blockHash: "0xblock10",
+        blockNumber: 10n,
+        data: "0x00000000000000000000000000000000000000000000000000000000000003e8",
+        logIndex: 1,
+        transactionHash: "0xtxbadtoken",
+        topics: [
+          TRANSFER_EVENT_TOPIC0,
+          "0x000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          WALLET_TOPIC,
+        ],
+      };
+      const publicClient = createIngestionPublicClient([nonErc20Log]);
+      publicClient.readContract = vi.fn(async () => {
+        throw new Error("not an ERC20 contract");
+      });
+
+      const artifacts = await ingestWalletTransferArtifacts({
+        db: harness.db as never,
+        publicClient: publicClient as never,
+        maxWindowSize: 2n,
+        wallet: { chainId: 369, address: WALLET_ADDRESS },
+        fromBlock: 10n,
+        toBlock: 10n,
+      });
+
+      expect(artifacts.warnings.some((warning) => warning.includes("non-ERC20"))).toBe(true);
+      const nonErc20Structured = artifacts.structuredWarnings.find((warning) =>
+        warning.detail.includes("non-ERC20"),
+      );
+      expect(nonErc20Structured).toEqual({
+        code: SYNC_WARNING_CODES.UNKNOWN,
+        detail: expect.stringContaining("non-ERC20"),
+      });
+      expect(nonErc20Structured?.code).not.toBe(SYNC_WARNING_CODES.RAW_BLOCKS_ALREADY_PERSISTED);
+    });
+
+    it("classifies the raw-block-replay warning as RAW_BLOCKS_ALREADY_PERSISTED, detail unchanged", async () => {
+      const harness = createIngestionHarness();
+      // Pre-seed block 10 as already persisted (same identity ingestion will
+      // compute: chainId 369, blockNumber 10, lowercased block hash) so that
+      // scanning blocks [10, 11] persists only block 11 — the exact producer
+      // condition (scannedBlockCount !== persistedBlockCount &&
+      // persistedBlockCount > 0).
+      harness.rawBlocks.set("369:10:0xblock10", {
+        chainId: 369,
+        blockNumber: 10n,
+        blockHash: "0xblock10",
+        parentHash: "0xblock9",
+        timestamp: new Date(1_700_000_000 * 1000),
+      });
+      const publicClient = {
+        getLogs: vi.fn(async () => []),
+        getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+          number: blockNumber,
+          hash: `0xblock${blockNumber}`,
+          parentHash: `0xblock${blockNumber - 1n}`,
+          timestamp: 1_700_000_000n,
+          transactions: [],
+        })),
+        readContract: vi.fn(),
+        getTransaction: vi.fn(),
+        getTransactionReceipt: vi.fn(),
+      };
+
+      const artifacts = await ingestWalletTransferArtifacts({
+        db: harness.db as never,
+        publicClient: publicClient as never,
+        maxWindowSize: 2n,
+        wallet: { chainId: 369, address: WALLET_ADDRESS },
+        fromBlock: 10n,
+        toBlock: 11n,
+      });
+
+      const expectedDetail = "some raw blocks were already persisted for this range";
+      expect(artifacts.warnings).toContain(expectedDetail);
+      expect(artifacts.structuredWarnings).toContainEqual({
+        code: SYNC_WARNING_CODES.RAW_BLOCKS_ALREADY_PERSISTED,
+        detail: expectedDetail,
+      });
+      // Every other structured entry (there are none here) would remain
+      // UNKNOWN — asserted separately by the non-ERC20/non-transfer/
+      // unrelated-wallet tests above. This test proves the RAW_BLOCKS code is
+      // assigned only from the exact scanned-vs-persisted condition, never
+      // derived from matching this detail text elsewhere.
+      expect(artifacts.warnings).toHaveLength(1);
+      expect(artifacts.structuredWarnings).toHaveLength(1);
+    });
+
+    it("keeps two identically-worded warnings distinguishable by producer-assigned code, proving code is not text-derived", () => {
+      const detail = "some raw blocks were already persisted for this range";
+      const genuine = {
+        code: SYNC_WARNING_CODES.RAW_BLOCKS_ALREADY_PERSISTED,
+        detail,
+      };
+      // Simulates a hypothetical future producer that happens to emit the
+      // exact same detail text without the structural raw-block-replay
+      // condition — it must default to UNKNOWN, and the two must remain
+      // distinguishable by code even though their detail strings are
+      // byte-for-byte identical.
+      const unrelated = { code: SYNC_WARNING_CODES.UNKNOWN, detail };
+
+      expect(genuine.detail).toBe(unrelated.detail);
+      expect(genuine.code).not.toBe(unrelated.code);
+    });
+
+    // B1 (genuine canonical replay still classified correctly) is already
+    // covered above by "classifies the raw-block-replay warning as
+    // RAW_BLOCKS_ALREADY_PERSISTED, detail unchanged": block 10 is
+    // pre-seeded as an exact canonical (chainId, blockNumber, blockHash)
+    // identity before ingestion runs, block 11 is newly inserted, and the
+    // shortfall (1) is fully explained by the 1 pre-existing identity.
+
+    it("B3: a retry-style recovery where some blocks already existed and the rest are newly inserted still classifies as RAW_BLOCKS_ALREADY_PERSISTED", async () => {
+      const harness = createIngestionHarness();
+      // Simulate a prior partial run that already persisted blocks 10 and 11
+      // canonically; this retry rescans 10-12 and should only newly insert 12.
+      harness.rawBlocks.set("369:10:0xblock10", {
+        chainId: 369,
+        blockNumber: 10n,
+        blockHash: "0xblock10",
+        parentHash: "0xblock9",
+        timestamp: new Date(1_700_000_000 * 1000),
+      });
+      harness.rawBlocks.set("369:11:0xblock11", {
+        chainId: 369,
+        blockNumber: 11n,
+        blockHash: "0xblock11",
+        parentHash: "0xblock10",
+        timestamp: new Date(1_700_000_000 * 1000),
+      });
+      const publicClient = {
+        getLogs: vi.fn(async () => []),
+        getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+          number: blockNumber,
+          hash: `0xblock${blockNumber}`,
+          parentHash: `0xblock${blockNumber - 1n}`,
+          timestamp: 1_700_000_000n,
+          transactions: [],
+        })),
+        readContract: vi.fn(),
+        getTransaction: vi.fn(),
+        getTransactionReceipt: vi.fn(),
+      };
+
+      const artifacts = await ingestWalletTransferArtifacts({
+        db: harness.db as never,
+        publicClient: publicClient as never,
+        maxWindowSize: 3n,
+        wallet: { chainId: 369, address: WALLET_ADDRESS },
+        fromBlock: 10n,
+        toBlock: 12n,
+      });
+
+      const expectedDetail = "some raw blocks were already persisted for this range";
+      expect(artifacts.warnings).toContain(expectedDetail);
+      expect(artifacts.structuredWarnings).toContainEqual({
+        code: SYNC_WARNING_CODES.RAW_BLOCKS_ALREADY_PERSISTED,
+        detail: expectedDetail,
+      });
+      // Only block 12 was newly inserted.
+      expect(harness.rawBlocks.size).toBe(3);
+    });
+
+    it("A2: a concurrent insert by another wallet's sync between the persist call and its result does not cause a false failure", async () => {
+      const harness = createIngestionHarness();
+      // No pre-existing canonical rows before ingestion starts — a pre-read
+      // taken now would find nothing for either scanned identity.
+      const originalCreateMany = harness.db.rawBlock.createMany;
+      harness.db.rawBlock.createMany = async (args: Parameters<typeof originalCreateMany>[0]) => {
+        // Simulate a concurrent sync for a DIFFERENT wallet on the same
+        // chain (RawBlock identity is chain-scoped, and the operation lock
+        // only scopes conflicts to walletId+chainId, so this interleaving is
+        // possible) committing block 10's exact canonical identity right
+        // before this call's own skipDuplicates insert runs.
+        harness.rawBlocks.set("369:10:0xblock10", {
+          chainId: 369,
+          blockNumber: 10n,
+          blockHash: "0xblock10",
+          parentHash: "0xblock9",
+          timestamp: new Date(1_700_000_000 * 1000),
+        });
+        return originalCreateMany(args);
+      };
+      const publicClient = {
+        getLogs: vi.fn(async () => []),
+        getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+          number: blockNumber,
+          hash: `0xblock${blockNumber}`,
+          parentHash: `0xblock${blockNumber - 1n}`,
+          timestamp: 1_700_000_000n,
+          transactions: [],
+        })),
+        readContract: vi.fn(),
+        getTransaction: vi.fn(),
+        getTransactionReceipt: vi.fn(),
+      };
+
+      const artifacts = await ingestWalletTransferArtifacts({
+        db: harness.db as never,
+        publicClient: publicClient as never,
+        maxWindowSize: 2n,
+        wallet: { chainId: 369, address: WALLET_ADDRESS },
+        fromBlock: 10n,
+        toBlock: 11n,
+      });
+
+      // scannedBlockCount (2) !== persistedBlockCount (1, since block 10 was
+      // skipped as a duplicate of the concurrently-inserted row) — but a
+      // post-persist re-read proves both exact scanned identities (10 and
+      // 11) are now canonically present, so this must not throw and must
+      // classify as the benign replay warning, not an unexplained gap.
+      const expectedDetail = "some raw blocks were already persisted for this range";
+      expect(artifacts.warnings).toContain(expectedDetail);
+      expect(artifacts.structuredWarnings).toContainEqual({
+        code: SYNC_WARNING_CODES.RAW_BLOCKS_ALREADY_PERSISTED,
+        detail: expectedDetail,
+      });
+      expect(harness.rawBlocks.size).toBe(2);
+    });
+
+    it("B2: a malformed/duplicate RPC block response within the same batch is never classified as benign replay — ingestion fails closed", async () => {
+      const harness = createIngestionHarness();
+      // No pre-existing canonical rows at all — the DB starts empty.
+      const publicClient = {
+        getLogs: vi.fn(async () => []),
+        // Stale/malformed RPC: both requested heights (10 and 11) resolve to
+        // the exact same block identity (number 10, hash 0xblock10). This is
+        // representative of the Codex finding — skipDuplicates would discard
+        // one of the two rows on insert, making scanned (2) !== persisted (1)
+        // even though nothing was previously persisted in PostgreSQL.
+        getBlock: vi.fn(async () => ({
+          number: 10n,
+          hash: "0xblock10",
+          parentHash: "0xblock9",
+          timestamp: 1_700_000_000n,
+          transactions: [],
+        })),
+        readContract: vi.fn(),
+        getTransaction: vi.fn(),
+        getTransactionReceipt: vi.fn(),
+      };
+
+      await expect(
+        ingestWalletTransferArtifacts({
+          db: harness.db as never,
+          publicClient: publicClient as never,
+          maxWindowSize: 2n,
+          wallet: { chainId: 369, address: WALLET_ADDRESS },
+          fromBlock: 10n,
+          toBlock: 11n,
+        }),
+      ).rejects.toThrow(/duplicate|conflicting/i);
+
+      // Ingestion must fail closed rather than silently persist a benign
+      // RAW_BLOCKS_ALREADY_PERSISTED classification for an unproven shortfall.
+      expect(harness.rawBlocks.size).toBe(0);
+    });
+
+    it("fails closed on an unexplained raw block persistence shortfall that is not proven by pre-existing canonical identities", async () => {
+      const harness = createIngestionHarness();
+      // Pre-seed a row under a DIFFERENT block hash than what the RPC will
+      // return for block 10, so it does not match the scanned identity.
+      harness.rawBlocks.set("369:10:0xstale-hash", {
+        chainId: 369,
+        blockNumber: 10n,
+        blockHash: "0xstale-hash",
+        parentHash: "0xblock9",
+        timestamp: new Date(1_700_000_000 * 1000),
+      });
+      // Force persistRawBlocks to under-report relative to what was actually
+      // scanned and what canonically pre-existed, simulating an unexplained
+      // persistence gap (e.g. a transient write failure masked by count).
+      // Reports 0 inserted regardless of input, while the pre-existing
+      // lookup (queried beforehand) proves 0 exact matching identities —
+      // scanned 2, persisted 0, pre-existing 0: an unexplained shortfall.
+      harness.db.rawBlock.createMany = async () => ({ count: 0 });
+
+      const publicClient = {
+        getLogs: vi.fn(async () => []),
+        getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+          number: blockNumber,
+          hash: `0xblock${blockNumber}`,
+          parentHash: `0xblock${blockNumber - 1n}`,
+          timestamp: 1_700_000_000n,
+          transactions: [],
+        })),
+        readContract: vi.fn(),
+        getTransaction: vi.fn(),
+        getTransactionReceipt: vi.fn(),
+      };
+
+      await expect(
+        ingestWalletTransferArtifacts({
+          db: harness.db as never,
+          publicClient: publicClient as never,
+          maxWindowSize: 2n,
+          wallet: { chainId: 369, address: WALLET_ADDRESS },
+          fromBlock: 10n,
+          toBlock: 11n,
+        }),
+      ).rejects.toThrow(/unexplained/i);
+    });
   });
 });

@@ -207,6 +207,7 @@ async function ingestTransfers(args: {
     fromBlock: artifacts.fromBlock,
     toBlock: artifacts.toBlock,
     warnings: artifacts.warnings,
+    structuredWarnings: artifacts.structuredWarnings,
   };
 }
 

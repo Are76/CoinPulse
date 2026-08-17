@@ -577,6 +577,32 @@ describe("per-window gates reused from the shared primitives", () => {
     expect(httpPostCalls).toHaveLength(1);
   });
 
+  it("PR A regression: a benign RAW_BLOCKS_ALREADY_PERSISTED structured warning still hard-stops the campaign — structured classification never relaxes the warning gate", async () => {
+    const db = makeFakeDb({
+      runsById: {
+        "run-1": completedRun({
+          warningCount: 1,
+          warningDetails: ["some raw blocks were already persisted for this range"],
+          structuredWarnings: {
+            warnings: [
+              {
+                code: "RAW_BLOCKS_ALREADY_PERSISTED",
+                detail: "some raw blocks were already persisted for this range",
+              },
+            ],
+            truncatedCount: 0,
+          },
+        }),
+      },
+    });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(baseOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("invariant_failed_after_run");
+    expect(httpPostCalls).toHaveLength(1);
+  });
+
   it("stops before the next POST on duplicate LedgerEntry", async () => {
     const db = makeFakeDb({ runsById: { "run-1": completedRun() }, duplicateLedgerRows: 1 });
     const { deps, httpPostCalls } = makeFakeDeps({

@@ -22,6 +22,11 @@ import {
   type WalletTransferSnapshot,
   canonicalizeSnapshotAssetId,
 } from "@/services/sync/sync-common";
+import {
+  pushWarning,
+  SYNC_WARNING_CODES,
+  type SyncWarning,
+} from "@/services/sync/sync-warning-codes";
 
 export type PersistedRawLpAction = Awaited<
   ReturnType<typeof readWalletRawLpActions>
@@ -39,6 +44,7 @@ export async function ingestLpActions(args: {
 }) {
   const artifacts = await ingestWalletTransferArtifacts(args);
   const warnings = [...artifacts.warnings];
+  const structuredWarnings: SyncWarning[] = [...artifacts.structuredWarnings];
   const walletAddress = args.wallet.address.toLowerCase();
   const transfersByTransaction = groupTransfersByTransaction(
     artifacts.transferSnapshots,
@@ -58,7 +64,10 @@ export async function ingestLpActions(args: {
     });
 
     if (!lpShape.ok) {
-      warnings.push(
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
         `skip-lp:${transactionTransfers[0]?.txHash ?? "unknown"}:${lpShape.reason}`,
       );
       continue;
@@ -72,19 +81,34 @@ export async function ingestLpActions(args: {
     });
 
     if (!transaction.blockHash || transaction.blockNumber === null) {
-      warnings.push(`skip-lp:${transaction.hash.toLowerCase()}:missing-tx-block`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skip-lp:${transaction.hash.toLowerCase()}:missing-tx-block`,
+      );
       continue;
     }
 
     if (transaction.from.toLowerCase() !== walletAddress) {
-      warnings.push(`skip-lp:${transaction.hash.toLowerCase()}:unsupported-initiator`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skip-lp:${transaction.hash.toLowerCase()}:unsupported-initiator`,
+      );
       continue;
     }
 
     const feeGasPrice = receipt.effectiveGasPrice ?? transaction.gasPrice;
 
     if (feeGasPrice === null) {
-      warnings.push(`skip-lp:${transaction.hash.toLowerCase()}:missing-gas-price`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skip-lp:${transaction.hash.toLowerCase()}:missing-gas-price`,
+      );
       continue;
     }
 
@@ -152,6 +176,15 @@ export async function ingestLpActions(args: {
     args.db as never,
   );
 
+  if (processedLpCandidates > 0 && rawActions.length === 0) {
+    pushWarning(
+      warnings,
+      structuredWarnings,
+      SYNC_WARNING_CODES.UNKNOWN,
+      "some lp candidates were already persisted",
+    );
+  }
+
   return {
     rawLogCount: artifacts.rawLogCount,
     latestBlockHash: artifacts.latestBlockHash,
@@ -161,12 +194,8 @@ export async function ingestLpActions(args: {
     })),
     fromBlock: args.fromBlock,
     toBlock: args.toBlock,
-    warnings: [
-      ...warnings,
-      ...(processedLpCandidates > 0 && rawActions.length === 0
-        ? ["some lp candidates were already persisted"]
-        : []),
-    ],
+    warnings,
+    structuredWarnings,
   };
 }
 

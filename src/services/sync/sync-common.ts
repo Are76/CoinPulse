@@ -23,6 +23,12 @@ import {
   readWalletProtocolOperationTxHashes,
   readWalletTransferRawTokenTransfers,
 } from "@/services/ingestion/raw-store";
+import {
+  pushWarning,
+  rawBlocksAlreadyPersistedWarning,
+  SYNC_WARNING_CODES,
+  type SyncWarning,
+} from "@/services/sync/sync-warning-codes";
 
 const ERC20_METADATA_ABI = parseAbi([
   "function decimals() view returns (uint8)",
@@ -149,6 +155,12 @@ export type TransferArtifacts = {
   fromBlock: bigint;
   toBlock: bigint;
   warnings: readonly string[];
+  /**
+   * Structured, machine-readable classification for every entry in
+   * `warnings`, in the exact same order — `structuredWarnings[i].detail ===
+   * warnings[i]` always holds. See sync-warning-codes.ts.
+   */
+  structuredWarnings: readonly SyncWarning[];
 };
 
 export function buildNativeTransactionScanWindows(args: {
@@ -252,6 +264,7 @@ export async function ingestWalletTransferArtifacts(args: {
   toBlock: bigint;
 }): Promise<TransferArtifacts> {
   const warnings: string[] = [];
+  const structuredWarnings: SyncWarning[] = [];
   const walletTopic = toTopicAddress(args.wallet.address);
   const windows = buildAdaptiveWindows({
     startBlock: args.fromBlock,
@@ -283,7 +296,10 @@ export async function ingestWalletTransferArtifacts(args: {
   // needless token metadata RPC calls for tokens the wallet never touched.
   const dedupedLogs = fetchedLogs.filter((log) => {
     if (log.topics[0]?.toLowerCase() !== TRANSFER_EVENT_TOPIC0) {
-      warnings.push(
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
         `skipped non-transfer log at ${log.blockNumber}:${log.logIndex} for ${log.address}`,
       );
       return false;
@@ -293,7 +309,10 @@ export async function ingestWalletTransferArtifacts(args: {
     const toTopic = log.topics[2]?.toLowerCase() ?? null;
 
     if (fromTopic !== walletTopic && toTopic !== walletTopic) {
-      warnings.push(
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
         `skipped unrelated-wallet transfer log at ${log.blockNumber}:${log.logIndex} for ${log.address}`,
       );
       return false;
@@ -366,7 +385,71 @@ export async function ingestWalletTransferArtifacts(args: {
     }
 
     scannedBlockCount += blocks.length;
-    persistedBlockCount += (await persistRawBlocks(blocks, args.db as never)).count;
+
+    const blockIdentityKey = (block: { blockNumber: bigint; blockHash: string }) =>
+      `${block.blockNumber}:${block.blockHash.toLowerCase()}`;
+
+    // skipDuplicates only proves "already canonical" if this batch's own
+    // requested block identities are unique. A stale/malformed RPC response
+    // that returns the same (blockNumber, blockHash) for two different
+    // requested heights would otherwise let skipDuplicates silently collapse
+    // an intra-batch duplicate — which is not evidence of prior persistence
+    // and must never be classified as RAW_BLOCKS_ALREADY_PERSISTED. Fail
+    // closed instead of guessing.
+    const uniqueBlockIdentities = new Set(blocks.map(blockIdentityKey));
+    if (uniqueBlockIdentities.size !== blocks.length) {
+      throw new Error(
+        `raw block ingestion for chain ${args.wallet.chainId} window ` +
+          `${window.fromBlock}-${window.toBlock} returned duplicate/conflicting ` +
+          "block identities within the same scanned batch; refusing to persist " +
+          "or classify this as a benign already-persisted replay",
+      );
+    }
+
+    const windowPersistedCount = (await persistRawBlocks(blocks, args.db as never)).count;
+    persistedBlockCount += windowPersistedCount;
+
+    const windowShortfall = blocks.length - windowPersistedCount;
+    if (windowShortfall > 0) {
+      // Structural proof step for RAW_BLOCKS_ALREADY_PERSISTED: a pre-persist
+      // read is not race-safe here. RawBlock identity is chain-scoped, but
+      // operation locking only scopes conflicts to (walletId, chainId), so a
+      // concurrent sync for a DIFFERENT wallet on the same chain can persist
+      // an overlapping block identity between a pre-read and this call to
+      // persistRawBlocks — skipDuplicates would then lower windowPersistedCount
+      // below blocks.length even though nothing is actually missing. Instead,
+      // re-read the exact scanned identities from canonical PostgreSQL state
+      // AFTER persistence completes. A shortfall is benign replay only when
+      // every exact scanned (chainId, blockNumber, blockHash) identity is now
+      // canonically present — proven post-persist, not inferred from a
+      // pre-persist count that a concurrent writer could invalidate.
+      const postPersistBlocksInRange = await args.db.rawBlock.findMany({
+        where: {
+          chainId: args.wallet.chainId,
+          blockNumber: { gte: window.fromBlock, lte: window.toBlock },
+        },
+      });
+      const postPersistIdentities = new Set(
+        postPersistBlocksInRange.map((block) => blockIdentityKey(block)),
+      );
+      const missingIdentities = [...uniqueBlockIdentities].filter(
+        (identity) => !postPersistIdentities.has(identity),
+      );
+
+      if (missingIdentities.length > 0) {
+        // At least one exact scanned identity is still absent from canonical
+        // state after persistence — a genuine, unexplained persistence gap.
+        // Do not silently treat this as benign replay evidence.
+        throw new Error(
+          `raw block ingestion for chain ${args.wallet.chainId} window ` +
+            `${window.fromBlock}-${window.toBlock} scanned ${blocks.length} blocks, ` +
+            `persisted ${windowPersistedCount}, but ${missingIdentities.length} of the ` +
+            "scanned block identities are still missing from canonical state " +
+            "after persistence; the remaining shortfall is unexplained",
+        );
+      }
+    }
+
     await persistRawTransactions(rawTransactions, args.db as never);
   }
 
@@ -426,7 +509,12 @@ export async function ingestWalletTransferArtifacts(args: {
         tokenAddress: log.address,
       });
     } catch {
-      warnings.push(`skipped non-ERC20 log at ${log.blockNumber}:${log.logIndex} for ${log.address}`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skipped non-ERC20 log at ${log.blockNumber}:${log.logIndex} for ${log.address}`,
+      );
       continue;
     }
 
@@ -449,7 +537,15 @@ export async function ingestWalletTransferArtifacts(args: {
   await persistRawTokenTransfers(decodedTransfers, args.db as never);
 
   if (scannedBlockCount !== persistedBlockCount && persistedBlockCount > 0) {
-    warnings.push("some raw blocks were already persisted for this range");
+    // Exact structural condition for RAW_BLOCKS_ALREADY_PERSISTED: the
+    // window scanned more raw blocks than `persistRawBlocks` newly inserted,
+    // meaning `skipDuplicates: true` skipped rows whose canonical
+    // (chainId, blockNumber, blockHash) identity already existed — a benign
+    // replay, not an error. Do not suppress, recount, or otherwise change
+    // this warning's legacy behavior; only its structured code is new here.
+    const detail = "some raw blocks were already persisted for this range";
+    warnings.push(detail);
+    structuredWarnings.push(rawBlocksAlreadyPersistedWarning(detail));
   }
 
   const rawTransfers = await readWalletTransferRawTokenTransfers(
@@ -517,6 +613,7 @@ export async function ingestWalletTransferArtifacts(args: {
     fromBlock: args.fromBlock,
     toBlock: args.toBlock,
     warnings,
+    structuredWarnings,
   };
 }
 

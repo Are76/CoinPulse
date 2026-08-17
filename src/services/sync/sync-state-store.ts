@@ -4,6 +4,11 @@ import { Prisma } from "@prisma/client";
 import type { PrismaClient, SourceFamily, SyncRunStatus, SyncTrigger } from "@prisma/client";
 
 import { getDb } from "@/lib/db";
+import {
+  unknownWarning,
+  type StructuredWarningsPayload,
+  type SyncWarning,
+} from "@/services/sync/sync-warning-codes";
 
 export const WARNING_DETAIL_LIMIT = 200;
 
@@ -16,6 +21,100 @@ export function capWarningDetails(warnings: readonly string[]): string[] {
     ...warnings.slice(0, WARNING_DETAIL_LIMIT),
     `[truncated: ${omitted} additional warning${omitted === 1 ? "" : "s"} not stored]`,
   ];
+}
+
+/**
+ * Truncation-safe structured-warning persistence shape. Mirrors
+ * `capWarningDetails`'s retained-count exactly (same `WARNING_DETAIL_LIMIT`,
+ * same "first N, in order" retention policy) but represents truncation as
+ * explicit `truncatedCount` metadata rather than a synthetic in-band entry —
+ * so a truncation marker can never be misclassified as a real warning code
+ * (in particular, never as `RAW_BLOCKS_ALREADY_PERSISTED`). A future
+ * consumer can detect incomplete structured classification for a run by
+ * checking `truncatedCount > 0` and fail closed accordingly.
+ */
+export function capStructuredWarnings(
+  warnings: readonly SyncWarning[],
+): StructuredWarningsPayload {
+  if (warnings.length <= WARNING_DETAIL_LIMIT) {
+    return { warnings: [...warnings], truncatedCount: 0 };
+  }
+  return {
+    warnings: warnings.slice(0, WARNING_DETAIL_LIMIT),
+    truncatedCount: warnings.length - WARNING_DETAIL_LIMIT,
+  };
+}
+
+/**
+ * Resolves the structured-warning payload to persist on `createRun` when the
+ * caller did not explicitly supply `structuredWarnings`.
+ *
+ * A bare `capStructuredWarnings(input.structuredWarnings ?? [])` default is
+ * unsafe here: if the caller passed `warningDetails` (legacy warnings did
+ * occur) but omitted `structuredWarnings` (classification was never
+ * performed for them), collapsing straight to `[]` would persist
+ * `{ warnings: [], truncatedCount: 0 }` — a payload that means "classification
+ * complete, zero warnings" under the documented contract. That directly
+ * contradicts `warningCount > 0` / non-empty `warningDetails` on the same
+ * row, and a future consumer trusting `truncatedCount === 0` could treat
+ * unclassified legacy warnings as safely classified. See AGENTS.md L149-150.
+ *
+ * Instead: when `structuredWarnings` is omitted, derive `UNKNOWN` entries
+ * from the caller-supplied `warningDetails`, preserving exact legacy order
+ * and detail text, then apply the same truncation-safe cap used everywhere
+ * else. `UNKNOWN` is the correct fail-closed code here — this call site has
+ * no structural knowledge of *why* each legacy warning occurred, only that
+ * one occurred. When `warningDetails` is empty (or omitted), there are no
+ * legacy warnings to classify, so a known-empty structured payload is safe
+ * and unambiguous. `capStructuredWarnings` derives `truncatedCount` from the
+ * same `WARNING_DETAIL_LIMIT` and "first N, in order" retention as
+ * `capWarningDetails`, so the two never disagree about how much was
+ * retained vs. truncated. The synthetic "[truncated: N …]" sentinel that
+ * `capWarningDetails` appends to the legacy array is never part of
+ * `warningDetails` at this layer — it is only added by `capWarningDetails`
+ * itself when persisting the legacy column — so it can never leak into a
+ * structured entry here.
+ *
+ * `warningCount` can also disagree with `warningDetails.length` — a caller
+ * may declare a count without attaching detail text for every occurrence
+ * (or without attaching any). Deriving `UNKNOWN` entries from
+ * `warningDetails` alone in that case would silently persist
+ * `{ warnings: [...], truncatedCount: 0 }` for the shortfall, which is
+ * exactly the "classification complete, zero [additional] warnings" false
+ * signal this function exists to prevent, just triggered by `warningCount`
+ * instead of a fully-omitted `warningDetails`. Fabricating placeholder
+ * detail text for the shortfall is not an option either: `SyncWarning.detail`
+ * is documented (sync-warning-codes.ts) to always be byte-for-byte identical
+ * to a real legacy warning string, and inventing text would violate that
+ * invariant for entries that do not correspond to real evidence. Instead,
+ * the shortfall is represented through `truncatedCount` — already documented
+ * as "the exact count of additional real warnings that were not retained,"
+ * which is precisely what an uncorroborated `warningCount` excess is. This
+ * keeps `warnings` limited to only entries backed by real `warningDetails`
+ * text, while `truncatedCount > 0` correctly signals incomplete structured
+ * classification for any future consumer that checks it.
+ */
+function resolveCreateStructuredWarnings(input: {
+  structuredWarnings?: readonly SyncWarning[];
+  warningDetails?: readonly string[];
+  warningCount?: number;
+}): StructuredWarningsPayload {
+  if (input.structuredWarnings !== undefined) {
+    return capStructuredWarnings(input.structuredWarnings);
+  }
+
+  const legacyDetails = input.warningDetails ?? [];
+  const capped = capStructuredWarnings(legacyDetails.map((detail) => unknownWarning(detail)));
+
+  const unexplainedCount = Math.max(0, (input.warningCount ?? 0) - legacyDetails.length);
+  if (unexplainedCount === 0) {
+    return capped;
+  }
+
+  return {
+    warnings: capped.warnings,
+    truncatedCount: capped.truncatedCount + unexplainedCount,
+  };
 }
 
 type SyncStateClient = PrismaClient | Prisma.TransactionClient;
@@ -45,6 +144,21 @@ export type SyncRunStore = {
     policyLabel: string;
     warningCount?: number;
     warningDetails?: readonly string[];
+    /**
+     * Structured classification, in the same order as `warningDetails`. When
+     * omitted and `warningDetails` is empty (or also omitted), a fresh run
+     * with no warnings persists a KNOWN empty structured payload. When
+     * omitted but `warningDetails` is non-empty, the store derives `UNKNOWN`
+     * entries from `warningDetails` rather than persisting a false empty
+     * classification — see `resolveCreateStructuredWarnings`. If `warningCount`
+     * exceeds `warningDetails.length`, the unexplained shortfall is folded
+     * into `truncatedCount` rather than fabricated as placeholder detail
+     * text, so the persisted payload never claims complete classification it
+     * cannot back with real evidence. Persisted `null` is reserved for
+     * historical rows written before this field existed; this store never
+     * writes `null` for a new row.
+     */
+    structuredWarnings?: readonly SyncWarning[];
     errorMessage?: string;
     failedSourceFamily?: SourceFamily;
     failedFromBlock?: bigint;
@@ -58,6 +172,13 @@ export type SyncRunStore = {
     latestSafeBlock?: bigint;
     warningCount?: number;
     warningDetails?: readonly string[];
+    /**
+     * Structured classification, in the same order as `warningDetails`. When
+     * `undefined`, the column is left unchanged — mirrors how `warningDetails`
+     * is already handled below (an intermediate stage update that does not
+     * touch warnings at all must not clobber whatever was last persisted).
+     */
+    structuredWarnings?: readonly SyncWarning[];
     errorMessage?: string | null;
     endBlock?: bigint;
     failedSourceFamily?: SourceFamily | null;
@@ -101,6 +222,11 @@ export function createPrismaSyncRunStore(
           policyLabel: input.policyLabel,
           warningCount: input.warningCount ?? 0,
           warningDetails: capWarningDetails(input.warningDetails ?? []),
+          structuredWarnings: resolveCreateStructuredWarnings({
+            structuredWarnings: input.structuredWarnings,
+            warningDetails: input.warningDetails,
+            warningCount: input.warningCount,
+          }),
           errorMessage: input.errorMessage ?? null,
           failedSourceFamily: input.failedSourceFamily ?? null,
           failedFromBlock: input.failedFromBlock ?? null,
@@ -126,6 +252,9 @@ export function createPrismaSyncRunStore(
           warningCount: input.warningCount,
           warningDetails: input.warningDetails !== undefined
             ? capWarningDetails(input.warningDetails)
+            : undefined,
+          structuredWarnings: input.structuredWarnings !== undefined
+            ? capStructuredWarnings(input.structuredWarnings)
             : undefined,
           errorMessage: input.errorMessage,
           endBlock: input.endBlock,

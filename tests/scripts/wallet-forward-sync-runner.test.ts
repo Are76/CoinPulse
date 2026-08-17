@@ -420,6 +420,29 @@ describe("terminal state and cursor postcondition verification", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("PR A regression: a benign RAW_BLOCKS_ALREADY_PERSISTED structured warning still hard-stops — structured classification never relaxes the warning gate", () => {
+    // Proves this PR did not accidentally implement PR B's recovery
+    // tolerance: even the one classified benign code must still fail the
+    // exact same warningCount/warningDetails gate as any other warning.
+    const result = verifyWindowTerminalState({
+      run: completedManualRun({
+        warningCount: 1,
+        warningDetails: ["some raw blocks were already persisted for this range"],
+        structuredWarnings: {
+          warnings: [
+            {
+              code: "RAW_BLOCKS_ALREADY_PERSISTED",
+              detail: "some raw blocks were already persisted for this range",
+            },
+          ],
+          truncatedCount: 0,
+        },
+      }),
+      ...expectedIdentity,
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("fails on non-COMPLETED status", () => {
     const result = verifyWindowTerminalState({
       run: completedManualRun({ status: "FAILED", errorMessage: "boom" }),

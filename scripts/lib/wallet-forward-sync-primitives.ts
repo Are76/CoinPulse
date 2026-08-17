@@ -212,6 +212,14 @@ export type RunnerSyncRunRecord = {
   latestSafeBlock: bigint | null;
   warningCount: number;
   warningDetails: unknown;
+  /**
+   * Additive, optional structured-warning classification (see
+   * src/services/sync/sync-warning-codes.ts). Not read by
+   * verifyWindowTerminalState or any other gate in this file — the runner's
+   * hard-stop behavior is unchanged by PR A and continues to key off
+   * warningCount/warningDetails only.
+   */
+  structuredWarnings?: unknown;
   errorMessage: string | null;
   failedSourceFamily: string | null;
   failedFromBlock: bigint | null;

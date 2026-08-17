@@ -70,6 +70,7 @@ describe("runRebuildOperation", () => {
       latestSafeBlock: undefined,
       warningCount: 0,
       warningDetails: [],
+      structuredWarnings: [],
     });
     expect(updateRun).toHaveBeenNthCalledWith(2, {
       runId: "rebuild-run-1",
@@ -78,6 +79,7 @@ describe("runRebuildOperation", () => {
       latestSafeBlock: 200n,
       warningCount: 1,
       warningDetails: ["rebuild-warning"],
+      structuredWarnings: [{ code: "UNKNOWN", detail: "rebuild-warning" }],
     });
     expect(materializeCurrentPortfolioPositions).toHaveBeenCalledTimes(1);
     expect(materializeCurrentPortfolioPositions).toHaveBeenCalledWith({
@@ -98,6 +100,10 @@ describe("runRebuildOperation", () => {
       latestSafeBlock: 200n,
       warningCount: 2,
       warningDetails: ["rebuild-warning", "materialize-warning"],
+      structuredWarnings: [
+        { code: "UNKNOWN", detail: "rebuild-warning" },
+        { code: "UNKNOWN", detail: "materialize-warning" },
+      ],
       errorMessage: null,
       endBlock: 200n,
       failedSourceFamily: null,
@@ -149,6 +155,7 @@ describe("runRebuildOperation", () => {
       latestSafeBlock: undefined,
       warningCount: 0,
       warningDetails: [],
+      structuredWarnings: [],
     });
     expect(updateRun).toHaveBeenNthCalledWith(2, {
       runId: "rebuild-run-2",
@@ -158,6 +165,7 @@ describe("runRebuildOperation", () => {
       latestSafeBlock: undefined,
       warningCount: 0,
       warningDetails: [],
+      structuredWarnings: [],
       errorMessage: "[REBUILDING_LEDGER] LP 500-600: rebuild exploded",
       endBlock: 600n,
       failedSourceFamily: "LP",

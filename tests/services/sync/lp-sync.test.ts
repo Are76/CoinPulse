@@ -396,6 +396,7 @@ function createMemoryStores() {
     ledgerEntries,
     cursors,
     tokens,
+    runs,
   };
 }
 
@@ -730,5 +731,14 @@ describe("lp sync flow", () => {
     expect(result.warningCount).toBe(1);
     expect(stores.rawLpActions.size).toBe(0);
     expect(stores.ledgerEntries.size).toBe(0);
+
+    // Structured taxonomy: skip-lp warnings are UNKNOWN, never
+    // RAW_BLOCKS_ALREADY_PERSISTED.
+    const completedRun = stores.runs.find(
+      (run) => (run as { status?: string }).status === "COMPLETED",
+    ) as { structuredWarnings?: { warnings: Array<{ code: string; detail: string }> } } | undefined;
+    expect(completedRun?.structuredWarnings?.warnings).toHaveLength(1);
+    expect(completedRun?.structuredWarnings?.warnings[0].code).toBe("UNKNOWN");
+    expect(completedRun?.structuredWarnings?.warnings[0].detail).toContain("skip-lp");
   });
 });

@@ -11,6 +11,7 @@ import {
   createPrismaSyncRunStore,
   type SyncRunStore,
 } from "@/services/sync/sync-state-store";
+import { unknownWarning, type SyncWarning } from "@/services/sync/sync-warning-codes";
 
 type RebuildOperationDependencies = {
   runStore?: SyncRunStore;
@@ -66,6 +67,13 @@ export async function runRebuildOperation(args: {
   let latestSafeBlock: bigint | undefined;
   let warningCount = 0;
   const warningDetails: string[] = [];
+  // Rebuild and materialization do not yet classify their own warnings
+  // structurally (unlike the TRANSFERS/DEX/LP/STAKING concrete ingest path),
+  // so every entry here is wrapped as UNKNOWN — a warning occurred, but the
+  // structured taxonomy does not yet classify this producer condition. This
+  // never changes warningCount/warningDetails, which remain exactly as
+  // before.
+  const structuredWarnings: SyncWarning[] = [];
 
   try {
     currentStage = "REBUILDING_LEDGER";
@@ -76,6 +84,7 @@ export async function runRebuildOperation(args: {
       latestSafeBlock,
       warningCount,
       warningDetails: [...warningDetails],
+      structuredWarnings: [...structuredWarnings],
     });
 
     const rebuild = await rebuildLedger({
@@ -87,6 +96,9 @@ export async function runRebuildOperation(args: {
 
     warningCount += rebuild.warnings.length;
     warningDetails.push(...rebuild.warnings);
+    for (const warning of rebuild.warnings) {
+      structuredWarnings.push(unknownWarning(warning));
+    }
     latestSafeBlock = args.toBlock;
 
     currentStage = "MATERIALIZING_POSITIONS";
@@ -97,6 +109,7 @@ export async function runRebuildOperation(args: {
       latestSafeBlock,
       warningCount,
       warningDetails: [...warningDetails],
+      structuredWarnings: [...structuredWarnings],
     });
 
     const materialized = await materializePortfolio({
@@ -109,6 +122,9 @@ export async function runRebuildOperation(args: {
 
     warningCount += materialized.warnings.length;
     warningDetails.push(...materialized.warnings);
+    for (const warning of materialized.warnings) {
+      structuredWarnings.push(unknownWarning(warning));
+    }
 
     await runStore.updateRun({
       runId: run.id,
@@ -117,6 +133,7 @@ export async function runRebuildOperation(args: {
       latestSafeBlock,
       warningCount,
       warningDetails: [...warningDetails],
+      structuredWarnings: [...structuredWarnings],
       errorMessage: null,
       endBlock: args.toBlock,
       failedSourceFamily: null,
@@ -144,6 +161,7 @@ export async function runRebuildOperation(args: {
       latestSafeBlock,
       warningCount,
       warningDetails: [...warningDetails],
+      structuredWarnings: [...structuredWarnings],
       errorMessage: buildRebuildFailureMessage({
         error,
         stage: currentStage,
