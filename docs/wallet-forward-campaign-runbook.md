@@ -137,6 +137,80 @@ candidate `SyncRun` by the exact expected `policyLabel`. Recovery is accepted
 stops with `ambiguous_submission_unrecoverable` and is never automatically
 resubmitted.
 
+## Explicit recovery mode
+
+`--recovery-mode` and `--recovery-of-run-id <SyncRun id>` (both required
+together — either alone is rejected, and neither present leaves ordinary
+campaign behavior byte-for-byte unchanged) let an operator explicitly recover
+exactly one prior window whose only structured warning was the proven-benign
+`RAW_BLOCKS_ALREADY_PERSISTED` code, without weakening the ordinary strict
+`warningCount === 0` gate for every other window. See the PR description for
+the full eligibility contract (R1–R6): historical `null`/malformed/truncated
+classification, `UNKNOWN`, mixed codes, any future code, and a zero-warning
+source run are all rejected.
+
+- **The recovery window is derived from the CLI, not the live cursor.** It is
+  exactly `[--first-window-start, --first-window-start + --window-size - 1]`.
+  `--expected-cursor-to` must already equal that window's `endBlock` —
+  recovery only ever targets the current cursor frontier, never an arbitrary
+  historical window.
+- **Recovery is a single bounded pre-loop step, run at most once.** After a
+  successful recovery (or a dry-run eligibility proof), the runner falls
+  through into the ordinary campaign loop with fully unchanged, strict
+  behavior — no persistent "tolerant campaign" state, and no window after the
+  first can ever use the recovery exception.
+- **A live campaign span must authorize at least one ordinary window after
+  the recovered range.** `--authorized-final-block` is validated against the
+  *post-recovery* effective first ordinary window
+  (`options.firstWindowStart + windowSizeBlocks`), not the recovery window's
+  own start, so recovery never silently consumes one ordinary window's worth
+  of authorized budget. This also means **campaign recovery is not currently
+  a "recover-only and exit" operation** — `validateAuthorizedFinalBlockAlignment`
+  requires at least one full ordinary window's span past the recovered range,
+  so an `--authorized-final-block` that covers only the recovery window
+  itself is rejected as misaligned (or as covering zero ordinary windows).
+  An operator must authorize at minimum `recovery window + one ordinary
+  post-recovery window` before campaign execution is valid. If this
+  minimum-span requirement is ever intentionally relaxed to support a genuine
+  recover-only invocation, that is a distinct, separately-reviewed change —
+  not something this runbook currently describes as supported.
+- **Ambiguous-submission recovery applies to the recovery POST too.** If the
+  recovery request itself throws (network error), the runner reconciles
+  against canonical PostgreSQL using the exact same identity proof described
+  above in "Ambiguous-submission recovery" (policyLabel + walletId + chainId
+  + sourceFamilies + exact block range) — never a second, blind-retry POST.
+- **The recovery flow has its own exception boundary.** If any operation
+  inside the recovery attempt throws unexpectedly after canonical state may
+  already have changed (a DB read, the ambiguous-submission lookup, polling,
+  a post-run cursor/contamination/duplicate check), the runner never rejects
+  uncaught: it returns a controlled `stoppedReason: "unexpected_error"`
+  result that preserves every recovery fact already known (a reconciled/
+  observed `runId`, `submittedAt`, `terminalAt`, `terminalStatus`,
+  `warningCount`, `postconditionsPassed`) and makes a best-effort attempt to
+  write an `unexpected_error` evidence record. No automatic retry and no
+  ordinary next-window POST ever follow it.
+- **Evidence:** a dedicated `recovery_window` record kind, written both for a
+  dry-run eligibility proof (`outcome: "dry_run_planned"`) and for an
+  execute-mode attempt (`outcome: "recovered"` or `"failed_invariant"`).
+  Fields include `sourceRunId`, `policyLabel`, the recovery `runId` (execute
+  mode only), the expected/actual range, `submittedAt`/`terminalAt`,
+  `terminalStatus`, `warningCount`, `warningDetails`, and
+  `invariantFailures`. The final `campaign_summary` record additionally
+  carries a `recovery` object (`sourceRunId`, `window`, `eligible`,
+  `recovered`, `runId`, `terminalStatus`, `warningCount`,
+  `postconditionsPassed`, `submittedAt`, `terminalAt`,
+  `recoveredFromAmbiguousSubmission`, and `reason` when rejected) — this is
+  the same shape returned as `CampaignSummary.recovery` to the CLI caller.
+  **Canonical recovery outcome and evidence-write outcome are tracked
+  separately:** `recovery.recovered`/`recovery.postconditionsPassed` reflect
+  what canonical PostgreSQL state actually shows, set the moment that
+  outcome is known — they are never reset to `false` merely because a later
+  evidence write (or an unrelated later exception) failed. If evidence
+  writing itself fails after a canonical recovery outcome is known, the
+  runner reports `stoppedReason: "evidence_append_failed"` (or
+  `"unexpected_error"` for the exception-boundary case above) while still
+  exposing the true canonical outcome and `runId` in `recovery`.
+
 ## Evidence
 
 Append-only JSONL (default

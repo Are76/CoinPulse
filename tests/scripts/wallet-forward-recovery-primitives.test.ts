@@ -17,6 +17,7 @@ import {
   verifyStructuredWarningsRecoveryEligible,
   type RunnerSyncRunRecord,
 } from "../../scripts/lib/wallet-forward-sync-primitives";
+import { SYNC_WARNING_CODES } from "../../src/services/sync/sync-warning-codes";
 
 const WALLET_ID = "wallet-cuid-1";
 const CHAIN_ID = 369;
@@ -376,6 +377,9 @@ describe("verifyRecoveryWindowTerminalState", () => {
       ...expectedWindow,
     });
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons.some((reason) => reason.includes("known-empty shape"))).toBe(true);
+    }
   });
 
   it("Finding C: zero-warningCount with structuredWarnings = null is rejected", () => {
@@ -389,6 +393,23 @@ describe("verifyRecoveryWindowTerminalState", () => {
       ...expectedWindow,
     });
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons.some((reason) => reason.includes("known-empty shape"))).toBe(true);
+    }
+  });
+
+  it("zero-warningCount with structuredWarnings absent (undefined) is rejected", () => {
+    const run = baseRun({
+      policyLabel: expectedWindow.expectedPolicyLabel,
+      warningCount: 0,
+      warningDetails: [],
+    });
+    delete (run as { structuredWarnings?: unknown }).structuredWarnings;
+    const result = verifyRecoveryWindowTerminalState({ run, ...expectedWindow });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons.some((reason) => reason.includes("known-empty shape"))).toBe(true);
+    }
   });
 
   it("Finding C: zero-warningCount with malformed structuredWarnings is rejected", () => {
@@ -402,6 +423,9 @@ describe("verifyRecoveryWindowTerminalState", () => {
       ...expectedWindow,
     });
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons.some((reason) => reason.includes("known-empty shape"))).toBe(true);
+    }
   });
 
   it("Finding C: zero-warningCount with truncatedCount > 0 is rejected", () => {
@@ -415,6 +439,35 @@ describe("verifyRecoveryWindowTerminalState", () => {
       ...expectedWindow,
     });
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons.some((reason) => reason.includes("known-empty shape"))).toBe(true);
+    }
+  });
+
+  it("rejects warningCount 0 with non-empty legacy warningDetails", () => {
+    const result = verifyRecoveryWindowTerminalState({
+      run: baseRun({
+        policyLabel: expectedWindow.expectedPolicyLabel,
+        warningCount: 0,
+        warningDetails: ["leftover legacy detail"],
+        structuredWarnings: { warnings: [], truncatedCount: 0 },
+      }),
+      ...expectedWindow,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasons.some((r) => r.includes("warningDetails"))).toBe(true);
+  });
+
+  it("rejects a latestSafeBlock that does not equal the window endBlock", () => {
+    const result = verifyRecoveryWindowTerminalState({
+      run: eligibleRun({
+        policyLabel: expectedWindow.expectedPolicyLabel,
+        latestSafeBlock: END_BLOCK - 1n,
+      }),
+      ...expectedWindow,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasons.some((r) => r.includes("latestSafeBlock"))).toBe(true);
   });
 
   it("26: rejects when the recovery source was eligible but the NEW recovery run fails a normal postcondition (e.g. UNKNOWN warning this time)", () => {
@@ -469,5 +522,17 @@ describe("recoveryPolicyLabel", () => {
     expect(recoveryPolicyLabel("wallet-forward-sync-window", "run-source-1")).toBe(
       "wallet-forward-sync-window-recovery-of-run-source-1",
     );
+  });
+});
+
+describe("RECOVERY_ELIGIBLE_WARNING_CODE — canonical warning-code drift protection", () => {
+  it("stays byte-for-byte identical to SYNC_WARNING_CODES.RAW_BLOCKS_ALREADY_PERSISTED", () => {
+    // wallet-forward-sync-primitives.ts intentionally duplicates this value
+    // as a literal (rather than importing sync-warning-codes.ts, a
+    // server-only-guarded module) so the runner-safety module stays loadable
+    // before CLI/env validation runs. This test is the only thing that
+    // would catch the two constants drifting apart if the canonical code in
+    // src/services/sync/sync-warning-codes.ts ever changes.
+    expect(RECOVERY_ELIGIBLE_WARNING_CODE).toBe(SYNC_WARNING_CODES.RAW_BLOCKS_ALREADY_PERSISTED);
   });
 });

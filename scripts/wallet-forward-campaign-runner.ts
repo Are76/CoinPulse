@@ -1035,7 +1035,16 @@ export async function runWalletForwardCampaignRunner(
     authorizedFinalBlock: options.authorizedFinalBlock,
   });
   if (!alignment.ok) {
-    return stopCampaign(deps, campaignId, "authorized_final_block_misaligned", alignment.reason, 0, null, 0);
+    // validateAuthorizedFinalBlockAlignment's message names the block it was
+    // actually given as "--first-window-start" — but when recovery is
+    // enabled that value is effectiveFirstWindowStart (one window past the
+    // recovered range), not the operator's literal --first-window-start CLI
+    // value. Append explicit recovery context so the operator is never
+    // misled about which value the alignment check actually used.
+    const detail = options.recovery
+      ? `${alignment.reason} (recovery mode: this uses the post-recovery effective first ordinary window start ${effectiveFirstWindowStart}, one window past --first-window-start ${options.firstWindowStart}, not --first-window-start itself)`
+      : alignment.reason;
+    return stopCampaign(deps, campaignId, "authorized_final_block_misaligned", detail, 0, null, 0);
   }
   const maxWindowsGate = validateCampaignMaxWindows({ maxWindows: options.maxWindows });
   if (!maxWindowsGate.ok) {
@@ -1161,6 +1170,20 @@ export async function runWalletForwardCampaignRunner(
   // block runs at most once, before any ordinary window, and never again. ──
   let recoverySummary: CampaignSummary["recovery"];
   if (options.recovery) {
+   // Exception boundary around the ENTIRE recovery flow: canonical DB
+   // reads, the ambiguous-submission candidate lookup, polling, post-run
+   // canonical reads (cursor/contamination/duplicates), and evidence writes
+   // can all throw. Without this boundary, an exception from any of those
+   // — thrown after the recovery POST may already have mutated canonical
+   // state — would propagate out of runWalletForwardCampaignRunner as an
+   // uncaught rejection, discarding recoverySummary (including a
+   // known/reconciled runId, submission timestamps, and any terminal
+   // outcome already established) and never writing operator evidence.
+   // Every intentional `return stopCampaign(...)` / early return inside
+   // this try block is unaffected — only a genuine thrown exception reaches
+   // the catch below, and even then no second POST or ordinary-window
+   // submission can ever follow it.
+   try {
     const recoveryStart = options.firstWindowStart;
     const recoveryEnd = options.firstWindowStart + options.windowSizeBlocks - 1n;
     recoverySummary = {
@@ -1550,6 +1573,33 @@ export async function runWalletForwardCampaignRunner(
       // recoverySummary.recovered/postconditionsPassed were already set to
       // true above, before the evidence write — nothing further to do here.
     }
+   } catch (error) {
+    // Fail-closed, controlled result: never an automatic retry, never an
+    // ordinary next-window POST. recoverySummary (declared in the outer
+    // scope, captured by this closure) already reflects every fact known
+    // before the throw — a reconciled/observed runId, submittedAt,
+    // terminalAt, terminalStatus, warningCount, postconditionsPassed, and
+    // recovered — exactly as it stood at the moment of the exception; this
+    // catch clause deliberately never resets any of those fields.
+    const message = error instanceof Error ? error.message : String(error);
+    await writeEvidenceOrNull(
+      deps,
+      buildStopEvidenceRecord({
+        at: deps.now().toISOString(),
+        reason: "unexpected_error",
+        detail: message,
+        extra: { campaignId, recovery: recoverySummary },
+      }),
+    );
+    return {
+      stoppedReason: "unexpected_error",
+      detail: message,
+      windowsCompleted: 0,
+      lastWindowNumber: null,
+      checkpointsPassed: 0,
+      recovery: recoverySummary,
+    };
+   }
   }
 
   // ── Step 7: begin window planning. ──

@@ -1695,6 +1695,47 @@ describe("recovery mode — orchestrator", () => {
     expect(httpPostCalls).toHaveLength(1); // never a second (ordinary-window) POST after the recovery window fails
   });
 
+  it("rejects a recovery policy-label collision pre-POST (zero POSTs)", async () => {
+    const db = recoveryDb({ policyLabels: [RECOVERY_LABEL] });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("policy_label_collision");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects recovery when an active (PENDING/RUNNING) operation already exists (zero POSTs)", async () => {
+    const db = recoveryDb({ activeRunCount: 1 });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("active_operation_conflict");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects recovery when the backend health check is unhealthy (zero POSTs)", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+    deps.httpGet = async () => ({ status: 503, body: { data: { status: "degraded" } } });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("server_unhealthy");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects recovery when fabricated-transfer contamination is detected pre-POST (zero POSTs)", async () => {
+    const db = recoveryDb({ contaminationRows: 1 });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("fabricated_contamination_pre_gate");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
   it("normal mode (no recovery flags) still hard-stops on RAW_BLOCKS_ALREADY_PERSISTED exactly as PR #369 proved", async () => {
     const db = makeFakeDb({
       runsById: {
