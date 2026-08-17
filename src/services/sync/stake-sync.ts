@@ -24,6 +24,11 @@ import {
   type WalletTransferSnapshot,
   canonicalizeSnapshotAssetId,
 } from "@/services/sync/sync-common";
+import {
+  pushWarning,
+  SYNC_WARNING_CODES,
+  type SyncWarning,
+} from "@/services/sync/sync-warning-codes";
 
 const PHEX_ADDRESS_LOWER = PHEX_ADDRESS.toLowerCase();
 
@@ -71,6 +76,7 @@ export async function ingestStakeActions(args: {
 }) {
   const artifacts = await ingestWalletTransferArtifacts(args);
   const warnings = [...artifacts.warnings];
+  const structuredWarnings: SyncWarning[] = [...artifacts.structuredWarnings];
   const walletAddress = args.wallet.address.toLowerCase();
   const phexTransfers = artifacts.transferSnapshots.filter(
     (transfer) => transfer.tokenAddress === PHEX_ADDRESS_LOWER,
@@ -89,19 +95,30 @@ export async function ingestStakeActions(args: {
     const transaction = await args.publicClient.getTransaction({ hash: txHash });
 
     if (!transaction.blockHash || transaction.blockNumber === null) {
-      warnings.push(`skip-stake:${transaction.hash.toLowerCase()}:missing-tx-block`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skip-stake:${transaction.hash.toLowerCase()}:missing-tx-block`,
+      );
       continue;
     }
 
     if (transaction.from.toLowerCase() !== walletAddress) {
-      warnings.push(
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
         `skip-stake:${transaction.hash.toLowerCase()}:unsupported-initiator`,
       );
       continue;
     }
 
     if (transaction.to?.toLowerCase() !== PHEX_ADDRESS_LOWER) {
-      warnings.push(
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
         `skip-stake:${transaction.hash.toLowerCase()}:unsupported-contract-target`,
       );
       continue;
@@ -110,7 +127,12 @@ export async function ingestStakeActions(args: {
     const decodedCall = decodeStakeCall(transaction.input);
 
     if (decodedCall.kind === "UNSUPPORTED") {
-      warnings.push(`skip-stake:${transaction.hash.toLowerCase()}:${decodedCall.reason}`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skip-stake:${transaction.hash.toLowerCase()}:${decodedCall.reason}`,
+      );
       continue;
     }
 
@@ -118,7 +140,12 @@ export async function ingestStakeActions(args: {
     const feeGasPrice = receipt.effectiveGasPrice ?? transaction.gasPrice;
 
     if (feeGasPrice === null) {
-      warnings.push(`skip-stake:${transaction.hash.toLowerCase()}:missing-gas-price`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skip-stake:${transaction.hash.toLowerCase()}:missing-gas-price`,
+      );
       continue;
     }
 
@@ -147,7 +174,12 @@ export async function ingestStakeActions(args: {
       });
 
       if (!startShape.ok) {
-        warnings.push(`skip-stake:${transaction.hash.toLowerCase()}:${startShape.reason}`);
+        pushWarning(
+          warnings,
+          structuredWarnings,
+          SYNC_WARNING_CODES.UNKNOWN,
+          `skip-stake:${transaction.hash.toLowerCase()}:${startShape.reason}`,
+        );
         continue;
       }
 
@@ -161,7 +193,12 @@ export async function ingestStakeActions(args: {
       const stakeCount = BigInt(stakeCountResult as bigint | number | string);
 
       if (stakeCount === 0n) {
-        warnings.push(`skip-stake:${transaction.hash.toLowerCase()}:empty-stake-count`);
+        pushWarning(
+          warnings,
+          structuredWarnings,
+          SYNC_WARNING_CODES.UNKNOWN,
+          `skip-stake:${transaction.hash.toLowerCase()}:empty-stake-count`,
+        );
         continue;
       }
 
@@ -181,7 +218,12 @@ export async function ingestStakeActions(args: {
       const stakedDays = Number(stake[4]);
 
       if (stakedHearts.toString() !== decodedCall.principalRaw) {
-        warnings.push(`skip-stake:${transaction.hash.toLowerCase()}:principal-mismatch`);
+        pushWarning(
+          warnings,
+          structuredWarnings,
+          SYNC_WARNING_CODES.UNKNOWN,
+          `skip-stake:${transaction.hash.toLowerCase()}:principal-mismatch`,
+        );
         continue;
       }
 
@@ -229,7 +271,12 @@ export async function ingestStakeActions(args: {
     });
 
     if (!endShape.ok) {
-      warnings.push(`skip-stake:${transaction.hash.toLowerCase()}:${endShape.reason}`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skip-stake:${transaction.hash.toLowerCase()}:${endShape.reason}`,
+      );
       continue;
     }
 
@@ -300,6 +347,15 @@ export async function ingestStakeActions(args: {
     args.db as never,
   );
 
+  if (processedCandidates > 0 && rawActions.length === 0) {
+    pushWarning(
+      warnings,
+      structuredWarnings,
+      SYNC_WARNING_CODES.UNKNOWN,
+      "some stake candidates were already persisted",
+    );
+  }
+
   return {
     rawLogCount: artifacts.rawLogCount,
     latestBlockHash: artifacts.latestBlockHash,
@@ -309,12 +365,8 @@ export async function ingestStakeActions(args: {
     })),
     fromBlock: args.fromBlock,
     toBlock: args.toBlock,
-    warnings: [
-      ...warnings,
-      ...(processedCandidates > 0 && rawActions.length === 0
-        ? ["some stake candidates were already persisted"]
-        : []),
-    ],
+    warnings,
+    structuredWarnings,
   };
 }
 

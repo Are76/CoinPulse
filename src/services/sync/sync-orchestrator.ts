@@ -14,6 +14,7 @@ import {
 import { persistNormalizedLedger } from "@/services/sync/ledger-store";
 import { classifySyncError } from "@/services/sync/sync-error-classifier";
 import { createSyncDependencies } from "@/services/sync/transfer-sync";
+import { unknownWarning, type SyncWarning } from "@/services/sync/sync-warning-codes";
 
 export type SyncWallet = {
   id: string;
@@ -28,6 +29,15 @@ export type IngestSourceFamilyResult<TLog = unknown> = {
   fromBlock: bigint;
   toBlock: bigint;
   warnings: readonly string[];
+  /**
+   * Optional structured classification parallel to `warnings`, in the same
+   * order. Producers that classify their own warnings (currently the
+   * TRANSFERS/DEX/LP/STAKING concrete ingest path) supply this. When absent,
+   * or when its length does not match `warnings.length` exactly, the
+   * orchestrator fails closed and treats every entry in `warnings` as
+   * UNKNOWN — it never partially trusts a misaligned structured list.
+   */
+  structuredWarnings?: readonly SyncWarning[];
 };
 
 type SyncRunDependencies<TLog = unknown> = {
@@ -128,6 +138,7 @@ export async function runWalletSync<TLog = unknown>(args: {
 
   let warningCount = 0;
   const warningDetails: string[] = [];
+  const structuredWarnings: SyncWarning[] = [];
   let latestSafeBlock: bigint | undefined;
   let currentStage = "PENDING";
   let currentRange:
@@ -169,6 +180,7 @@ export async function runWalletSync<TLog = unknown>(args: {
         latestSafeBlock,
         warningCount,
         warningDetails,
+        structuredWarnings,
       });
 
       const ingestResult = await dependencies.ingestSourceFamily({
@@ -190,6 +202,18 @@ export async function runWalletSync<TLog = unknown>(args: {
       for (const warning of ingestResult.warnings) {
         warningDetails.push(warning);
       }
+      // Structured classification, kept strictly parallel to warningDetails.
+      // A producer's structuredWarnings is only trusted when its length
+      // matches warnings.length exactly — any mismatch fails closed to
+      // UNKNOWN for the whole batch rather than risking a misaligned code.
+      const producerStructuredWarnings =
+        ingestResult.structuredWarnings &&
+        ingestResult.structuredWarnings.length === ingestResult.warnings.length
+          ? ingestResult.structuredWarnings
+          : ingestResult.warnings.map(unknownWarning);
+      for (const structuredWarning of producerStructuredWarnings) {
+        structuredWarnings.push(structuredWarning);
+      }
       latestSafeBlock = ingestResult.toBlock;
       currentRange = {
         sourceFamily: plan.sourceFamily,
@@ -205,6 +229,7 @@ export async function runWalletSync<TLog = unknown>(args: {
         latestSafeBlock,
         warningCount,
         warningDetails,
+        structuredWarnings,
       });
 
       const drafts = await dependencies.normalizeSourceFamily({
@@ -224,6 +249,7 @@ export async function runWalletSync<TLog = unknown>(args: {
         latestSafeBlock,
         warningCount,
         warningDetails,
+        structuredWarnings,
       });
 
       const persisted = await persistLedger(drafts);
@@ -239,6 +265,7 @@ export async function runWalletSync<TLog = unknown>(args: {
         latestSafeBlock,
         warningCount,
         warningDetails,
+        structuredWarnings,
       });
 
       await cursorStore.upsertCursor({
@@ -258,6 +285,7 @@ export async function runWalletSync<TLog = unknown>(args: {
       latestSafeBlock: latestSafeBlock ?? args.endBlock,
       warningCount,
       warningDetails,
+      structuredWarnings,
       errorMessage: null,
       endBlock: args.endBlock,
       failedSourceFamily: null,
@@ -292,6 +320,7 @@ export async function runWalletSync<TLog = unknown>(args: {
       latestSafeBlock,
       warningCount,
       warningDetails,
+      structuredWarnings,
       errorMessage: buildSyncFailureMessage({
         error,
         stage: currentStage,

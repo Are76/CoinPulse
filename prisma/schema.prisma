@@ -211,6 +211,17 @@ model SyncRun {
   policyLabel        String
   warningCount       Int            @default(0)
   warningDetails     Json?
+  // Additive, nullable structured-warning classification layered on top of
+  // the legacy warningCount/warningDetails contract above (see
+  // src/services/sync/sync-warning-codes.ts). Shape:
+  // { warnings: Array<{ code: string; detail: string }>, truncatedCount: number }.
+  // null means "classification unavailable" — either a historical row
+  // written before this column existed, or (transiently) a just-created run
+  // that has not yet had its first warning update. It never means "no
+  // warnings" or "safe" — that state is represented explicitly as
+  // { warnings: [], truncatedCount: 0 }. No backfill is performed for
+  // historical rows.
+  structuredWarnings Json?
   errorMessage       String?
   failedSourceFamily SourceFamily?
   failedFromBlock    BigInt?

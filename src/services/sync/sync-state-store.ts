@@ -4,6 +4,10 @@ import { Prisma } from "@prisma/client";
 import type { PrismaClient, SourceFamily, SyncRunStatus, SyncTrigger } from "@prisma/client";
 
 import { getDb } from "@/lib/db";
+import type {
+  StructuredWarningsPayload,
+  SyncWarning,
+} from "@/services/sync/sync-warning-codes";
 
 export const WARNING_DETAIL_LIMIT = 200;
 
@@ -16,6 +20,28 @@ export function capWarningDetails(warnings: readonly string[]): string[] {
     ...warnings.slice(0, WARNING_DETAIL_LIMIT),
     `[truncated: ${omitted} additional warning${omitted === 1 ? "" : "s"} not stored]`,
   ];
+}
+
+/**
+ * Truncation-safe structured-warning persistence shape. Mirrors
+ * `capWarningDetails`'s retained-count exactly (same `WARNING_DETAIL_LIMIT`,
+ * same "first N, in order" retention policy) but represents truncation as
+ * explicit `truncatedCount` metadata rather than a synthetic in-band entry —
+ * so a truncation marker can never be misclassified as a real warning code
+ * (in particular, never as `RAW_BLOCKS_ALREADY_PERSISTED`). A future
+ * consumer can detect incomplete structured classification for a run by
+ * checking `truncatedCount > 0` and fail closed accordingly.
+ */
+export function capStructuredWarnings(
+  warnings: readonly SyncWarning[],
+): StructuredWarningsPayload {
+  if (warnings.length <= WARNING_DETAIL_LIMIT) {
+    return { warnings: [...warnings], truncatedCount: 0 };
+  }
+  return {
+    warnings: warnings.slice(0, WARNING_DETAIL_LIMIT),
+    truncatedCount: warnings.length - WARNING_DETAIL_LIMIT,
+  };
 }
 
 type SyncStateClient = PrismaClient | Prisma.TransactionClient;
@@ -45,6 +71,13 @@ export type SyncRunStore = {
     policyLabel: string;
     warningCount?: number;
     warningDetails?: readonly string[];
+    /**
+     * Structured classification, in the same order as `warningDetails`. When
+     * omitted, defaults to an empty structured payload (a fresh run with no
+     * warnings is a KNOWN state — never `null`, which is reserved for
+     * historical rows written before this field existed).
+     */
+    structuredWarnings?: readonly SyncWarning[];
     errorMessage?: string;
     failedSourceFamily?: SourceFamily;
     failedFromBlock?: bigint;
@@ -58,6 +91,13 @@ export type SyncRunStore = {
     latestSafeBlock?: bigint;
     warningCount?: number;
     warningDetails?: readonly string[];
+    /**
+     * Structured classification, in the same order as `warningDetails`. When
+     * `undefined`, the column is left unchanged — mirrors how `warningDetails`
+     * is already handled below (an intermediate stage update that does not
+     * touch warnings at all must not clobber whatever was last persisted).
+     */
+    structuredWarnings?: readonly SyncWarning[];
     errorMessage?: string | null;
     endBlock?: bigint;
     failedSourceFamily?: SourceFamily | null;
@@ -101,6 +141,7 @@ export function createPrismaSyncRunStore(
           policyLabel: input.policyLabel,
           warningCount: input.warningCount ?? 0,
           warningDetails: capWarningDetails(input.warningDetails ?? []),
+          structuredWarnings: capStructuredWarnings(input.structuredWarnings ?? []),
           errorMessage: input.errorMessage ?? null,
           failedSourceFamily: input.failedSourceFamily ?? null,
           failedFromBlock: input.failedFromBlock ?? null,
@@ -126,6 +167,9 @@ export function createPrismaSyncRunStore(
           warningCount: input.warningCount,
           warningDetails: input.warningDetails !== undefined
             ? capWarningDetails(input.warningDetails)
+            : undefined,
+          structuredWarnings: input.structuredWarnings !== undefined
+            ? capStructuredWarnings(input.structuredWarnings)
             : undefined,
           errorMessage: input.errorMessage,
           endBlock: input.endBlock,

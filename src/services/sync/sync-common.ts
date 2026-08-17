@@ -23,6 +23,12 @@ import {
   readWalletProtocolOperationTxHashes,
   readWalletTransferRawTokenTransfers,
 } from "@/services/ingestion/raw-store";
+import {
+  pushWarning,
+  rawBlocksAlreadyPersistedWarning,
+  SYNC_WARNING_CODES,
+  type SyncWarning,
+} from "@/services/sync/sync-warning-codes";
 
 const ERC20_METADATA_ABI = parseAbi([
   "function decimals() view returns (uint8)",
@@ -149,6 +155,12 @@ export type TransferArtifacts = {
   fromBlock: bigint;
   toBlock: bigint;
   warnings: readonly string[];
+  /**
+   * Structured, machine-readable classification for every entry in
+   * `warnings`, in the exact same order — `structuredWarnings[i].detail ===
+   * warnings[i]` always holds. See sync-warning-codes.ts.
+   */
+  structuredWarnings: readonly SyncWarning[];
 };
 
 export function buildNativeTransactionScanWindows(args: {
@@ -252,6 +264,7 @@ export async function ingestWalletTransferArtifacts(args: {
   toBlock: bigint;
 }): Promise<TransferArtifacts> {
   const warnings: string[] = [];
+  const structuredWarnings: SyncWarning[] = [];
   const walletTopic = toTopicAddress(args.wallet.address);
   const windows = buildAdaptiveWindows({
     startBlock: args.fromBlock,
@@ -283,7 +296,10 @@ export async function ingestWalletTransferArtifacts(args: {
   // needless token metadata RPC calls for tokens the wallet never touched.
   const dedupedLogs = fetchedLogs.filter((log) => {
     if (log.topics[0]?.toLowerCase() !== TRANSFER_EVENT_TOPIC0) {
-      warnings.push(
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
         `skipped non-transfer log at ${log.blockNumber}:${log.logIndex} for ${log.address}`,
       );
       return false;
@@ -293,7 +309,10 @@ export async function ingestWalletTransferArtifacts(args: {
     const toTopic = log.topics[2]?.toLowerCase() ?? null;
 
     if (fromTopic !== walletTopic && toTopic !== walletTopic) {
-      warnings.push(
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
         `skipped unrelated-wallet transfer log at ${log.blockNumber}:${log.logIndex} for ${log.address}`,
       );
       return false;
@@ -426,7 +445,12 @@ export async function ingestWalletTransferArtifacts(args: {
         tokenAddress: log.address,
       });
     } catch {
-      warnings.push(`skipped non-ERC20 log at ${log.blockNumber}:${log.logIndex} for ${log.address}`);
+      pushWarning(
+        warnings,
+        structuredWarnings,
+        SYNC_WARNING_CODES.UNKNOWN,
+        `skipped non-ERC20 log at ${log.blockNumber}:${log.logIndex} for ${log.address}`,
+      );
       continue;
     }
 
@@ -449,7 +473,15 @@ export async function ingestWalletTransferArtifacts(args: {
   await persistRawTokenTransfers(decodedTransfers, args.db as never);
 
   if (scannedBlockCount !== persistedBlockCount && persistedBlockCount > 0) {
-    warnings.push("some raw blocks were already persisted for this range");
+    // Exact structural condition for RAW_BLOCKS_ALREADY_PERSISTED: the
+    // window scanned more raw blocks than `persistRawBlocks` newly inserted,
+    // meaning `skipDuplicates: true` skipped rows whose canonical
+    // (chainId, blockNumber, blockHash) identity already existed — a benign
+    // replay, not an error. Do not suppress, recount, or otherwise change
+    // this warning's legacy behavior; only its structured code is new here.
+    const detail = "some raw blocks were already persisted for this range";
+    warnings.push(detail);
+    structuredWarnings.push(rawBlocksAlreadyPersistedWarning(detail));
   }
 
   const rawTransfers = await readWalletTransferRawTokenTransfers(
@@ -517,6 +549,7 @@ export async function ingestWalletTransferArtifacts(args: {
     fromBlock: args.fromBlock,
     toBlock: args.toBlock,
     warnings,
+    structuredWarnings,
   };
 }
 
