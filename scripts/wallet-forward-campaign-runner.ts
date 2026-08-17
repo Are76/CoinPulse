@@ -804,18 +804,25 @@ export function parseCampaignCliArgs(argv: readonly string[]): CampaignCliParseR
   });
   if (!alignmentGate.ok) return { ok: false, error: alignmentGate.reason };
 
+  const recoveryFlags = parseRecoveryFlags({ recoveryMode, recoveryOfRunId });
+  if (!recoveryFlags.ok) return { ok: false, error: recoveryFlags.error };
+
   // The first window of a fresh (non-resumed) invocation is always logical
-  // window 1 — see computeLogicalCampaignWindowNumber's doc comment.
+  // window 1 — see computeLogicalCampaignWindowNumber's doc comment. When
+  // recovery mode is enabled, the recovery window itself occupies logical
+  // window 1 and the ordinary campaign loop's windows are shifted to start
+  // at logical window 2 — the label-length preflight must validate the
+  // shifted range up front, not the un-shifted one, or an overlong label at
+  // a digit boundary (e.g. w999 -> w1000) would only be caught hundreds of
+  // windows into a live campaign instead of before the first POST.
+  const startingLogicalWindowNumber = recoveryFlags.recovery ? 2 : 1;
   const labelLengthGate = validateLongestGeneratedLabel({
     policyLabelPrefix,
     campaignId,
-    startingLogicalWindowNumber: 1,
+    startingLogicalWindowNumber,
     maxWindows,
   });
   if (!labelLengthGate.ok) return { ok: false, error: labelLengthGate.reason };
-
-  const recoveryFlags = parseRecoveryFlags({ recoveryMode, recoveryOfRunId });
-  if (!recoveryFlags.ok) return { ok: false, error: recoveryFlags.error };
 
   return {
     ok: true,
@@ -900,6 +907,24 @@ export type CampaignSummary = {
     eligible: boolean;
     recovered: boolean;
     reason?: string;
+    /**
+     * Populated as soon as each fact becomes known during the recovery POST
+     * attempt — specifically BEFORE the recovery evidence write, not after —
+     * so that if evidence append fails after canonical PostgreSQL state has
+     * already been mutated (the recovery run reached a terminal state and
+     * its postconditions were evaluated), the operator-facing summary still
+     * exposes exactly what canonical truth is, rather than silently looking
+     * like recovery never happened. `recovered` above reflects this same
+     * canonical outcome the moment it is known, independent of whether the
+     * evidence write later succeeds.
+     */
+    runId?: string;
+    recoveredFromAmbiguousSubmission?: boolean;
+    terminalStatus?: string;
+    warningCount?: number;
+    postconditionsPassed?: boolean;
+    submittedAt?: string;
+    terminalAt?: string;
   };
 };
 
@@ -987,11 +1012,25 @@ export async function runWalletForwardCampaignRunner(
   const campaignStartAt = deps.now().toISOString();
   const campaignId = options.campaignId;
 
+  // Recovery (when enabled) resubmits exactly the window
+  // [options.firstWindowStart, options.firstWindowStart + windowSizeBlocks -
+  // 1] as a bounded pre-loop step — it is not one of the ordinary campaign
+  // windows bounded by --max-windows/--authorized-final-block. Every place
+  // that computes "how many ordinary windows remain" (the alignment/
+  // effectiveMaxWindows derivation below, and the ordinary loop's own
+  // first-window gate later) must therefore reason from the window
+  // immediately AFTER the recovered range, not from options.firstWindowStart
+  // itself — otherwise recovery would silently consume one ordinary window's
+  // worth of authorized budget.
+  const effectiveFirstWindowStart = options.recovery
+    ? options.firstWindowStart + options.windowSizeBlocks
+    : options.firstWindowStart;
+
   // ── Step 1: validate immutable options. Re-derived at runtime — never
   // trust that CLI parsing already validated these, since orchestrator
   // callers (including tests) may construct CampaignCliOptions directly. ──
   const alignment = validateAuthorizedFinalBlockAlignment({
-    firstWindowStart: options.firstWindowStart,
+    firstWindowStart: effectiveFirstWindowStart,
     windowSizeBlocks: options.windowSizeBlocks,
     authorizedFinalBlock: options.authorizedFinalBlock,
   });
@@ -1121,14 +1160,9 @@ export async function runWalletForwardCampaignRunner(
   // undefined (the default). No persistent "tolerant campaign" state: this
   // block runs at most once, before any ordinary window, and never again. ──
   let recoverySummary: CampaignSummary["recovery"];
-  // Reused as the ordinary loop's expected first-window start below — see
-  // the identical field in wallet-forward-sync-runner.ts for the full
-  // rationale.
-  let effectiveFirstWindowStart = options.firstWindowStart;
   if (options.recovery) {
     const recoveryStart = options.firstWindowStart;
     const recoveryEnd = options.firstWindowStart + options.windowSizeBlocks - 1n;
-    effectiveFirstWindowStart = recoveryEnd + 1n;
     recoverySummary = {
       sourceRunId: options.recovery.sourceRunId,
       window: { startBlock: recoveryStart.toString(), endBlock: recoveryEnd.toString() },
@@ -1314,10 +1348,58 @@ export async function runWalletForwardCampaignRunner(
         chainId: options.chainId,
         window: { startBlock: recoveryStart, endBlock: recoveryEnd, policyLabel: recoveryLabel },
       });
-      const postResponse = await deps.httpPost(`${options.baseUrl}/api/sync/manual`, requestBody);
-      const runId = (postResponse.body as { data?: { runId?: string } } | undefined)?.data?.runId;
-      if (postResponse.status !== 202 || !runId) {
-        recoverySummary.reason = `POST /api/sync/manual returned status ${postResponse.status}`;
+
+      // Ambiguous-submission recovery, identical in spirit to the ordinary
+      // campaign POST handling: if the HTTP call itself throws (timeout,
+      // dropped connection, ...) the backend may already have accepted and
+      // persisted the request. Never blindly retry — reconcile against
+      // canonical PostgreSQL state via the exact same
+      // classifyAmbiguousSubmissionRecovery identity proof the ordinary
+      // loop uses, and fail closed on anything but exactly one matching run.
+      let postResponse: HttpResponse | undefined;
+      let recoveredRunId: string | undefined;
+      try {
+        postResponse = await deps.httpPost(`${options.baseUrl}/api/sync/manual`, requestBody);
+      } catch (err) {
+        const candidates = await deps.db.syncRun.findMany({
+          where: { policyLabel: recoveryLabel, chainId: options.chainId },
+        });
+        const recovery = classifyAmbiguousSubmissionRecovery({
+          candidates,
+          expectedPolicyLabel: recoveryLabel,
+          expectedWalletId: wallet.id,
+          expectedChainId: options.chainId,
+          expectedStartBlock: recoveryStart,
+          expectedEndBlock: recoveryEnd,
+        });
+        if (!recovery.ok) {
+          recoverySummary.reason = `POST /api/sync/manual threw (${err instanceof Error ? err.message : String(err)}); ${recovery.reason}`;
+          return stopCampaign(
+            deps,
+            campaignId,
+            "recovery_ambiguous_submission_unrecoverable",
+            recoverySummary.reason,
+            0,
+            null,
+            0,
+            { sourceRunId: options.recovery.sourceRunId, policyLabel: recoveryLabel, submittedAt },
+            recoverySummary,
+          );
+        }
+        recoveredRunId = recovery.run.id;
+      }
+
+      const runId =
+        recoveredRunId ?? (postResponse?.body as { data?: { runId?: string } } | undefined)?.data?.runId;
+
+      if (runId) {
+        recoverySummary.runId = runId;
+        recoverySummary.recoveredFromAmbiguousSubmission = recoveredRunId !== undefined;
+        recoverySummary.submittedAt = submittedAt;
+      }
+
+      if (!recoveredRunId && (!postResponse || postResponse.status !== 202 || !runId)) {
+        recoverySummary.reason = `POST /api/sync/manual returned status ${postResponse?.status ?? "unknown"}`;
         return stopCampaign(
           deps,
           campaignId,
@@ -1330,14 +1412,14 @@ export async function runWalletForwardCampaignRunner(
             sourceRunId: options.recovery.sourceRunId,
             policyLabel: recoveryLabel,
             submittedAt,
-            httpStatus: postResponse.status,
-            responseBody: sanitizeBackendResponseBody(postResponse.body),
+            httpStatus: postResponse?.status,
+            responseBody: sanitizeBackendResponseBody(postResponse?.body),
           },
           recoverySummary,
         );
       }
 
-      const polled = await pollSyncRunToTerminal(deps.db, runId, {
+      const polled = await pollSyncRunToTerminal(deps.db, runId!, {
         now: deps.now,
         sleep: deps.sleep,
         pollIntervalMs: options.pollIntervalMs,
@@ -1358,6 +1440,9 @@ export async function runWalletForwardCampaignRunner(
         );
       }
       const terminalAt = deps.now().toISOString();
+      recoverySummary.terminalAt = terminalAt;
+      recoverySummary.terminalStatus = polled.run.status;
+      recoverySummary.warningCount = polled.run.warningCount;
 
       const terminalVerification = verifyRecoveryWindowTerminalState({
         run: polled.run,
@@ -1410,6 +1495,13 @@ export async function runWalletForwardCampaignRunner(
       });
       const allOk = postRunFailureReasons.length === 0;
 
+      // Canonical truth is now fully known — record it on recoverySummary
+      // BEFORE the evidence write below, so that if the write itself fails,
+      // the returned summary still reflects reality (a genuinely successful
+      // canonical recovery must never be reported back as recovered=false).
+      recoverySummary.postconditionsPassed = allOk;
+      recoverySummary.recovered = allOk;
+
       const windowWrite = await writeEvidenceOrNull(deps, {
         kind: "recovery_window",
         at: terminalAt,
@@ -1455,8 +1547,8 @@ export async function runWalletForwardCampaignRunner(
           recoverySummary,
         );
       }
-
-      recoverySummary.recovered = true;
+      // recoverySummary.recovered/postconditionsPassed were already set to
+      // true above, before the evidence write — nothing further to do here.
     }
   }
 
@@ -1464,7 +1556,13 @@ export async function runWalletForwardCampaignRunner(
   let windowsCompleted = 0;
   let lastWindowNumber: number | null = null;
   let checkpointsPassed = 0;
-  let processedCount = 0;
+  // A successful execute-mode recovery is a real mutating sync operation
+  // (identical in kind to an ordinary window), so it must count toward
+  // checkpoint spacing exactly like one — otherwise a campaign could submit
+  // the recovery plus a full MAX_CAMPAIGN_CHECKPOINT_INTERVAL of ordinary
+  // windows before the first checkpoint ever runs. A dry-run recovery never
+  // mutates anything and must not consume checkpoint spacing.
+  let processedCount = recoverySummary?.recovered ? 1 : 0;
   let lastPlannedEndBlock: bigint | null = null;
 
   // Dry-run only: in-memory simulated cursor upper edge, mirroring the

@@ -96,6 +96,7 @@ import {
   validateForwardAdjacency,
   validateNoActiveOperation,
   validateNoPolicyLabelCollision,
+  validatePolicyLabelLength,
   buildManualSyncRequestBody,
   type RunnerSyncRunRecord,
   verifyWindowTerminalState,
@@ -146,6 +147,7 @@ export {
   validateForwardAdjacency,
   validateNoActiveOperation,
   validateNoPolicyLabelCollision,
+  validatePolicyLabelLength,
   buildManualSyncRequestBody,
   verifyWindowTerminalState,
   verifyForwardCursorPostcondition,
@@ -613,6 +615,12 @@ export async function runWalletForwardSyncRunner(
     recoverySummary.eligible = true;
 
     const recoveryLabel = recoveryPolicyLabel(options.policyLabelPrefix, options.recovery.sourceRunId);
+
+    const labelLenGate = validatePolicyLabelLength({ policyLabel: recoveryLabel });
+    if (!labelLenGate.ok) {
+      recoverySummary.reason = labelLenGate.reason;
+      return stop(deps, "policy_label_overlong", labelLenGate.reason, 0, null, undefined, recoverySummary);
+    }
 
     const labelGate = validateNoPolicyLabelCollision({
       policyLabel: recoveryLabel,

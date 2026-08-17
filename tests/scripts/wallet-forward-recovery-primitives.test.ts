@@ -347,6 +347,76 @@ describe("verifyRecoveryWindowTerminalState", () => {
     expect(result.ok).toBe(true);
   });
 
+  // ── Finding C (PR #370 review): a zero-warningCount recovered run must
+  // prove structuredWarnings is the explicit known-zero shape too — not
+  // just infer "clean" from the legacy warningCount/warningDetails fields,
+  // which a contradictory structuredWarnings could otherwise slip past. ──
+
+  it("Finding C: zero-warning + explicit empty structured payload is accepted", () => {
+    const result = verifyRecoveryWindowTerminalState({
+      run: baseRun({
+        policyLabel: expectedWindow.expectedPolicyLabel,
+        warningCount: 0,
+        warningDetails: [],
+        structuredWarnings: { warnings: [], truncatedCount: 0 },
+      }),
+      ...expectedWindow,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("Finding C: zero-warningCount but a contradictory UNKNOWN structuredWarnings entry is rejected", () => {
+    const result = verifyRecoveryWindowTerminalState({
+      run: baseRun({
+        policyLabel: expectedWindow.expectedPolicyLabel,
+        warningCount: 0,
+        warningDetails: [],
+        structuredWarnings: { warnings: [{ code: "UNKNOWN", detail: "x" }], truncatedCount: 0 },
+      }),
+      ...expectedWindow,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("Finding C: zero-warningCount with structuredWarnings = null is rejected", () => {
+    const result = verifyRecoveryWindowTerminalState({
+      run: baseRun({
+        policyLabel: expectedWindow.expectedPolicyLabel,
+        warningCount: 0,
+        warningDetails: [],
+        structuredWarnings: null,
+      }),
+      ...expectedWindow,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("Finding C: zero-warningCount with malformed structuredWarnings is rejected", () => {
+    const result = verifyRecoveryWindowTerminalState({
+      run: baseRun({
+        policyLabel: expectedWindow.expectedPolicyLabel,
+        warningCount: 0,
+        warningDetails: [],
+        structuredWarnings: "not-an-object",
+      }),
+      ...expectedWindow,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("Finding C: zero-warningCount with truncatedCount > 0 is rejected", () => {
+    const result = verifyRecoveryWindowTerminalState({
+      run: baseRun({
+        policyLabel: expectedWindow.expectedPolicyLabel,
+        warningCount: 0,
+        warningDetails: [],
+        structuredWarnings: { warnings: [], truncatedCount: 2 },
+      }),
+      ...expectedWindow,
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("26: rejects when the recovery source was eligible but the NEW recovery run fails a normal postcondition (e.g. UNKNOWN warning this time)", () => {
     const result = verifyRecoveryWindowTerminalState({
       run: baseRun({

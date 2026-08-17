@@ -43,6 +43,7 @@ import {
   type RunnerDeps,
   type RunnerSyncRunRecord,
 } from "../../scripts/wallet-forward-sync-runner";
+import { POLICY_LABEL_MAX_LENGTH } from "../../scripts/lib/wallet-forward-sync-primitives";
 
 // ─── Import safety ──────────────────────────────────────────────────────────────
 
@@ -1724,5 +1725,27 @@ describe("recovery mode — orchestrator", () => {
 
     expect(summary.stoppedReason).toBe("invariant_failed_after_run");
     expect(httpPostCalls).toHaveLength(1);
+  });
+
+  it("Finding G: rejects an overlong recovery label before any POST (prefix fits ordinary labels but not the recovery suffix)", async () => {
+    const longPrefix = "p".repeat(110); // "<longPrefix>-1" (112 chars) is fine for ordinary windows
+    const longSourceRunId = "s".repeat(30); // but "<longPrefix>-recovery-of-<id>" exceeds POLICY_LABEL_MAX_LENGTH
+    const recoveryLabel = recoveryPolicyLabel(longPrefix, longSourceRunId);
+    expect(recoveryLabel.length).toBeGreaterThan(POLICY_LABEL_MAX_LENGTH);
+
+    const db = recoveryDb({ runsById: { [longSourceRunId]: eligibleSourceRun({ id: longSourceRunId }) } });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(
+      recoveryOptions({
+        execute: true,
+        policyLabelPrefix: longPrefix,
+        recovery: { sourceRunId: longSourceRunId },
+      }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("policy_label_overlong");
+    expect(httpPostCalls).toHaveLength(0);
   });
 });

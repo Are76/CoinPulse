@@ -611,14 +611,35 @@ export function verifyRecoveryWindowTerminalState(args: {
   // A newly-recovered run that came back with zero warnings altogether is
   // strictly better than the source run and trivially satisfies the normal
   // (strict) contract — only fall back to the R1-R6 eligibility rule when
-  // the new run actually carries warnings.
+  // the new run actually carries warnings. But "zero warnings" must itself
+  // be structurally proven, not just inferred from warningCount/legacy
+  // warningDetails: a contradictory structuredWarnings (non-empty, UNKNOWN,
+  // malformed, null, or truncated) must still fail closed even though the
+  // legacy fields look clean — recovery mode relies on structured
+  // classification, so it can never trust an unverified "clean" claim.
   if (run.warningCount !== 0) {
     const eligibility = verifyStructuredWarningsRecoveryEligible(run);
     if (!eligibility.ok) {
       reasons.push(`recovery window warning state not eligible: ${eligibility.reason}`);
     }
-  } else if (!Array.isArray(run.warningDetails) || run.warningDetails.length !== 0) {
-    reasons.push(`expected warningDetails to be empty, got ${JSON.stringify(run.warningDetails)}`);
+  } else {
+    if (!Array.isArray(run.warningDetails) || run.warningDetails.length !== 0) {
+      reasons.push(`expected warningDetails to be empty, got ${JSON.stringify(run.warningDetails)}`);
+    }
+    const raw = run.structuredWarnings;
+    const isKnownEmpty =
+      raw !== null &&
+      raw !== undefined &&
+      typeof raw === "object" &&
+      !Array.isArray(raw) &&
+      Array.isArray((raw as { warnings?: unknown }).warnings) &&
+      (raw as { warnings: unknown[] }).warnings.length === 0 &&
+      (raw as { truncatedCount?: unknown }).truncatedCount === 0;
+    if (!isKnownEmpty) {
+      reasons.push(
+        `recovery window reports warningCount 0 but structuredWarnings is not the known-empty shape { warnings: [], truncatedCount: 0 } — got ${JSON.stringify(raw)}`,
+      );
+    }
   }
 
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
