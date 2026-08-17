@@ -36,6 +36,7 @@ import {
   validateWindowSize,
   verifyForwardCursorPostcondition,
   verifyWindowTerminalState,
+  recoveryPolicyLabel,
   type EvidenceRecord,
   type RunnerCliOptions,
   type RunnerDbClient,
@@ -1425,5 +1426,303 @@ describe("exit-code allowlist regression", () => {
     ]) {
       expect(computeExitCode(reason)).toBe(1);
     }
+  });
+});
+
+// ─── Explicit recovery mode (PR B) ─────────────────────────────────────────────
+
+describe("recovery mode — CLI flags", () => {
+  const requiredArgv = [
+    "--wallet-address",
+    FIXTURE_WALLET,
+    "--chain-id",
+    "369",
+    "--expected-cursor-from",
+    "25077549",
+    "--expected-cursor-to",
+    "25079548",
+    "--first-window-start",
+    "25078549",
+    "--window-size",
+    "1000",
+    "--policy-label-prefix",
+    "wallet-forward-sync-window",
+  ];
+
+  it("neither flag: normal mode is unaffected", () => {
+    const parsed = parseRunnerCliArgs(requiredArgv);
+    if (!parsed.ok) throw new Error("expected parse success");
+    expect(parsed.options.recovery).toBeUndefined();
+  });
+
+  it("--recovery-mode without --recovery-of-run-id is rejected", () => {
+    const parsed = parseRunnerCliArgs([...requiredArgv, "--recovery-mode"]);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("--recovery-of-run-id without --recovery-mode is rejected", () => {
+    const parsed = parseRunnerCliArgs([...requiredArgv, "--recovery-of-run-id", "run-source-1"]);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("both flags together are accepted", () => {
+    const parsed = parseRunnerCliArgs([
+      ...requiredArgv,
+      "--recovery-mode",
+      "--recovery-of-run-id",
+      "run-source-1",
+    ]);
+    if (!parsed.ok) throw new Error("expected parse success");
+    expect(parsed.options.recovery).toEqual({ sourceRunId: "run-source-1" });
+  });
+});
+
+describe("recovery mode — orchestrator", () => {
+  const RECOVERY_START = FIXTURE_FIRST_WINDOW_START; // 25_078_549n
+  const RECOVERY_END = FIXTURE_FIRST_WINDOW_START + FIXTURE_WINDOW_SIZE - 1n; // 25_079_548n
+  const SOURCE_RUN_ID = "run-source-1";
+  const RECOVERY_LABEL = recoveryPolicyLabel("wallet-forward-sync-window", SOURCE_RUN_ID);
+
+  function eligibleSourceRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
+    return completedManualRun({
+      id: SOURCE_RUN_ID,
+      startBlock: RECOVERY_START,
+      endBlock: RECOVERY_END,
+      latestSafeBlock: RECOVERY_END,
+      warningCount: 1,
+      warningDetails: ["some raw blocks were already persisted for this range"],
+      structuredWarnings: {
+        warnings: [
+          { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+        ],
+        truncatedCount: 0,
+      },
+      ...overrides,
+    });
+  }
+
+  function recoveryOptions(overrides: Partial<RunnerCliOptions> = {}) {
+    return baseRunnerOptions({
+      expectedCursorFromBlock: FIXTURE_CURSOR_FROM,
+      expectedCursorToBlock: RECOVERY_END,
+      firstWindowStart: RECOVERY_START,
+      recovery: { sourceRunId: SOURCE_RUN_ID },
+      ...overrides,
+    });
+  }
+
+  function recoveryDb(overrides: Parameters<typeof makeFakeDb>[0] = {}) {
+    return makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+      ...overrides,
+    });
+  }
+
+  it("dry-run: proves eligibility without submitting any POST", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOptions({ execute: false, maxWindows: 1 }), deps);
+
+    expect(httpPostCalls).toHaveLength(0);
+    expect(summary.recovery?.eligible).toBe(true);
+    expect(summary.recovery?.recovered).toBe(false);
+  });
+
+  it("P3: execute mode recovers exactly the one referenced window, then continues one ordinary strict window forward — no extra window is implicitly authorized", async () => {
+    const db = recoveryDb();
+    let postCount = 0;
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async (_url, body) => {
+        postCount += 1;
+        const b = body as { policyLabel: string; startBlock: string; endBlock: string };
+        if (postCount === 1) {
+          // Recovery POST: resubmits the exact source-run window and comes
+          // back with the identical benign warning.
+          expect(b.policyLabel).toBe(RECOVERY_LABEL);
+          expect(b.startBlock).toBe(RECOVERY_START.toString());
+          expect(b.endBlock).toBe(RECOVERY_END.toString());
+          (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+            const id = (args as { where: { id: string } }).where.id;
+            if (id === "run-recovered") {
+              return completedManualRun({
+                id: "run-recovered",
+                policyLabel: RECOVERY_LABEL,
+                startBlock: RECOVERY_START,
+                endBlock: RECOVERY_END,
+                latestSafeBlock: RECOVERY_END,
+                warningCount: 1,
+                warningDetails: ["some raw blocks were already persisted for this range"],
+                structuredWarnings: {
+                  warnings: [
+                    {
+                      code: "RAW_BLOCKS_ALREADY_PERSISTED",
+                      detail: "some raw blocks were already persisted for this range",
+                    },
+                  ],
+                  truncatedCount: 0,
+                },
+              });
+            }
+            return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+          };
+          // Cursor was already at RECOVERY_END and stays there — resubmitting
+          // an already-fully-persisted range is idempotent.
+          return { status: 202, body: { data: { runId: "run-recovered" } } };
+        }
+        // Ordinary next forward window, fully strict.
+        const nextEnd = RECOVERY_END + FIXTURE_WINDOW_SIZE;
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          return id === "run-next"
+            ? completedManualRun({
+                id: "run-next",
+                policyLabel: "wallet-forward-sync-window-1",
+                startBlock: RECOVERY_END + 1n,
+                endBlock: nextEnd,
+                latestSafeBlock: nextEnd,
+              })
+            : null;
+        };
+        db.advanceCursorTo(nextEnd);
+        return { status: 202, body: { data: { runId: "run-next" } } };
+      },
+    });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOptions({ execute: true, maxWindows: 1 }), deps);
+
+    expect(httpPostCalls).toHaveLength(2); // exactly one recovery POST + one ordinary window, never more
+    expect(summary.recovery?.recovered).toBe(true);
+    expect(summary.stoppedReason).toBe("max_windows_reached");
+    expect(summary.windowsCompleted).toBe(1);
+  });
+
+  it("rejects when --expected-cursor-to is not at the recovery window's frontier (no POST)", async () => {
+    const db = recoveryDb({ cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END } });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(
+      recoveryOptions({ execute: true, expectedCursorToBlock: RECOVERY_END + 1n }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("recovery_window_not_at_cursor_frontier");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects a missing referenced SyncRun (no POST)", async () => {
+    const db = recoveryDb({ runsById: {} });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_source_run_ineligible");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects a source run belonging to a different wallet (no POST)", async () => {
+    const db = recoveryDb({ runsById: { [SOURCE_RUN_ID]: eligibleSourceRun({ walletId: "other-wallet" }) } });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_source_run_ineligible");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects a source run with a historical null structuredWarnings (no POST)", async () => {
+    const db = recoveryDb({
+      runsById: {
+        [SOURCE_RUN_ID]: eligibleSourceRun({ structuredWarnings: null }),
+      },
+    });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_source_run_ineligible");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects a source run with UNKNOWN-only warnings (no POST)", async () => {
+    const db = recoveryDb({
+      runsById: {
+        [SOURCE_RUN_ID]: eligibleSourceRun({
+          warningDetails: ["skipped non-transfer log"],
+          structuredWarnings: { warnings: [{ code: "UNKNOWN", detail: "skipped non-transfer log" }], truncatedCount: 0 },
+        }),
+      },
+    });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_source_run_ineligible");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("stops after the recovery POST when the NEW recovered run itself fails a postcondition (e.g. UNKNOWN warning this time)", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          if (id === "run-recovered") {
+            return completedManualRun({
+              id: "run-recovered",
+              policyLabel: RECOVERY_LABEL,
+              startBlock: RECOVERY_START,
+              endBlock: RECOVERY_END,
+              latestSafeBlock: RECOVERY_END,
+              warningCount: 1,
+              warningDetails: ["skipped non-transfer log"],
+              structuredWarnings: { warnings: [{ code: "UNKNOWN", detail: "skipped non-transfer log" }], truncatedCount: 0 },
+            });
+          }
+          return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+        };
+        return { status: 202, body: { data: { runId: "run-recovered" } } };
+      },
+    });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_invariant_failed_after_run");
+    expect(httpPostCalls).toHaveLength(1); // never a second (ordinary-window) POST after the recovery window fails
+  });
+
+  it("normal mode (no recovery flags) still hard-stops on RAW_BLOCKS_ALREADY_PERSISTED exactly as PR #369 proved", async () => {
+    const db = makeFakeDb({
+      runsById: {
+        "run-1": completedManualRun({
+          warningCount: 1,
+          warningDetails: ["some raw blocks were already persisted for this range"],
+          structuredWarnings: {
+            warnings: [
+              {
+                code: "RAW_BLOCKS_ALREADY_PERSISTED",
+                detail: "some raw blocks were already persisted for this range",
+              },
+            ],
+            truncatedCount: 0,
+          },
+        }),
+      },
+    });
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        db.advanceCursorTo(25_079_548n);
+        return { status: 202, body: { data: { runId: "run-1" } } };
+      },
+    });
+
+    const summary = await runWalletForwardSyncRunner(baseRunnerOptions({ execute: true, maxWindows: 1 }), deps);
+
+    expect(summary.stoppedReason).toBe("invariant_failed_after_run");
+    expect(httpPostCalls).toHaveLength(1);
   });
 });

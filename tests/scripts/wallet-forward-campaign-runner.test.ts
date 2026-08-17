@@ -33,6 +33,7 @@ import {
   type CampaignDeps,
 } from "../../scripts/wallet-forward-campaign-runner";
 import type { EvidenceRecord, RunnerDbClient, RunnerSyncRunRecord } from "../../scripts/lib/wallet-forward-sync-primitives";
+import { recoveryPolicyLabel } from "../../scripts/lib/wallet-forward-sync-primitives";
 
 const FIXTURE_WALLET = "0x08ac26d74013af7430c350c97eacd8be0bdc5613";
 const FIXTURE_WALLET_ID = "wallet-cuid-1";
@@ -1782,5 +1783,256 @@ describe("HTTP request timeout and timeout-triggered ambiguous recovery", () => 
 
     expect(summary.stoppedReason).toBe("ambiguous_submission_unrecoverable");
     expect(postCalls).toBe(1);
+  });
+});
+
+// ─── Explicit recovery mode (PR B) ─────────────────────────────────────────────
+
+describe("recovery mode — campaign CLI flags", () => {
+  it("neither flag: normal mode is unaffected", () => {
+    const parsed = parseCampaignCliArgs(requiredArgv());
+    if (!parsed.ok) throw new Error("expected parse success");
+    expect(parsed.options.recovery).toBeUndefined();
+  });
+
+  it("--recovery-mode without --recovery-of-run-id is rejected", () => {
+    const parsed = parseCampaignCliArgs([...requiredArgv(), "--recovery-mode"]);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("--recovery-of-run-id without --recovery-mode is rejected", () => {
+    const parsed = parseCampaignCliArgs([...requiredArgv(), "--recovery-of-run-id", "run-source-1"]);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("both flags together are accepted", () => {
+    const parsed = parseCampaignCliArgs([...requiredArgv(), "--recovery-mode", "--recovery-of-run-id", "run-source-1"]);
+    if (!parsed.ok) throw new Error("expected parse success");
+    expect(parsed.options.recovery).toEqual({ sourceRunId: "run-source-1" });
+  });
+});
+
+describe("recovery mode — campaign orchestrator", () => {
+  const RECOVERY_START = FIXTURE_FIRST_WINDOW_START; // 25_078_549n
+  const RECOVERY_END = FIXTURE_FIRST_WINDOW_START + FIXTURE_WINDOW_SIZE - 1n; // 25_079_548n
+  const SOURCE_RUN_ID = "run-source-1";
+  const RECOVERY_LABEL = recoveryPolicyLabel(FIXTURE_PREFIX, SOURCE_RUN_ID);
+
+  function eligibleSourceRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
+    return completedRun({
+      id: SOURCE_RUN_ID,
+      startBlock: RECOVERY_START,
+      endBlock: RECOVERY_END,
+      latestSafeBlock: RECOVERY_END,
+      warningCount: 1,
+      warningDetails: ["some raw blocks were already persisted for this range"],
+      structuredWarnings: {
+        warnings: [
+          { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+        ],
+        truncatedCount: 0,
+      },
+      ...overrides,
+    });
+  }
+
+  function recoveryOptions(overrides: Partial<CampaignCliOptions> = {}): CampaignCliOptions {
+    return baseOptions({
+      expectedCursorFromBlock: FIXTURE_CURSOR_FROM,
+      expectedCursorToBlock: RECOVERY_END,
+      firstWindowStart: RECOVERY_START,
+      maxWindows: 1,
+      authorizedFinalBlock: RECOVERY_END + FIXTURE_WINDOW_SIZE, // covers exactly 2 windows from RECOVERY_START
+      recovery: { sourceRunId: SOURCE_RUN_ID },
+      ...overrides,
+    });
+  }
+
+  function recoveryDb(overrides: Parameters<typeof makeFakeDb>[0] = {}) {
+    return makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+      ...overrides,
+    });
+  }
+
+  it("dry-run: proves eligibility without submitting any POST", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: false }), deps);
+
+    expect(httpPostCalls).toHaveLength(0);
+    expect(summary.recovery?.eligible).toBe(true);
+    expect(summary.recovery?.recovered).toBe(false);
+  });
+
+  it("execute mode recovers exactly the one referenced window, then continues one ordinary strict window forward", async () => {
+    const db = recoveryDb();
+    let postCount = 0;
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async (_url, body) => {
+        postCount += 1;
+        const b = body as { policyLabel: string; startBlock: string; endBlock: string };
+        if (postCount === 1) {
+          expect(b.policyLabel).toBe(RECOVERY_LABEL);
+          expect(b.startBlock).toBe(RECOVERY_START.toString());
+          expect(b.endBlock).toBe(RECOVERY_END.toString());
+          (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+            const id = (args as { where: { id: string } }).where.id;
+            if (id === "run-recovered") {
+              return completedRun({
+                id: "run-recovered",
+                policyLabel: RECOVERY_LABEL,
+                startBlock: RECOVERY_START,
+                endBlock: RECOVERY_END,
+                latestSafeBlock: RECOVERY_END,
+                warningCount: 1,
+                warningDetails: ["some raw blocks were already persisted for this range"],
+                structuredWarnings: {
+                  warnings: [
+                    {
+                      code: "RAW_BLOCKS_ALREADY_PERSISTED",
+                      detail: "some raw blocks were already persisted for this range",
+                    },
+                  ],
+                  truncatedCount: 0,
+                },
+              });
+            }
+            return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+          };
+          return { status: 202, body: { data: { runId: "run-recovered" } } };
+        }
+        const nextEnd = RECOVERY_END + FIXTURE_WINDOW_SIZE;
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          return id === "run-next"
+            ? completedRun({
+                id: "run-next",
+                policyLabel: campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 2),
+                startBlock: RECOVERY_END + 1n,
+                endBlock: nextEnd,
+                latestSafeBlock: nextEnd,
+              })
+            : null;
+        };
+        db.advanceCursorTo(nextEnd);
+        return { status: 202, body: { data: { runId: "run-next" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(httpPostCalls).toHaveLength(2);
+    expect(summary.recovery?.recovered).toBe(true);
+    expect(summary.stoppedReason).toBe("max_windows_reached");
+    expect(summary.windowsCompleted).toBe(1);
+  });
+
+  it("rejects when --expected-cursor-to is not at the recovery window's frontier (no POST)", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(
+      recoveryOptions({ execute: true, expectedCursorToBlock: RECOVERY_END + 1n }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("recovery_window_not_at_cursor_frontier");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects a missing referenced SyncRun (no POST)", async () => {
+    const db = recoveryDb({ runsById: {} });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_source_run_ineligible");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects a source run belonging to a different chain (no POST)", async () => {
+    const db = recoveryDb({ runsById: { [SOURCE_RUN_ID]: eligibleSourceRun({ chainId: 8453 }) } });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_source_run_ineligible");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects a source run with truncatedCount > 0 (no POST)", async () => {
+    const db = recoveryDb({
+      runsById: {
+        [SOURCE_RUN_ID]: eligibleSourceRun({
+          structuredWarnings: {
+            warnings: [
+              { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+            ],
+            truncatedCount: 5,
+          },
+        }),
+      },
+    });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_source_run_ineligible");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("stops after the recovery POST when the NEW recovered run fails a postcondition (duplicate ledger entries)", async () => {
+    const db = recoveryDb({ duplicateLedgerRows: 1 });
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          if (id === "run-recovered") return eligibleSourceRun({ id: "run-recovered", policyLabel: RECOVERY_LABEL });
+          return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+        };
+        return { status: 202, body: { data: { runId: "run-recovered" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_invariant_failed_after_run");
+    expect(httpPostCalls).toHaveLength(1);
+  });
+
+  it("normal campaign mode (no recovery flags) still hard-stops on RAW_BLOCKS_ALREADY_PERSISTED exactly as PR #369 proved", async () => {
+    const plan1Label = campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 1);
+    const db = makeFakeDb({
+      runsById: {
+        "run-1": completedRun({
+          policyLabel: plan1Label,
+          warningCount: 1,
+          warningDetails: ["some raw blocks were already persisted for this range"],
+          structuredWarnings: {
+            warnings: [
+              { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+            ],
+            truncatedCount: 0,
+          },
+        }),
+      },
+    });
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        db.advanceCursorTo(25_079_548n);
+        return { status: 202, body: { data: { runId: "run-1" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(baseOptions({ execute: true, maxWindows: 1 }), deps);
+
+    expect(summary.stoppedReason).toBe("invariant_failed_after_run");
+    expect(httpPostCalls).toHaveLength(1);
   });
 });

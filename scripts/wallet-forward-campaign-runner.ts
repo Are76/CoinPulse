@@ -138,6 +138,11 @@ import {
   type WalletLookupClient,
   resolveWalletUsingPrismaClient,
   safeStringify,
+  type RecoveryCliOptions,
+  parseRecoveryFlags,
+  verifyRecoveryEligibility,
+  verifyRecoveryWindowTerminalState,
+  recoveryPolicyLabel,
 } from "./lib/wallet-forward-sync-primitives";
 
 const execFileAsync = promisify(execFile);
@@ -502,6 +507,14 @@ export type CampaignCliOptions = {
   evidenceFile: string;
   pollIntervalMs: number;
   pollTimeoutMs: number;
+  /**
+   * Explicit, opt-in recovery of exactly one prior benign-warning window,
+   * attempted once before the ordinary campaign loop begins. Undefined (the
+   * default) leaves campaign behavior byte-for-byte unchanged. See
+   * scripts/wallet-forward-sync-runner.ts's identical field for the full
+   * contract — the campaign runner reuses the same shared primitives.
+   */
+  recovery?: RecoveryCliOptions;
 };
 
 export type CampaignCliParseResult =
@@ -534,6 +547,10 @@ export const CAMPAIGN_CLI_USAGE = [
   "  --max-windows, --authorized-final-block, --campaign-id,",
   "  --policy-label-prefix, and --base-url are required — nothing is",
   "  inferred or defaulted.",
+  "  [--recovery-mode --recovery-of-run-id <SyncRun id>] recovers exactly",
+  "  one prior benign-warning window at [--first-window-start,",
+  "  --first-window-start + --window-size - 1] before the campaign loop",
+  "  begins; --expected-cursor-to must already equal that window's endBlock.",
 ].join("\n");
 
 const DEFAULT_EVIDENCE_FILE = "operator-evidence/wallet-forward-campaign-runner/evidence.jsonl";
@@ -568,12 +585,27 @@ export function parseCampaignCliArgs(argv: readonly string[]): CampaignCliParseR
   let evidenceFile = DEFAULT_EVIDENCE_FILE;
   let pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
   let pollTimeoutMs = DEFAULT_POLL_TIMEOUT_MS;
+  let recoveryMode = false;
+  let recoveryOfRunId: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
 
     if (arg === "--execute") {
       execute = true;
+      continue;
+    }
+    if (arg === "--recovery-mode") {
+      recoveryMode = true;
+      continue;
+    }
+    if (arg === "--recovery-of-run-id") {
+      const value = readValue(argv, index);
+      if (value === null || value.trim().length === 0) {
+        return { ok: false, error: "--recovery-of-run-id requires a non-empty value." };
+      }
+      recoveryOfRunId = value;
+      index += 1;
       continue;
     }
     if (arg === "--wallet-address") {
@@ -782,6 +814,9 @@ export function parseCampaignCliArgs(argv: readonly string[]): CampaignCliParseR
   });
   if (!labelLengthGate.ok) return { ok: false, error: labelLengthGate.reason };
 
+  const recoveryFlags = parseRecoveryFlags({ recoveryMode, recoveryOfRunId });
+  if (!recoveryFlags.ok) return { ok: false, error: recoveryFlags.error };
+
   return {
     ok: true,
     options: {
@@ -801,6 +836,7 @@ export function parseCampaignCliArgs(argv: readonly string[]): CampaignCliParseR
       evidenceFile,
       pollIntervalMs,
       pollTimeoutMs,
+      recovery: recoveryFlags.recovery,
     },
   };
 }
@@ -855,6 +891,16 @@ export type CampaignSummary = {
    * see `CampaignWindowAttempt`'s doc comment. Absent on every clean
    * completion and on any pre-POST stop. */
   lastAttemptedWindow?: CampaignWindowAttempt;
+  /** Present only when --recovery-mode/--recovery-of-run-id were passed —
+   * absent on every ordinary campaign. Never fabricated: `recovered` is
+   * true only when the recovery window's own post-run gates all passed. */
+  recovery?: {
+    sourceRunId: string;
+    window: { startBlock: string; endBlock: string };
+    eligible: boolean;
+    recovered: boolean;
+    reason?: string;
+  };
 };
 
 /** Genuine, non-error campaign completion. Every other stoppedReason —
@@ -899,6 +945,7 @@ async function stopCampaign(
   lastWindowNumber: number | null,
   checkpointsPassed: number,
   extra?: Record<string, unknown>,
+  recovery?: CampaignSummary["recovery"],
 ): Promise<CampaignSummary> {
   // Best-effort: a stop record failing to write must never mask the
   // original stop reason, and must never trigger a further POST.
@@ -906,7 +953,7 @@ async function stopCampaign(
     deps,
     buildStopEvidenceRecord({ at: deps.now().toISOString(), reason, detail, extra: { campaignId, ...extra } }),
   );
-  return { stoppedReason: reason, detail, windowsCompleted, lastWindowNumber, checkpointsPassed };
+  return { stoppedReason: reason, detail, windowsCompleted, lastWindowNumber, checkpointsPassed, recovery };
 }
 
 async function checkServerHealthDetailed(
@@ -1067,6 +1114,352 @@ export async function runWalletForwardCampaignRunner(
     return { stoppedReason: "evidence_append_failed", detail: startWrite.message, windowsCompleted: 0, lastWindowNumber: null, checkpointsPassed: 0 };
   }
 
+  // ── Step 6.5: explicit recovery mode (PR B). A single bounded pre-loop
+  // step that resubmits exactly one prior benign-warning window, then falls
+  // through to the ordinary campaign loop with fully unchanged, strict
+  // behavior. Skipped entirely — byte-for-byte — when options.recovery is
+  // undefined (the default). No persistent "tolerant campaign" state: this
+  // block runs at most once, before any ordinary window, and never again. ──
+  let recoverySummary: CampaignSummary["recovery"];
+  // Reused as the ordinary loop's expected first-window start below — see
+  // the identical field in wallet-forward-sync-runner.ts for the full
+  // rationale.
+  let effectiveFirstWindowStart = options.firstWindowStart;
+  if (options.recovery) {
+    const recoveryStart = options.firstWindowStart;
+    const recoveryEnd = options.firstWindowStart + options.windowSizeBlocks - 1n;
+    effectiveFirstWindowStart = recoveryEnd + 1n;
+    recoverySummary = {
+      sourceRunId: options.recovery.sourceRunId,
+      window: { startBlock: recoveryStart.toString(), endBlock: recoveryEnd.toString() },
+      eligible: false,
+      recovered: false,
+    };
+
+    if (options.expectedCursorToBlock !== recoveryEnd) {
+      recoverySummary.reason = `--expected-cursor-to ${options.expectedCursorToBlock} must equal the recovery window's endBlock ${recoveryEnd}`;
+      return stopCampaign(
+        deps,
+        campaignId,
+        "recovery_window_not_at_cursor_frontier",
+        recoverySummary.reason,
+        0,
+        null,
+        0,
+        undefined,
+        recoverySummary,
+      );
+    }
+
+    const liveCursor = await getLiveTransfersCursor(deps.db, wallet.id, options.chainId);
+    const cursorGate = validateExpectedLiveCursor({
+      liveCursor,
+      expectedCursorFromBlock: options.expectedCursorFromBlock,
+      expectedCursorToBlock: options.expectedCursorToBlock,
+    });
+    if (!cursorGate.ok) {
+      recoverySummary.reason = cursorGate.reason;
+      return stopCampaign(
+        deps,
+        campaignId,
+        "cursor_expectation_mismatch",
+        cursorGate.reason,
+        0,
+        null,
+        0,
+        undefined,
+        recoverySummary,
+      );
+    }
+
+    const sourceRun = await deps.db.syncRun.findUnique({ where: { id: options.recovery.sourceRunId } });
+    const eligibility = verifyRecoveryEligibility({
+      run: sourceRun,
+      expectedRunId: options.recovery.sourceRunId,
+      expectedWalletId: wallet.id,
+      expectedChainId: options.chainId,
+      expectedStartBlock: recoveryStart,
+      expectedEndBlock: recoveryEnd,
+    });
+    if (!eligibility.ok) {
+      recoverySummary.reason = eligibility.reason;
+      return stopCampaign(
+        deps,
+        campaignId,
+        "recovery_source_run_ineligible",
+        eligibility.reason,
+        0,
+        null,
+        0,
+        { sourceRunId: options.recovery.sourceRunId },
+        recoverySummary,
+      );
+    }
+    recoverySummary.eligible = true;
+
+    const recoveryLabel = recoveryPolicyLabel(options.policyLabelPrefix, options.recovery.sourceRunId);
+
+    const labelLenGate = validatePolicyLabelLength({ policyLabel: recoveryLabel });
+    if (!labelLenGate.ok) {
+      recoverySummary.reason = labelLenGate.reason;
+      return stopCampaign(
+        deps,
+        campaignId,
+        "policy_label_overlong",
+        labelLenGate.reason,
+        0,
+        null,
+        0,
+        undefined,
+        recoverySummary,
+      );
+    }
+
+    const labelGate = validateNoPolicyLabelCollision({
+      policyLabel: recoveryLabel,
+      existingPolicyLabels: await listActivePolicyLabels(deps.db, options.chainId),
+    });
+    if (!labelGate.ok) {
+      recoverySummary.reason = labelGate.reason;
+      return stopCampaign(
+        deps,
+        campaignId,
+        "policy_label_collision",
+        labelGate.reason,
+        0,
+        null,
+        0,
+        undefined,
+        recoverySummary,
+      );
+    }
+
+    const activeOpGate = validateNoActiveOperation({ activeRunCount: await countActiveOperations(deps.db) });
+    if (!activeOpGate.ok) {
+      recoverySummary.reason = activeOpGate.reason;
+      return stopCampaign(
+        deps,
+        campaignId,
+        "active_operation_conflict",
+        activeOpGate.reason,
+        0,
+        null,
+        0,
+        undefined,
+        recoverySummary,
+      );
+    }
+
+    const healthCheck = await checkServerHealthDetailed(deps.httpGet, options.baseUrl);
+    if (!healthCheck.gate.ok) {
+      recoverySummary.reason = (healthCheck.gate as { ok: false; reason: string }).reason;
+      return stopCampaign(
+        deps,
+        campaignId,
+        "server_unhealthy",
+        recoverySummary.reason,
+        0,
+        null,
+        0,
+        undefined,
+        recoverySummary,
+      );
+    }
+
+    const preContamination = await checkFabricatedContamination(deps.db, {
+      chainId: options.chainId,
+      walletAddress: options.walletAddress,
+      startBlock: recoveryStart,
+      endBlock: recoveryEnd,
+    });
+    if (preContamination.rowCount > 0) {
+      recoverySummary.reason = `${preContamination.rowCount} contaminated row(s) detected in the recovery range; do not submit`;
+      return stopCampaign(
+        deps,
+        campaignId,
+        "fabricated_contamination_pre_gate",
+        recoverySummary.reason,
+        0,
+        null,
+        0,
+        undefined,
+        recoverySummary,
+      );
+    }
+
+    if (!options.execute) {
+      const write = await writeEvidenceOrNull(deps, {
+        kind: "recovery_window",
+        at: deps.now().toISOString(),
+        outcome: "dry_run_planned",
+        campaignId,
+        sourceRunId: options.recovery.sourceRunId,
+        policyLabel: recoveryLabel,
+        range: { startBlock: recoveryStart.toString(), endBlock: recoveryEnd.toString() },
+      });
+      if (!write.ok) {
+        return {
+          stoppedReason: "evidence_append_failed",
+          detail: write.message,
+          windowsCompleted: 0,
+          lastWindowNumber: null,
+          checkpointsPassed: 0,
+          recovery: recoverySummary,
+        };
+      }
+    } else {
+      const submittedAt = deps.now().toISOString();
+      const requestBody = buildManualSyncRequestBody({
+        walletAddress: options.walletAddress,
+        chainId: options.chainId,
+        window: { startBlock: recoveryStart, endBlock: recoveryEnd, policyLabel: recoveryLabel },
+      });
+      const postResponse = await deps.httpPost(`${options.baseUrl}/api/sync/manual`, requestBody);
+      const runId = (postResponse.body as { data?: { runId?: string } } | undefined)?.data?.runId;
+      if (postResponse.status !== 202 || !runId) {
+        recoverySummary.reason = `POST /api/sync/manual returned status ${postResponse.status}`;
+        return stopCampaign(
+          deps,
+          campaignId,
+          "recovery_manual_sync_submit_failed",
+          recoverySummary.reason,
+          0,
+          null,
+          0,
+          {
+            sourceRunId: options.recovery.sourceRunId,
+            policyLabel: recoveryLabel,
+            submittedAt,
+            httpStatus: postResponse.status,
+            responseBody: sanitizeBackendResponseBody(postResponse.body),
+          },
+          recoverySummary,
+        );
+      }
+
+      const polled = await pollSyncRunToTerminal(deps.db, runId, {
+        now: deps.now,
+        sleep: deps.sleep,
+        pollIntervalMs: options.pollIntervalMs,
+        pollTimeoutMs: options.pollTimeoutMs,
+      });
+      if (!polled.ok) {
+        recoverySummary.reason = `SyncRun ${runId} did not reach a terminal state within ${options.pollTimeoutMs}ms`;
+        return stopCampaign(
+          deps,
+          campaignId,
+          "recovery_poll_timeout",
+          recoverySummary.reason,
+          0,
+          null,
+          0,
+          { sourceRunId: options.recovery.sourceRunId, policyLabel: recoveryLabel, runId, submittedAt },
+          recoverySummary,
+        );
+      }
+      const terminalAt = deps.now().toISOString();
+
+      const terminalVerification = verifyRecoveryWindowTerminalState({
+        run: polled.run,
+        expectedWalletId: wallet.id,
+        expectedChainId: options.chainId,
+        expectedPolicyLabel: recoveryLabel,
+        expectedStartBlock: recoveryStart,
+        expectedEndBlock: recoveryEnd,
+      });
+
+      const cursorAfterRecord = await getLiveTransfersCursor(deps.db, wallet.id, options.chainId);
+      const cursorGatePost = terminalVerification.ok
+        ? verifyForwardCursorPostcondition({
+            cursorAfter: cursorAfterRecord,
+            anchorFromBlock: options.expectedCursorFromBlock,
+            expectedToBlock: recoveryEnd,
+          })
+        : ({ ok: false, reason: "skipped: terminal state already failed" } as const);
+
+      const postContamination = await checkFabricatedContamination(deps.db, {
+        chainId: options.chainId,
+        walletAddress: options.walletAddress,
+        startBlock: recoveryStart,
+        endBlock: recoveryEnd,
+      });
+      const duplicateTransactions = await checkDuplicateRawTransactions(deps.db, {
+        chainId: options.chainId,
+        startBlock: recoveryStart,
+        endBlock: recoveryEnd,
+      });
+      const duplicateTransfers = await checkDuplicateRawTokenTransfers(deps.db, {
+        chainId: options.chainId,
+        startBlock: recoveryStart,
+        endBlock: recoveryEnd,
+      });
+      const duplicateLedgerEntries = await checkDuplicateLedgerEntries(deps.db, {
+        startBlock: recoveryStart,
+        endBlock: recoveryEnd,
+      });
+      const activeAfterCount = await countActiveOperations(deps.db);
+
+      const postRunFailureReasons = buildPostRunFailureReasons({
+        terminalVerification,
+        cursorGatePost,
+        postContaminationRowCount: postContamination.rowCount,
+        duplicateRawTransactionGroups: duplicateTransactions.rowCount,
+        duplicateRawTokenTransferGroups: duplicateTransfers.rowCount,
+        duplicateLedgerEntryGroups: duplicateLedgerEntries.rowCount,
+        activeOperationsAfter: activeAfterCount,
+      });
+      const allOk = postRunFailureReasons.length === 0;
+
+      const windowWrite = await writeEvidenceOrNull(deps, {
+        kind: "recovery_window",
+        at: terminalAt,
+        outcome: allOk ? "recovered" : "failed_invariant",
+        campaignId,
+        sourceRunId: options.recovery.sourceRunId,
+        policyLabel: recoveryLabel,
+        runId,
+        expectedRange: { startBlock: recoveryStart.toString(), endBlock: recoveryEnd.toString() },
+        actualRange: {
+          startBlock: polled.run.startBlock?.toString() ?? null,
+          endBlock: polled.run.endBlock?.toString() ?? null,
+        },
+        submittedAt,
+        terminalAt,
+        terminalStatus: polled.run.status,
+        warningCount: polled.run.warningCount,
+        warningDetails: polled.run.warningDetails,
+        invariantFailures: postRunFailureReasons,
+      });
+      if (!windowWrite.ok) {
+        return {
+          stoppedReason: "evidence_append_failed",
+          detail: windowWrite.message,
+          windowsCompleted: 0,
+          lastWindowNumber: null,
+          checkpointsPassed: 0,
+          recovery: recoverySummary,
+        };
+      }
+
+      if (!allOk) {
+        recoverySummary.reason = postRunFailureReasons.join("; ");
+        return stopCampaign(
+          deps,
+          campaignId,
+          "recovery_invariant_failed_after_run",
+          recoverySummary.reason,
+          0,
+          null,
+          0,
+          { sourceRunId: options.recovery.sourceRunId, policyLabel: recoveryLabel, runId },
+          recoverySummary,
+        );
+      }
+
+      recoverySummary.recovered = true;
+    }
+  }
+
   // ── Step 7: begin window planning. ──
   let windowsCompleted = 0;
   let lastWindowNumber: number | null = null;
@@ -1120,7 +1513,7 @@ export async function runWalletForwardCampaignRunner(
       if (iteration === 0) {
         const firstWindowGate = validateFirstWindowStart({
           computedStartBlock: range.startBlock,
-          expectedFirstWindowStart: options.firstWindowStart,
+          expectedFirstWindowStart: effectiveFirstWindowStart,
         });
         if (!firstWindowGate.ok) {
           return stopCampaign(deps, campaignId, "first_window_start_mismatch", firstWindowGate.reason, windowsCompleted, lastWindowNumber, checkpointsPassed);
@@ -1568,6 +1961,7 @@ export async function runWalletForwardCampaignRunner(
     checkpointsPassed,
     approvedMaxWindows: options.maxWindows,
     authorizedFinalBlock: options.authorizedFinalBlock.toString(),
+    recovery: recoverySummary,
   });
   if (!summaryWrite.ok) {
     return {
@@ -1576,10 +1970,11 @@ export async function runWalletForwardCampaignRunner(
       windowsCompleted,
       lastWindowNumber,
       checkpointsPassed,
+      recovery: recoverySummary,
     };
   }
 
-  return { stoppedReason, windowsCompleted, lastWindowNumber, checkpointsPassed };
+  return { stoppedReason, windowsCompleted, lastWindowNumber, checkpointsPassed, recovery: recoverySummary };
 }
 
 // ─── CLI entrypoint ────────────────────────────────────────────────────────────
