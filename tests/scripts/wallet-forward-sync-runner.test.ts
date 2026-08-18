@@ -1930,6 +1930,12 @@ describe("recovery-only mode — orchestrator", () => {
   it("fail-closed guard: a direct caller setting recoveryOnly true with recovery missing is rejected before any wallet lookup, planning, or POST", async () => {
     const db = recoveryDb();
     const { deps, httpPostCalls, evidence } = makeFakeDeps({ db });
+    const originalResolveWallet = deps.resolveWallet;
+    const resolveWalletCalls: unknown[] = [];
+    deps.resolveWallet = async (args) => {
+      resolveWalletCalls.push(args);
+      return originalResolveWallet(args);
+    };
 
     const summary = await runWalletForwardSyncRunner(
       // Bypasses parseRunnerCliArgs's own "--recovery-only requires
@@ -1939,6 +1945,10 @@ describe("recovery-only mode — orchestrator", () => {
     );
 
     expect(summary.stoppedReason).toBe("recovery_only_requires_recovery_mode");
+    // A regression that moved the guard after wallet resolution would still
+    // pass on POST/window-evidence assertions alone — this proves the guard
+    // fires before any DB lookup at all, not just before the HTTP POST.
+    expect(resolveWalletCalls).toHaveLength(0);
     expect(httpPostCalls).toHaveLength(0);
     expect(computeExitCode(summary.stoppedReason)).toBe(1);
     expect(evidence.some((e) => e.kind === "window")).toBe(false);
