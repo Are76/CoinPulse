@@ -96,6 +96,7 @@ import {
   validateForwardAdjacency,
   validateNoActiveOperation,
   validateNoPolicyLabelCollision,
+  validatePolicyLabelLength,
   buildManualSyncRequestBody,
   type RunnerSyncRunRecord,
   verifyWindowTerminalState,
@@ -125,6 +126,12 @@ import {
   type WalletLookupClient,
   resolveWalletUsingPrismaClient,
   safeStringify,
+  type RecoveryCliOptions,
+  type RecoveryGateResult,
+  parseRecoveryFlags,
+  verifyRecoveryEligibility,
+  verifyRecoveryWindowTerminalState,
+  recoveryPolicyLabel,
 } from "./lib/wallet-forward-sync-primitives";
 
 // Re-exported so existing imports/tests of this file keep working unchanged.
@@ -140,6 +147,7 @@ export {
   validateForwardAdjacency,
   validateNoActiveOperation,
   validateNoPolicyLabelCollision,
+  validatePolicyLabelLength,
   buildManualSyncRequestBody,
   verifyWindowTerminalState,
   verifyForwardCursorPostcondition,
@@ -159,6 +167,10 @@ export {
   checkServerHealth,
   pollSyncRunToTerminal,
   resolveWalletUsingPrismaClient,
+  parseRecoveryFlags,
+  verifyRecoveryEligibility,
+  verifyRecoveryWindowTerminalState,
+  recoveryPolicyLabel,
 };
 export type {
   WindowPlan,
@@ -171,6 +183,8 @@ export type {
   HttpPost,
   HttpGet,
   WalletLookupClient,
+  RecoveryCliOptions,
+  RecoveryGateResult,
 };
 
 // ─── Runner-specific safety constants (not operator-overridable) ──────────────
@@ -224,6 +238,16 @@ export type RunnerCliOptions = {
   evidenceFile: string;
   pollIntervalMs: number;
   pollTimeoutMs: number;
+  /**
+   * Explicit, opt-in recovery of exactly one prior benign-warning window.
+   * Undefined (the default) means normal behavior is byte-for-byte
+   * unchanged from before this option existed. When set, --first-window-start
+   * and --window-size define the exact [start,end] window being recovered
+   * (not a live-cursor-derived forward window), and --expected-cursor-to
+   * must already equal that window's endBlock — recovery only ever targets
+   * the current cursor frontier, never an arbitrary historical window.
+   */
+  recovery?: RecoveryCliOptions;
 };
 
 export type RunnerCliParseResult =
@@ -237,6 +261,7 @@ export const RUNNER_CLI_USAGE = [
   "         --policy-label-prefix <label> [--max-windows <1-5>] [--execute]",
   "         [--base-url <url>] [--evidence-file <path>]",
   "         [--poll-interval-ms <n>] [--poll-timeout-ms <n>]",
+  "         [--recovery-mode --recovery-of-run-id <SyncRun id>]",
   "",
   "  Dry-run is the default and never submits an HTTP POST.",
   "  --max-windows defaults to 1 and is hard-capped at 5.",
@@ -244,6 +269,10 @@ export const RUNNER_CLI_USAGE = [
   "  --wallet-address, --chain-id, --expected-cursor-from,",
   "  --expected-cursor-to, --first-window-start, --window-size, and",
   "  --policy-label-prefix are all required — nothing is inferred.",
+  "  --recovery-mode and --recovery-of-run-id must be passed together or",
+  "  not at all. Recovery targets exactly the window [--first-window-start,",
+  "  --first-window-start + --window-size - 1], which --expected-cursor-to",
+  "  must already equal (the current cursor frontier).",
 ].join("\n");
 
 const DEFAULT_BASE_URL = process.env.OPERATOR_RUNNER_BASE_URL ?? "http://localhost:3000";
@@ -273,12 +302,27 @@ export function parseRunnerCliArgs(argv: readonly string[]): RunnerCliParseResul
   let evidenceFile = DEFAULT_EVIDENCE_FILE;
   let pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
   let pollTimeoutMs = DEFAULT_POLL_TIMEOUT_MS;
+  let recoveryMode = false;
+  let recoveryOfRunId: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
 
     if (arg === "--execute") {
       execute = true;
+      continue;
+    }
+    if (arg === "--recovery-mode") {
+      recoveryMode = true;
+      continue;
+    }
+    if (arg === "--recovery-of-run-id") {
+      const value = readValue(argv, index);
+      if (value === null || value.trim().length === 0) {
+        return { ok: false, error: "--recovery-of-run-id requires a non-empty value." };
+      }
+      recoveryOfRunId = value;
+      index += 1;
       continue;
     }
     if (arg === "--wallet-address") {
@@ -414,6 +458,9 @@ export function parseRunnerCliArgs(argv: readonly string[]): RunnerCliParseResul
   const windowSizeGate = validateWindowSize({ windowSizeBlocks });
   if (!windowSizeGate.ok) return { ok: false, error: windowSizeGate.reason };
 
+  const recoveryFlags = parseRecoveryFlags({ recoveryMode, recoveryOfRunId });
+  if (!recoveryFlags.ok) return { ok: false, error: recoveryFlags.error };
+
   return {
     ok: true,
     options: {
@@ -430,6 +477,7 @@ export function parseRunnerCliArgs(argv: readonly string[]): RunnerCliParseResul
       evidenceFile,
       pollIntervalMs,
       pollTimeoutMs,
+      recovery: recoveryFlags.recovery,
     },
   };
 }
@@ -451,6 +499,16 @@ export type RunnerSummary = {
   detail?: string;
   windowsCompleted: number;
   lastWindowNumber: number | null;
+  /** Present only when --recovery-mode/--recovery-of-run-id were passed —
+   * absent on every ordinary invocation. Never fabricated: `recovered` is
+   * true only when the recovery window's own post-run gates all passed. */
+  recovery?: {
+    sourceRunId: string;
+    window: { startBlock: string; endBlock: string };
+    eligible: boolean;
+    recovered: boolean;
+    reason?: string;
+  };
 };
 
 export async function runWalletForwardSyncRunner(
@@ -483,6 +541,273 @@ export async function runWalletForwardSyncRunner(
 
   let windowsCompleted = 0;
   let lastWindowNumber: number | null = null;
+  let recoverySummary: RunnerSummary["recovery"];
+  // Reused as the ordinary loop's expected first-window start below. Left at
+  // options.firstWindowStart for a normal invocation; advanced to exactly
+  // one window past the recovered range when recovery mode ran, so the
+  // ordinary loop's own (unchanged) first-window gate compares against the
+  // right value instead of the CLI value that named the *recovery* window.
+  let effectiveFirstWindowStart = options.firstWindowStart;
+
+  // ── Explicit recovery mode (PR B): a single bounded pre-loop step that
+  // resubmits exactly one prior benign-warning window, then falls through
+  // to the ordinary forward loop below with fully unchanged, strict
+  // behavior. Skipped entirely — byte-for-byte — when options.recovery is
+  // undefined (the default). ──
+  if (options.recovery) {
+    const recoveryStart = options.firstWindowStart;
+    const recoveryEnd = options.firstWindowStart + options.windowSizeBlocks - 1n;
+    effectiveFirstWindowStart = recoveryEnd + 1n;
+    recoverySummary = {
+      sourceRunId: options.recovery.sourceRunId,
+      window: { startBlock: recoveryStart.toString(), endBlock: recoveryEnd.toString() },
+      eligible: false,
+      recovered: false,
+    };
+
+    // Recovery only ever targets the current cursor frontier — never a
+    // historical window with newer windows already built on top of it.
+    if (options.expectedCursorToBlock !== recoveryEnd) {
+      recoverySummary.reason = `--expected-cursor-to ${options.expectedCursorToBlock} must equal the recovery window's endBlock ${recoveryEnd}`;
+      return stop(
+        deps,
+        "recovery_window_not_at_cursor_frontier",
+        recoverySummary.reason,
+        0,
+        null,
+        undefined,
+        recoverySummary,
+      );
+    }
+
+    const liveCursor = await getLiveTransfersCursor(deps.db, wallet.id, options.chainId);
+    const cursorGate = validateExpectedLiveCursor({
+      liveCursor,
+      expectedCursorFromBlock: options.expectedCursorFromBlock,
+      expectedCursorToBlock: options.expectedCursorToBlock,
+    });
+    if (!cursorGate.ok) {
+      recoverySummary.reason = cursorGate.reason;
+      return stop(deps, "cursor_expectation_mismatch", cursorGate.reason, 0, null, undefined, recoverySummary);
+    }
+
+    const sourceRun = await deps.db.syncRun.findUnique({ where: { id: options.recovery.sourceRunId } });
+    const eligibility = verifyRecoveryEligibility({
+      run: sourceRun,
+      expectedRunId: options.recovery.sourceRunId,
+      expectedWalletId: wallet.id,
+      expectedChainId: options.chainId,
+      expectedStartBlock: recoveryStart,
+      expectedEndBlock: recoveryEnd,
+    });
+    if (!eligibility.ok) {
+      recoverySummary.reason = eligibility.reason;
+      return stop(
+        deps,
+        "recovery_source_run_ineligible",
+        eligibility.reason,
+        0,
+        null,
+        { sourceRunId: options.recovery.sourceRunId },
+        recoverySummary,
+      );
+    }
+    recoverySummary.eligible = true;
+
+    const recoveryLabel = recoveryPolicyLabel(options.policyLabelPrefix, options.recovery.sourceRunId);
+
+    const labelLenGate = validatePolicyLabelLength({ policyLabel: recoveryLabel });
+    if (!labelLenGate.ok) {
+      recoverySummary.reason = labelLenGate.reason;
+      return stop(deps, "policy_label_overlong", labelLenGate.reason, 0, null, undefined, recoverySummary);
+    }
+
+    const labelGate = validateNoPolicyLabelCollision({
+      policyLabel: recoveryLabel,
+      existingPolicyLabels: await listActivePolicyLabels(deps.db, options.chainId),
+    });
+    if (!labelGate.ok) {
+      recoverySummary.reason = labelGate.reason;
+      return stop(deps, "policy_label_collision", labelGate.reason, 0, null, undefined, recoverySummary);
+    }
+
+    const activeOpGate = validateNoActiveOperation({ activeRunCount: await countActiveOperations(deps.db) });
+    if (!activeOpGate.ok) {
+      recoverySummary.reason = activeOpGate.reason;
+      return stop(deps, "active_operation_conflict", activeOpGate.reason, 0, null, undefined, recoverySummary);
+    }
+
+    const healthGate = await checkServerHealth(deps.httpGet, options.baseUrl);
+    if (!healthGate.ok) {
+      recoverySummary.reason = healthGate.reason;
+      return stop(deps, "server_unhealthy", healthGate.reason, 0, null, undefined, recoverySummary);
+    }
+
+    const preContamination = await checkFabricatedContamination(deps.db, {
+      chainId: options.chainId,
+      walletAddress: options.walletAddress,
+      startBlock: recoveryStart,
+      endBlock: recoveryEnd,
+    });
+    if (preContamination.rowCount > 0) {
+      recoverySummary.reason = `${preContamination.rowCount} contaminated row(s) detected in the recovery range; do not submit`;
+      return stop(
+        deps,
+        "fabricated_contamination_pre_gate",
+        recoverySummary.reason,
+        0,
+        null,
+        undefined,
+        recoverySummary,
+      );
+    }
+
+    if (!options.execute) {
+      await deps.writeEvidence({
+        kind: "recovery_window",
+        at: deps.now().toISOString(),
+        outcome: "dry_run_planned",
+        sourceRunId: options.recovery.sourceRunId,
+        policyLabel: recoveryLabel,
+        range: { startBlock: recoveryStart.toString(), endBlock: recoveryEnd.toString() },
+      });
+      // Dry-run never mutates canonical state; report eligibility proven
+      // but not actually recovered.
+    } else {
+      const submittedAt = deps.now().toISOString();
+      const requestBody = buildManualSyncRequestBody({
+        walletAddress: options.walletAddress,
+        chainId: options.chainId,
+        window: { startBlock: recoveryStart, endBlock: recoveryEnd, policyLabel: recoveryLabel },
+      });
+      const postResponse = await deps.httpPost(`${options.baseUrl}/api/sync/manual`, requestBody);
+      const runId = (postResponse.body as { data?: { runId?: string } } | undefined)?.data?.runId;
+      if (postResponse.status !== 202 || !runId) {
+        recoverySummary.reason = `POST /api/sync/manual returned status ${postResponse.status}`;
+        return stop(
+          deps,
+          "recovery_manual_sync_submit_failed",
+          recoverySummary.reason,
+          0,
+          null,
+          {
+            sourceRunId: options.recovery.sourceRunId,
+            policyLabel: recoveryLabel,
+            submittedAt,
+            httpStatus: postResponse.status,
+            responseBody: sanitizeBackendResponseBody(postResponse.body),
+          },
+          recoverySummary,
+        );
+      }
+
+      const polled = await pollSyncRunToTerminal(deps.db, runId, {
+        now: deps.now,
+        sleep: deps.sleep,
+        pollIntervalMs: options.pollIntervalMs,
+        pollTimeoutMs: options.pollTimeoutMs,
+      });
+      if (!polled.ok) {
+        recoverySummary.reason = `SyncRun ${runId} did not reach a terminal state within ${options.pollTimeoutMs}ms`;
+        return stop(
+          deps,
+          "recovery_poll_timeout",
+          recoverySummary.reason,
+          0,
+          null,
+          { sourceRunId: options.recovery.sourceRunId, policyLabel: recoveryLabel, runId, submittedAt },
+          recoverySummary,
+        );
+      }
+      const terminalAt = deps.now().toISOString();
+
+      const terminalVerification = verifyRecoveryWindowTerminalState({
+        run: polled.run,
+        expectedWalletId: wallet.id,
+        expectedChainId: options.chainId,
+        expectedPolicyLabel: recoveryLabel,
+        expectedStartBlock: recoveryStart,
+        expectedEndBlock: recoveryEnd,
+      });
+
+      const cursorAfterRecord = await getLiveTransfersCursor(deps.db, wallet.id, options.chainId);
+      const cursorGatePost = terminalVerification.ok
+        ? verifyForwardCursorPostcondition({
+            cursorAfter: cursorAfterRecord,
+            anchorFromBlock: options.expectedCursorFromBlock,
+            expectedToBlock: recoveryEnd,
+          })
+        : ({ ok: false, reason: "skipped: terminal state already failed" } as const);
+
+      const postContamination = await checkFabricatedContamination(deps.db, {
+        chainId: options.chainId,
+        walletAddress: options.walletAddress,
+        startBlock: recoveryStart,
+        endBlock: recoveryEnd,
+      });
+      const duplicateTransactions = await checkDuplicateRawTransactions(deps.db, {
+        chainId: options.chainId,
+        startBlock: recoveryStart,
+        endBlock: recoveryEnd,
+      });
+      const duplicateTransfers = await checkDuplicateRawTokenTransfers(deps.db, {
+        chainId: options.chainId,
+        startBlock: recoveryStart,
+        endBlock: recoveryEnd,
+      });
+      const duplicateLedgerEntries = await checkDuplicateLedgerEntries(deps.db, {
+        startBlock: recoveryStart,
+        endBlock: recoveryEnd,
+      });
+      const activeAfterCount = await countActiveOperations(deps.db);
+
+      const postRunFailureReasons = buildPostRunFailureReasons({
+        terminalVerification,
+        cursorGatePost,
+        postContaminationRowCount: postContamination.rowCount,
+        duplicateRawTransactionGroups: duplicateTransactions.rowCount,
+        duplicateRawTokenTransferGroups: duplicateTransfers.rowCount,
+        duplicateLedgerEntryGroups: duplicateLedgerEntries.rowCount,
+        activeOperationsAfter: activeAfterCount,
+      });
+      const allOk = postRunFailureReasons.length === 0;
+
+      await deps.writeEvidence({
+        kind: "recovery_window",
+        at: terminalAt,
+        outcome: allOk ? "recovered" : "failed_invariant",
+        sourceRunId: options.recovery.sourceRunId,
+        policyLabel: recoveryLabel,
+        runId,
+        expectedRange: { startBlock: recoveryStart.toString(), endBlock: recoveryEnd.toString() },
+        actualRange: {
+          startBlock: polled.run.startBlock?.toString() ?? null,
+          endBlock: polled.run.endBlock?.toString() ?? null,
+        },
+        submittedAt,
+        terminalAt,
+        terminalStatus: polled.run.status,
+        warningCount: polled.run.warningCount,
+        warningDetails: polled.run.warningDetails,
+        invariantFailures: postRunFailureReasons,
+      });
+
+      if (!allOk) {
+        recoverySummary.reason = postRunFailureReasons.join("; ");
+        return stop(
+          deps,
+          "recovery_invariant_failed_after_run",
+          recoverySummary.reason,
+          0,
+          null,
+          { sourceRunId: options.recovery.sourceRunId, policyLabel: recoveryLabel, runId },
+          recoverySummary,
+        );
+      }
+
+      recoverySummary.recovered = true;
+    }
+  }
 
   // Dry-run only: in-memory simulated cursor upper edge so --max-windows N
   // previews N distinct sequential windows. Never consulted in execute
@@ -525,7 +850,7 @@ export async function runWalletForwardSyncRunner(
     if (windowNumber === 1) {
       const firstWindowGate = validateFirstWindowStart({
         computedStartBlock: plan.startBlock,
-        expectedFirstWindowStart: options.firstWindowStart,
+        expectedFirstWindowStart: effectiveFirstWindowStart,
       });
       if (!firstWindowGate.ok) {
         return stop(deps, "first_window_start_mismatch", firstWindowGate.reason, windowsCompleted, lastWindowNumber);
@@ -755,9 +1080,10 @@ export async function runWalletForwardSyncRunner(
     stoppedReason: "max_windows_reached",
     windowsCompleted,
     lastWindowNumber,
+    recovery: recoverySummary,
   });
 
-  return { stoppedReason: "max_windows_reached", windowsCompleted, lastWindowNumber };
+  return { stoppedReason: "max_windows_reached", windowsCompleted, lastWindowNumber, recovery: recoverySummary };
 }
 
 /**
@@ -773,11 +1099,12 @@ export async function stop(
   windowsCompleted: number,
   lastWindowNumber: number | null,
   extra?: Record<string, unknown>,
+  recovery?: RunnerSummary["recovery"],
 ): Promise<RunnerSummary> {
   await deps.writeEvidence(
     buildStopEvidenceRecord({ at: deps.now().toISOString(), reason, detail, extra }),
   );
-  return { stoppedReason: reason, detail, windowsCompleted, lastWindowNumber };
+  return { stoppedReason: reason, detail, windowsCompleted, lastWindowNumber, recovery };
 }
 
 // ─── Exit-code gate ─────────────────────────────────────────────────────────────

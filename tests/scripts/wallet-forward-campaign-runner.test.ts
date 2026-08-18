@@ -33,6 +33,7 @@ import {
   type CampaignDeps,
 } from "../../scripts/wallet-forward-campaign-runner";
 import type { EvidenceRecord, RunnerDbClient, RunnerSyncRunRecord } from "../../scripts/lib/wallet-forward-sync-primitives";
+import { recoveryPolicyLabel, POLICY_LABEL_MAX_LENGTH } from "../../scripts/lib/wallet-forward-sync-primitives";
 
 const FIXTURE_WALLET = "0x08ac26d74013af7430c350c97eacd8be0bdc5613";
 const FIXTURE_WALLET_ID = "wallet-cuid-1";
@@ -1782,5 +1783,960 @@ describe("HTTP request timeout and timeout-triggered ambiguous recovery", () => 
 
     expect(summary.stoppedReason).toBe("ambiguous_submission_unrecoverable");
     expect(postCalls).toBe(1);
+  });
+});
+
+// ─── Explicit recovery mode (PR B) ─────────────────────────────────────────────
+
+describe("recovery mode — campaign CLI flags", () => {
+  it("neither flag: normal mode is unaffected", () => {
+    const parsed = parseCampaignCliArgs(requiredArgv());
+    if (!parsed.ok) throw new Error("expected parse success");
+    expect(parsed.options.recovery).toBeUndefined();
+  });
+
+  it("--recovery-mode without --recovery-of-run-id is rejected", () => {
+    const parsed = parseCampaignCliArgs([...requiredArgv(), "--recovery-mode"]);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("--recovery-of-run-id without --recovery-mode is rejected", () => {
+    const parsed = parseCampaignCliArgs([...requiredArgv(), "--recovery-of-run-id", "run-source-1"]);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("both flags together are accepted", () => {
+    const parsed = parseCampaignCliArgs([...requiredArgv(), "--recovery-mode", "--recovery-of-run-id", "run-source-1"]);
+    if (!parsed.ok) throw new Error("expected parse success");
+    expect(parsed.options.recovery).toEqual({ sourceRunId: "run-source-1" });
+  });
+});
+
+describe("recovery mode — campaign orchestrator", () => {
+  const RECOVERY_START = FIXTURE_FIRST_WINDOW_START; // 25_078_549n
+  const RECOVERY_END = FIXTURE_FIRST_WINDOW_START + FIXTURE_WINDOW_SIZE - 1n; // 25_079_548n
+  const SOURCE_RUN_ID = "run-source-1";
+  const RECOVERY_LABEL = recoveryPolicyLabel(FIXTURE_PREFIX, SOURCE_RUN_ID);
+
+  function eligibleSourceRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
+    return completedRun({
+      id: SOURCE_RUN_ID,
+      startBlock: RECOVERY_START,
+      endBlock: RECOVERY_END,
+      latestSafeBlock: RECOVERY_END,
+      warningCount: 1,
+      warningDetails: ["some raw blocks were already persisted for this range"],
+      structuredWarnings: {
+        warnings: [
+          { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+        ],
+        truncatedCount: 0,
+      },
+      ...overrides,
+    });
+  }
+
+  function recoveryOptions(overrides: Partial<CampaignCliOptions> = {}): CampaignCliOptions {
+    return baseOptions({
+      expectedCursorFromBlock: FIXTURE_CURSOR_FROM,
+      expectedCursorToBlock: RECOVERY_END,
+      firstWindowStart: RECOVERY_START,
+      maxWindows: 1,
+      authorizedFinalBlock: RECOVERY_END + FIXTURE_WINDOW_SIZE, // covers exactly 2 windows from RECOVERY_START
+      recovery: { sourceRunId: SOURCE_RUN_ID },
+      ...overrides,
+    });
+  }
+
+  function recoveryDb(overrides: Parameters<typeof makeFakeDb>[0] = {}) {
+    return makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+      ...overrides,
+    });
+  }
+
+  it("dry-run: proves eligibility without submitting any POST", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: false }), deps);
+
+    expect(httpPostCalls).toHaveLength(0);
+    expect(summary.recovery?.eligible).toBe(true);
+    expect(summary.recovery?.recovered).toBe(false);
+  });
+
+  it("execute mode recovers exactly the one referenced window, then continues one ordinary strict window forward", async () => {
+    const db = recoveryDb();
+    let postCount = 0;
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async (_url, body) => {
+        postCount += 1;
+        const b = body as { policyLabel: string; startBlock: string; endBlock: string };
+        if (postCount === 1) {
+          expect(b.policyLabel).toBe(RECOVERY_LABEL);
+          expect(b.startBlock).toBe(RECOVERY_START.toString());
+          expect(b.endBlock).toBe(RECOVERY_END.toString());
+          (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+            const id = (args as { where: { id: string } }).where.id;
+            if (id === "run-recovered") {
+              return completedRun({
+                id: "run-recovered",
+                policyLabel: RECOVERY_LABEL,
+                startBlock: RECOVERY_START,
+                endBlock: RECOVERY_END,
+                latestSafeBlock: RECOVERY_END,
+                warningCount: 1,
+                warningDetails: ["some raw blocks were already persisted for this range"],
+                structuredWarnings: {
+                  warnings: [
+                    {
+                      code: "RAW_BLOCKS_ALREADY_PERSISTED",
+                      detail: "some raw blocks were already persisted for this range",
+                    },
+                  ],
+                  truncatedCount: 0,
+                },
+              });
+            }
+            return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+          };
+          return { status: 202, body: { data: { runId: "run-recovered" } } };
+        }
+        const nextEnd = RECOVERY_END + FIXTURE_WINDOW_SIZE;
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          return id === "run-next"
+            ? completedRun({
+                id: "run-next",
+                policyLabel: campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 2),
+                startBlock: RECOVERY_END + 1n,
+                endBlock: nextEnd,
+                latestSafeBlock: nextEnd,
+              })
+            : null;
+        };
+        db.advanceCursorTo(nextEnd);
+        return { status: 202, body: { data: { runId: "run-next" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(httpPostCalls).toHaveLength(2);
+    expect(summary.recovery?.recovered).toBe(true);
+    expect(summary.stoppedReason).toBe("max_windows_reached");
+    expect(summary.windowsCompleted).toBe(1);
+  });
+
+  it("rejects when --expected-cursor-to is not at the recovery window's frontier (no POST)", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(
+      recoveryOptions({ execute: true, expectedCursorToBlock: RECOVERY_END + 1n }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("recovery_window_not_at_cursor_frontier");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects a missing referenced SyncRun (no POST)", async () => {
+    const db = recoveryDb({ runsById: {} });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_source_run_ineligible");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects a source run belonging to a different chain (no POST)", async () => {
+    const db = recoveryDb({ runsById: { [SOURCE_RUN_ID]: eligibleSourceRun({ chainId: 8453 }) } });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_source_run_ineligible");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects a source run with truncatedCount > 0 (no POST)", async () => {
+    const db = recoveryDb({
+      runsById: {
+        [SOURCE_RUN_ID]: eligibleSourceRun({
+          structuredWarnings: {
+            warnings: [
+              { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+            ],
+            truncatedCount: 5,
+          },
+        }),
+      },
+    });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_source_run_ineligible");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("stops after the recovery POST when the NEW recovered run fails a postcondition (duplicate ledger entries)", async () => {
+    const db = recoveryDb({ duplicateLedgerRows: 1 });
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          if (id === "run-recovered") return eligibleSourceRun({ id: "run-recovered", policyLabel: RECOVERY_LABEL });
+          return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+        };
+        return { status: 202, body: { data: { runId: "run-recovered" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_invariant_failed_after_run");
+    expect(httpPostCalls).toHaveLength(1);
+  });
+
+  it("rejects an overlong recovery policy label pre-POST (zero POSTs)", async () => {
+    const longSourceRunId = "s".repeat(120);
+    const db = recoveryDb({ runsById: { [longSourceRunId]: eligibleSourceRun({ id: longSourceRunId }) } });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(
+      recoveryOptions({ execute: true, recovery: { sourceRunId: longSourceRunId } }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("policy_label_overlong");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects a recovery policy-label collision pre-POST (zero POSTs)", async () => {
+    const db = recoveryDb({ policyLabels: [RECOVERY_LABEL] });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("policy_label_collision");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("rejects recovery when an active (PENDING/RUNNING) operation already exists (zero POSTs)", async () => {
+    const db = recoveryDb({ activeRunCount: 1 });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("active_operation_conflict");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("normal campaign mode (no recovery flags) still hard-stops on RAW_BLOCKS_ALREADY_PERSISTED exactly as PR #369 proved", async () => {
+    const plan1Label = campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 1);
+    const db = makeFakeDb({
+      runsById: {
+        "run-1": completedRun({
+          policyLabel: plan1Label,
+          warningCount: 1,
+          warningDetails: ["some raw blocks were already persisted for this range"],
+          structuredWarnings: {
+            warnings: [
+              { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+            ],
+            truncatedCount: 0,
+          },
+        }),
+      },
+    });
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        db.advanceCursorTo(25_079_548n);
+        return { status: 202, body: { data: { runId: "run-1" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(baseOptions({ execute: true, maxWindows: 1 }), deps);
+
+    expect(summary.stoppedReason).toBe("invariant_failed_after_run");
+    expect(httpPostCalls).toHaveLength(1);
+  });
+});
+
+// ─── PR #370 review-fix regression tests (Findings A, B, D, E, F) ─────────────
+
+describe("recovery mode — Finding A: ambiguous recovery POST reconciliation", () => {
+  const RECOVERY_START = FIXTURE_FIRST_WINDOW_START;
+  const RECOVERY_END = FIXTURE_FIRST_WINDOW_START + FIXTURE_WINDOW_SIZE - 1n;
+  const SOURCE_RUN_ID = "run-source-1";
+  const RECOVERY_LABEL = recoveryPolicyLabel(FIXTURE_PREFIX, SOURCE_RUN_ID);
+
+  function eligibleSourceRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
+    return completedRun({
+      id: SOURCE_RUN_ID,
+      startBlock: RECOVERY_START,
+      endBlock: RECOVERY_END,
+      latestSafeBlock: RECOVERY_END,
+      warningCount: 1,
+      warningDetails: ["some raw blocks were already persisted for this range"],
+      structuredWarnings: {
+        warnings: [
+          { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+        ],
+        truncatedCount: 0,
+      },
+      ...overrides,
+    });
+  }
+
+  function recoveryOptions(overrides: Partial<CampaignCliOptions> = {}): CampaignCliOptions {
+    return baseOptions({
+      expectedCursorFromBlock: FIXTURE_CURSOR_FROM,
+      expectedCursorToBlock: RECOVERY_END,
+      firstWindowStart: RECOVERY_START,
+      maxWindows: 1,
+      authorizedFinalBlock: RECOVERY_END + FIXTURE_WINDOW_SIZE,
+      recovery: { sourceRunId: SOURCE_RUN_ID },
+      ...overrides,
+    });
+  }
+
+  function recoveryDb(overrides: Parameters<typeof makeFakeDb>[0] = {}) {
+    return makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+      ...overrides,
+    });
+  }
+
+  it("throws before any canonical run exists → hard-stop, no second POST", async () => {
+    const db = recoveryDb({ ambiguousCandidates: [] });
+    let postCalls = 0;
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        throw new DOMException("The operation was aborted.", "TimeoutError");
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_ambiguous_submission_unrecoverable");
+    expect(postCalls).toBe(1);
+    expect(httpPostCalls).toHaveLength(1);
+  });
+
+  it("throws after backend persisted exactly one matching run → reconciles and continues verification", async () => {
+    const reconciledId = "run-reconciled";
+    const db = recoveryDb({
+      ambiguousCandidates: [
+        eligibleSourceRun({
+          id: reconciledId,
+          policyLabel: RECOVERY_LABEL,
+        }),
+      ],
+      runsById: {
+        [SOURCE_RUN_ID]: eligibleSourceRun(),
+        [reconciledId]: eligibleSourceRun({ id: reconciledId, policyLabel: RECOVERY_LABEL }),
+      },
+    });
+    let postCalls = 0;
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        if (postCalls === 1) {
+          // The recovery POST itself: the HTTP call throws (ambiguous), but
+          // the backend already persisted exactly one matching run — never
+          // a second (blind-retry) POST for the recovery window itself.
+          throw new DOMException("The operation was aborted.", "TimeoutError");
+        }
+        // The ordinary window that follows a successfully reconciled
+        // recovery — a completely separate, normal POST.
+        const nextEnd = RECOVERY_END + FIXTURE_WINDOW_SIZE;
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          if (id === reconciledId) return eligibleSourceRun({ id: reconciledId, policyLabel: RECOVERY_LABEL });
+          return id === "run-w2"
+            ? completedRun({
+                id: "run-w2",
+                policyLabel: campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 2),
+                startBlock: RECOVERY_END + 1n,
+                endBlock: nextEnd,
+                latestSafeBlock: nextEnd,
+              })
+            : null;
+        };
+        db.advanceCursorTo(nextEnd);
+        return { status: 202, body: { data: { runId: "run-w2" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(postCalls).toBe(2); // exactly one recovery attempt + one ordinary window, never a blind retry
+    expect(summary.recovery?.runId).toBe(reconciledId);
+    expect(summary.recovery?.recoveredFromAmbiguousSubmission).toBe(true);
+    expect(summary.recovery?.recovered).toBe(true);
+    expect(httpPostCalls).toHaveLength(2);
+  });
+
+  it("throws and multiple matching runs exist → hard-stop ambiguous, no second POST", async () => {
+    const candidate = eligibleSourceRun({ id: "run-a", policyLabel: RECOVERY_LABEL });
+    const db = recoveryDb({ ambiguousCandidates: [candidate, { ...candidate, id: "run-b" }] });
+    let postCalls = 0;
+    const { deps } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        throw new DOMException("The operation was aborted.", "TimeoutError");
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_ambiguous_submission_unrecoverable");
+    expect(postCalls).toBe(1);
+  });
+
+  it("throws and the sole matching run's identity/range does not match → hard-stop, no second POST", async () => {
+    const db = recoveryDb({
+      ambiguousCandidates: [
+        eligibleSourceRun({ id: "run-wrong-range", policyLabel: RECOVERY_LABEL, startBlock: RECOVERY_START - 1n }),
+      ],
+    });
+    let postCalls = 0;
+    const { deps } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        throw new DOMException("The operation was aborted.", "TimeoutError");
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_ambiguous_submission_unrecoverable");
+    expect(postCalls).toBe(1);
+  });
+
+  // Ordinary (non-recovery) ambiguous-submission behavior is already covered
+  // by the pre-existing "ambiguous_submission_unrecoverable" and
+  // reconciliation tests earlier in this file — recovery mode's new
+  // try/catch around its own POST is entirely additive and does not touch
+  // the ordinary loop's POST handling at all, so no separate regression
+  // test is needed here.
+});
+
+describe("recovery mode — Finding B: preserve completed recovery attempt on evidence-write failure", () => {
+  const RECOVERY_START = FIXTURE_FIRST_WINDOW_START;
+  const RECOVERY_END = FIXTURE_FIRST_WINDOW_START + FIXTURE_WINDOW_SIZE - 1n;
+  const SOURCE_RUN_ID = "run-source-1";
+  const RECOVERY_LABEL = recoveryPolicyLabel(FIXTURE_PREFIX, SOURCE_RUN_ID);
+
+  function eligibleSourceRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
+    return completedRun({
+      id: SOURCE_RUN_ID,
+      startBlock: RECOVERY_START,
+      endBlock: RECOVERY_END,
+      latestSafeBlock: RECOVERY_END,
+      warningCount: 1,
+      warningDetails: ["some raw blocks were already persisted for this range"],
+      structuredWarnings: {
+        warnings: [
+          { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+        ],
+        truncatedCount: 0,
+      },
+      ...overrides,
+    });
+  }
+
+  function recoveryOptions(overrides: Partial<CampaignCliOptions> = {}): CampaignCliOptions {
+    return baseOptions({
+      expectedCursorFromBlock: FIXTURE_CURSOR_FROM,
+      expectedCursorToBlock: RECOVERY_END,
+      firstWindowStart: RECOVERY_START,
+      maxWindows: 1,
+      authorizedFinalBlock: RECOVERY_END + FIXTURE_WINDOW_SIZE,
+      recovery: { sourceRunId: SOURCE_RUN_ID },
+      ...overrides,
+    });
+  }
+
+  it("recovery succeeds canonically but evidence append fails → summary still exposes runId and canonical success", async () => {
+    const db = makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+    });
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      failEvidenceAfter: 1, // campaign_start (1) succeeds, recovery_window (2) fails
+      httpPost: async () => {
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          if (id === "run-recovered") {
+            return eligibleSourceRun({ id: "run-recovered", policyLabel: RECOVERY_LABEL });
+          }
+          return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+        };
+        return { status: 202, body: { data: { runId: "run-recovered" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("evidence_append_failed");
+    expect(summary.recovery?.runId).toBe("run-recovered");
+    expect(summary.recovery?.recovered).toBe(true);
+    expect(summary.recovery?.postconditionsPassed).toBe(true);
+    expect(httpPostCalls).toHaveLength(1); // never a second POST after evidence failure
+  });
+
+  it("recovery fails invariants and evidence append also fails → summary still exposes runId and failed outcome", async () => {
+    const db = makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+      duplicateLedgerRows: 1, // forces a post-run invariant failure
+    });
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      failEvidenceAfter: 1,
+      httpPost: async () => {
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          if (id === "run-recovered") {
+            return eligibleSourceRun({ id: "run-recovered", policyLabel: RECOVERY_LABEL });
+          }
+          return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+        };
+        return { status: 202, body: { data: { runId: "run-recovered" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("evidence_append_failed");
+    expect(summary.recovery?.runId).toBe("run-recovered");
+    expect(summary.recovery?.recovered).toBe(false);
+    expect(summary.recovery?.postconditionsPassed).toBe(false);
+    expect(httpPostCalls).toHaveLength(1);
+  });
+});
+
+describe("recovery mode — Finding D: recovery counts toward checkpoint spacing", () => {
+  const RECOVERY_START = FIXTURE_FIRST_WINDOW_START;
+  const RECOVERY_END = FIXTURE_FIRST_WINDOW_START + FIXTURE_WINDOW_SIZE - 1n;
+  const SOURCE_RUN_ID = "run-source-1";
+  const RECOVERY_LABEL = recoveryPolicyLabel(FIXTURE_PREFIX, SOURCE_RUN_ID);
+
+  function eligibleSourceRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
+    return completedRun({
+      id: SOURCE_RUN_ID,
+      startBlock: RECOVERY_START,
+      endBlock: RECOVERY_END,
+      latestSafeBlock: RECOVERY_END,
+      warningCount: 1,
+      warningDetails: ["some raw blocks were already persisted for this range"],
+      structuredWarnings: {
+        warnings: [
+          { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+        ],
+        truncatedCount: 0,
+      },
+      ...overrides,
+    });
+  }
+
+  it("interval 2 + successful execute-mode recovery → checkpoint fires after just 1 more ordinary window (not 2)", async () => {
+    const db = makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+    });
+    let postCount = 0;
+    const { deps } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCount += 1;
+        if (postCount === 1) {
+          (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+            const id = (args as { where: { id: string } }).where.id;
+            if (id === "run-recovered") return eligibleSourceRun({ id: "run-recovered", policyLabel: RECOVERY_LABEL });
+            return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+          };
+          return { status: 202, body: { data: { runId: "run-recovered" } } };
+        }
+        const nextEnd = RECOVERY_END + FIXTURE_WINDOW_SIZE;
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          return id === "run-next"
+            ? completedRun({
+                id: "run-next",
+                policyLabel: campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 2),
+                startBlock: RECOVERY_END + 1n,
+                endBlock: nextEnd,
+                latestSafeBlock: nextEnd,
+              })
+            : null;
+        };
+        db.advanceCursorTo(nextEnd);
+        return { status: 202, body: { data: { runId: "run-next" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({
+        execute: true,
+        expectedCursorFromBlock: FIXTURE_CURSOR_FROM,
+        expectedCursorToBlock: RECOVERY_END,
+        firstWindowStart: RECOVERY_START,
+        maxWindows: 100,
+        authorizedFinalBlock: RECOVERY_END + FIXTURE_WINDOW_SIZE, // exactly 1 ordinary window
+        checkpointIntervalWindows: 2,
+        recovery: { sourceRunId: SOURCE_RUN_ID },
+      }),
+      deps,
+    );
+
+    expect(summary.recovery?.recovered).toBe(true);
+    expect(summary.checkpointsPassed).toBe(1); // recovery(1) + 1 ordinary window(2) = 2 -> checkpoint fires
+    expect(summary.windowsCompleted).toBe(1);
+  });
+
+  it("dry-run recovery does not consume checkpoint spacing (checkpoint still requires 2 full ordinary dry windows)", async () => {
+    const db = makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+    });
+    const { deps, evidence } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({
+        execute: false,
+        expectedCursorFromBlock: FIXTURE_CURSOR_FROM,
+        expectedCursorToBlock: RECOVERY_END,
+        firstWindowStart: RECOVERY_START,
+        maxWindows: 2,
+        authorizedFinalBlock: RECOVERY_END + FIXTURE_WINDOW_SIZE * 2n,
+        checkpointIntervalWindows: 2,
+        recovery: { sourceRunId: SOURCE_RUN_ID },
+      }),
+      deps,
+    );
+
+    expect(summary.recovery?.recovered).toBe(false); // dry-run: eligibility proven, nothing mutated
+    expect(summary.checkpointsPassed).toBe(1); // fires only once both ordinary dry windows complete
+    const checkpointRecords = evidence.filter((e) => e.kind === "checkpoint");
+    expect(checkpointRecords).toHaveLength(1);
+  });
+});
+
+describe("recovery mode — Finding E: authorized-final-block excludes the recovered window", () => {
+  const RECOVERY_START = FIXTURE_FIRST_WINDOW_START;
+  const RECOVERY_END = FIXTURE_FIRST_WINDOW_START + FIXTURE_WINDOW_SIZE - 1n;
+  const SOURCE_RUN_ID = "run-source-1";
+  const RECOVERY_LABEL = recoveryPolicyLabel(FIXTURE_PREFIX, SOURCE_RUN_ID);
+
+  function eligibleSourceRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
+    return completedRun({
+      id: SOURCE_RUN_ID,
+      startBlock: RECOVERY_START,
+      endBlock: RECOVERY_END,
+      latestSafeBlock: RECOVERY_END,
+      warningCount: 1,
+      warningDetails: ["some raw blocks were already persisted for this range"],
+      structuredWarnings: {
+        warnings: [
+          { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+        ],
+        truncatedCount: 0,
+      },
+      ...overrides,
+    });
+  }
+
+  it("W1 recovered + authorized-final-block permits exactly W1+W2 + large max-windows → recovers W1, executes W2, stops cleanly, never attempts W3", async () => {
+    const db = makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+    });
+    let postCount = 0;
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCount += 1;
+        if (postCount === 1) {
+          (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+            const id = (args as { where: { id: string } }).where.id;
+            if (id === "run-recovered") return eligibleSourceRun({ id: "run-recovered", policyLabel: RECOVERY_LABEL });
+            return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+          };
+          return { status: 202, body: { data: { runId: "run-recovered" } } };
+        }
+        const nextEnd = RECOVERY_END + FIXTURE_WINDOW_SIZE;
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          return id === "run-w2"
+            ? completedRun({
+                id: "run-w2",
+                policyLabel: campaignWindowPolicyLabel(FIXTURE_PREFIX, FIXTURE_CAMPAIGN_ID, 2),
+                startBlock: RECOVERY_END + 1n,
+                endBlock: nextEnd,
+                latestSafeBlock: nextEnd,
+              })
+            : null;
+        };
+        db.advanceCursorTo(nextEnd);
+        return { status: 202, body: { data: { runId: "run-w2" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(
+      baseOptions({
+        execute: true,
+        expectedCursorFromBlock: FIXTURE_CURSOR_FROM,
+        expectedCursorToBlock: RECOVERY_END,
+        firstWindowStart: RECOVERY_START,
+        maxWindows: 500, // deliberately far larger than the true remaining ordinary window count
+        authorizedFinalBlock: RECOVERY_END + FIXTURE_WINDOW_SIZE, // exactly W1 (recovered) + W2
+        recovery: { sourceRunId: SOURCE_RUN_ID },
+      }),
+      deps,
+    );
+
+    expect(summary.recovery?.recovered).toBe(true);
+    expect(httpPostCalls).toHaveLength(2); // recovery POST + exactly one ordinary POST (W2) — never W3
+    expect(summary.windowsCompleted).toBe(1);
+    expect(summary.stoppedReason).toBe("authorized_final_block_reached"); // clean stop, not authorized_final_block_exceeded
+  });
+});
+
+describe("recovery mode — Finding F: shifted campaign label-range preflight", () => {
+  // base = prefix + "-" + campaignId + "-" + "w" = prefix.length + campaignId.length + 3
+  // Chosen so base + "999" (3 digits) lands exactly at POLICY_LABEL_MAX_LENGTH
+  // (valid) while base + "1000" (4 digits) exceeds it (invalid) — derived
+  // from the real limit so this stays correct if the limit ever changes.
+  const LONG_PREFIX = "p".repeat(60);
+  const LONG_CAMPAIGN_ID = "c".repeat(POLICY_LABEL_MAX_LENGTH - 6 - LONG_PREFIX.length);
+
+  it("without recovery: max-windows=999 validates fine at the CLI boundary (worst case w999)", () => {
+    const argv = requiredArgv({
+      "--policy-label-prefix": LONG_PREFIX,
+      "--campaign-id": LONG_CAMPAIGN_ID,
+      "--max-windows": "999",
+      "--authorized-final-block": finalBlockForWindows(999).toString(),
+    });
+    const parsed = parseCampaignCliArgs(argv);
+    expect(parsed.ok).toBe(true);
+  });
+
+  it("with recovery: the same max-windows=999 now implies worst-case w1000 (shifted by the recovered window) and is rejected before any POST", () => {
+    const argv = requiredArgv({
+      "--policy-label-prefix": LONG_PREFIX,
+      "--campaign-id": LONG_CAMPAIGN_ID,
+      "--max-windows": "999",
+      "--authorized-final-block": finalBlockForWindows(999).toString(),
+      "--recovery-of-run-id": "run-source-1",
+    });
+    const parsed = parseCampaignCliArgs([...argv, "--recovery-mode"]);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toMatch(/policyLabel/);
+    }
+  });
+});
+
+// ─── PR #370 review-fix regression tests (Major: exception boundary) ─────────
+
+describe("recovery mode — exception boundary around the entire recovery flow", () => {
+  const RECOVERY_START = FIXTURE_FIRST_WINDOW_START;
+  const RECOVERY_END = FIXTURE_FIRST_WINDOW_START + FIXTURE_WINDOW_SIZE - 1n;
+  const SOURCE_RUN_ID = "run-source-1";
+  const RECOVERY_LABEL = recoveryPolicyLabel(FIXTURE_PREFIX, SOURCE_RUN_ID);
+
+  function eligibleSourceRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
+    return completedRun({
+      id: SOURCE_RUN_ID,
+      startBlock: RECOVERY_START,
+      endBlock: RECOVERY_END,
+      latestSafeBlock: RECOVERY_END,
+      warningCount: 1,
+      warningDetails: ["some raw blocks were already persisted for this range"],
+      structuredWarnings: {
+        warnings: [
+          { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+        ],
+        truncatedCount: 0,
+      },
+      ...overrides,
+    });
+  }
+
+  function recoveryOptions(overrides: Partial<CampaignCliOptions> = {}): CampaignCliOptions {
+    return baseOptions({
+      expectedCursorFromBlock: FIXTURE_CURSOR_FROM,
+      expectedCursorToBlock: RECOVERY_END,
+      firstWindowStart: RECOVERY_START,
+      maxWindows: 1,
+      authorizedFinalBlock: RECOVERY_END + FIXTURE_WINDOW_SIZE,
+      recovery: { sourceRunId: SOURCE_RUN_ID },
+      ...overrides,
+    });
+  }
+
+  it("E1: source/candidate DB lookup throws before any POST → controlled unexpected_error, zero POSTs, recovery window info retained", async () => {
+    const db = makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+    });
+    (db.syncRun.findUnique as unknown) = async () => {
+      throw new Error("simulated DB outage while loading the recovery source run");
+    };
+    const { deps, httpPostCalls, evidence } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("unexpected_error");
+    expect(httpPostCalls).toHaveLength(0);
+    expect(summary.recovery?.sourceRunId).toBe(SOURCE_RUN_ID);
+    expect(summary.recovery?.window).toEqual({
+      startBlock: RECOVERY_START.toString(),
+      endBlock: RECOVERY_END.toString(),
+    });
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "unexpected_error");
+    expect(stopRecord).toBeDefined();
+  });
+
+  it("E2: recovery POST is ambiguous and the reconciliation candidate lookup itself throws → controlled unexpected_error, no second POST", async () => {
+    const db = makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+    });
+    let postCalls = 0;
+    let findManyCalls = 0;
+    const originalFindMany = db.syncRun.findMany;
+    (db.syncRun.findMany as unknown) = async (args: unknown) => {
+      const a = args as { where?: { policyLabel?: string } };
+      if (a.where?.policyLabel === RECOVERY_LABEL) {
+        findManyCalls += 1;
+        throw new Error("simulated DB outage during ambiguous-submission reconciliation");
+      }
+      return originalFindMany(args);
+    };
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        throw new DOMException("The operation was aborted.", "TimeoutError");
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("unexpected_error");
+    expect(postCalls).toBe(1); // exactly the one ambiguous attempt, never a blind retry
+    expect(findManyCalls).toBe(1);
+    expect(httpPostCalls).toHaveLength(1);
+    expect(summary.recovery?.sourceRunId).toBe(SOURCE_RUN_ID);
+  });
+
+  it("E3: polling throws after the recovery POST succeeded and a runId exists → controlled unexpected_error, runId retained, no ordinary window POST", async () => {
+    const db = makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+    });
+    let postCalls = 0;
+    (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+      const id = (args as { where: { id: string } }).where.id;
+      if (id === SOURCE_RUN_ID) return eligibleSourceRun();
+      if (id === "run-recovered") {
+        throw new Error("simulated DB outage while polling the recovery run to terminal");
+      }
+      return null;
+    };
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        return { status: 202, body: { data: { runId: "run-recovered" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("unexpected_error");
+    expect(postCalls).toBe(1); // exactly one recovery POST, never an ordinary next-window POST
+    expect(httpPostCalls).toHaveLength(1);
+    expect(summary.recovery?.runId).toBe("run-recovered");
+  });
+
+  it("E4: a post-run canonical check throws after the recovery run reached terminal state → controlled unexpected_error, runId/terminal facts retained, no ordinary window submitted", async () => {
+    const db = makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+    });
+    let postCalls = 0;
+    (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+      const id = (args as { where: { id: string } }).where.id;
+      if (id === SOURCE_RUN_ID) return eligibleSourceRun();
+      if (id === "run-recovered") return eligibleSourceRun({ id: "run-recovered", policyLabel: RECOVERY_LABEL });
+      return null;
+    };
+    // Duplicate-check / contamination-check / cursor-postcondition queries
+    // all flow through $queryRaw or syncCursor.findUnique — force the
+    // duplicate-ledger-entry query specifically to throw, simulating a DB
+    // outage discovered only after the recovery run's own terminal state
+    // was already successfully observed.
+    (db.$queryRaw as unknown) = async (query: TemplateStringsArray) => {
+      const sql = query.join("");
+      if (sql.includes("LedgerEntry")) {
+        throw new Error("simulated DB outage during the post-run duplicate-ledger-entry check");
+      }
+      return [];
+    };
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        postCalls += 1;
+        return { status: 202, body: { data: { runId: "run-recovered" } } };
+      },
+    });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("unexpected_error");
+    expect(postCalls).toBe(1);
+    expect(httpPostCalls).toHaveLength(1);
+    expect(summary.recovery?.runId).toBe("run-recovered");
+    expect(summary.recovery?.terminalStatus).toBe("COMPLETED");
+  });
+
+  it("E5: the best-effort unexpected-error evidence write itself fails → the original unexpected_error result is still returned, never masked, no additional POST", async () => {
+    const db = makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+    });
+    (db.syncRun.findUnique as unknown) = async () => {
+      throw new Error("simulated DB outage while loading the recovery source run");
+    };
+    // campaign_start (write #1) succeeds; every write from here on
+    // (including the catch block's best-effort unexpected_error evidence,
+    // write #2) fails.
+    const { deps, httpPostCalls } = makeFakeDeps({ db, failEvidenceAfter: 1 });
+
+    const summary = await runWalletForwardCampaignRunner(recoveryOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("unexpected_error");
+    expect(summary.detail).toMatch(/simulated DB outage/);
+    expect(httpPostCalls).toHaveLength(0);
   });
 });

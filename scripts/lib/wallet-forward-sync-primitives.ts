@@ -364,6 +364,315 @@ export function buildPostRunFailureReasons(args: {
   return reasons;
 }
 
+// ─── Explicit recovery mode (PR B) ─────────────────────────────────────────────
+//
+// A narrowly-scoped, explicit, opt-in exception to the warning-count hard
+// stop proven strict by PR #369 (structured SyncRun warning taxonomy). None
+// of this section changes verifyWindowTerminalState — every runner still
+// hard-stops on any non-zero warningCount unless the operator has explicitly
+// passed BOTH --recovery-mode and --recovery-of-run-id, and even then only
+// for one bounded recovery window tied to one exact prior SyncRun. See each
+// runner's CLI usage text and the PR description for the full contract.
+
+/** The only structured warning code recovery mode ever accepts. Duplicated
+ * as a literal (not imported from src/services/sync/sync-warning-codes.ts)
+ * so this runner-safety module keeps its existing "free of any dependency on
+ * server-only service code" property (see the module doc comment) — this
+ * module is loaded before CLI/env validation runs. Must stay byte-for-byte
+ * identical to SYNC_WARNING_CODES.RAW_BLOCKS_ALREADY_PERSISTED. */
+export const RECOVERY_ELIGIBLE_WARNING_CODE = "RAW_BLOCKS_ALREADY_PERSISTED";
+
+export type RecoveryGateResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * The structural R1-R6 warning-shape checks shared by both the source-run
+ * eligibility proof and the post-recovery-POST verification of the newly
+ * created run. Never parses or pattern-matches `warningDetails` text — every
+ * check reads only `structuredWarnings`'s shape and `warningCount`, and
+ * fails closed on anything null, undefined, malformed, truncated,
+ * inconsistent, or carrying any code other than
+ * RECOVERY_ELIGIBLE_WARNING_CODE.
+ */
+export function verifyStructuredWarningsRecoveryEligible(
+  run: Pick<RunnerSyncRunRecord, "warningCount" | "warningDetails" | "structuredWarnings">,
+): RecoveryGateResult {
+  const raw = run.structuredWarnings;
+
+  // R1 — structured classification must exist and be well-formed. A
+  // historical `null` (classification unavailable) is explicitly not
+  // eligible, never treated as "no warnings" or "safe".
+  if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      ok: false,
+      reason:
+        "structuredWarnings is null, undefined, or malformed — classification unavailable, not recovery eligible",
+    };
+  }
+  const shape = raw as { warnings?: unknown; truncatedCount?: unknown };
+  if (!Array.isArray(shape.warnings) || typeof shape.truncatedCount !== "number") {
+    return {
+      ok: false,
+      reason: "structuredWarnings is malformed (warnings must be an array, truncatedCount a number)",
+    };
+  }
+  const warnings = shape.warnings as unknown[];
+
+  // R2 — no truncation: anything greater than zero means classification is
+  // incomplete.
+  if (shape.truncatedCount !== 0) {
+    return {
+      ok: false,
+      reason: `structuredWarnings.truncatedCount is ${shape.truncatedCount}, not 0 — classification is incomplete`,
+    };
+  }
+
+  // R3 — warningCount must exactly equal the structured warning list length
+  // (only meaningful now that truncatedCount === 0 is already proven).
+  if (run.warningCount !== warnings.length) {
+    return {
+      ok: false,
+      reason: `warningCount ${run.warningCount} does not equal structuredWarnings.warnings.length ${warnings.length}`,
+    };
+  }
+
+  // R5 — at least one warning must actually exist; recovery mode is not a
+  // generic alternate path for an ordinary zero-warning run.
+  if (warnings.length === 0) {
+    return { ok: false, reason: "run has zero warnings; recovery mode is not for ordinary zero-warning runs" };
+  }
+
+  const legacyDetails = Array.isArray(run.warningDetails) ? (run.warningDetails as unknown[]) : null;
+  if (!legacyDetails || legacyDetails.length !== warnings.length) {
+    return {
+      ok: false,
+      reason: "legacy warningDetails does not align with structuredWarnings.warnings (length mismatch)",
+    };
+  }
+
+  for (let i = 0; i < warnings.length; i += 1) {
+    const entry = warnings[i];
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      Array.isArray(entry) ||
+      (entry as { code?: unknown }).code !== RECOVERY_ELIGIBLE_WARNING_CODE
+    ) {
+      // R4 — exact allowed code set: rejects UNKNOWN, mixed benign+unknown,
+      // any future/unknown code, and malformed/missing code fields alike.
+      return {
+        ok: false,
+        reason: `structuredWarnings.warnings[${i}] does not have code ${RECOVERY_ELIGIBLE_WARNING_CODE} — not recovery eligible`,
+      };
+    }
+    // R6 — detail alignment: an integrity check against the persisted
+    // legacy entry at the same index, never a source of semantic meaning.
+    if ((entry as { detail?: unknown }).detail !== legacyDetails[i]) {
+      return {
+        ok: false,
+        reason: `structuredWarnings.warnings[${i}].detail does not match legacy warningDetails[${i}]`,
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
+/**
+ * Proves that `run` — a specific, already-terminal SyncRun explicitly
+ * referenced by the operator via --recovery-of-run-id — is eligible to
+ * authorize recovery of its exact window. Identity fields (run id, trigger,
+ * status, wallet, chain, source families, exact block range) are checked
+ * first and independently of the warning-shape rule: a source run can never
+ * authorize a different wallet, chain, source family, or block range than
+ * the one the operator explicitly intends to recover, regardless of its
+ * warning state.
+ *
+ * This proves ELIGIBILITY of the *source* run only. It never itself decides
+ * whether a *new* run (the result of the recovery POST) may be accepted —
+ * see `verifyRecoveryWindowTerminalState` for that half of the contract.
+ */
+export function verifyRecoveryEligibility(args: {
+  run: RunnerSyncRunRecord | null;
+  expectedRunId: string;
+  expectedWalletId: string;
+  expectedChainId: number;
+  expectedStartBlock: bigint;
+  expectedEndBlock: bigint;
+}): RecoveryGateResult {
+  const { run } = args;
+
+  if (!run) {
+    return { ok: false, reason: `recovery source SyncRun "${args.expectedRunId}" was not found` };
+  }
+  if (run.id !== args.expectedRunId) {
+    return {
+      ok: false,
+      reason: `recovery source SyncRun identity mismatch: expected id ${args.expectedRunId}, loaded ${run.id}`,
+    };
+  }
+  if (run.trigger !== "MANUAL") {
+    return { ok: false, reason: `recovery source run trigger must be MANUAL, got ${run.trigger}` };
+  }
+  if (run.status !== "COMPLETED") {
+    return { ok: false, reason: `recovery source run status must be COMPLETED, got ${run.status}` };
+  }
+  if (run.walletId !== args.expectedWalletId) {
+    return {
+      ok: false,
+      reason: `recovery source run walletId ${run.walletId} does not match expected wallet ${args.expectedWalletId}`,
+    };
+  }
+  if (run.chainId !== args.expectedChainId) {
+    return {
+      ok: false,
+      reason: `recovery source run chainId ${run.chainId} does not match expected chain ${args.expectedChainId}`,
+    };
+  }
+  if (
+    run.sourceFamilies.length !== 1 ||
+    run.sourceFamilies[0] !== WALLET_FORWARD_SYNC_SOURCE_FAMILIES[0]
+  ) {
+    return {
+      ok: false,
+      reason: `recovery source run sourceFamilies ${JSON.stringify(run.sourceFamilies)} does not match ["TRANSFERS"]`,
+    };
+  }
+  if (run.startBlock !== args.expectedStartBlock || run.endBlock !== args.expectedEndBlock) {
+    return {
+      ok: false,
+      reason: `recovery source run range [${run.startBlock}, ${run.endBlock}] does not match the expected recovery window [${args.expectedStartBlock}, ${args.expectedEndBlock}]`,
+    };
+  }
+
+  return verifyStructuredWarningsRecoveryEligible(run);
+}
+
+/**
+ * Post-POST verification for the newly created run resulting from a
+ * recovery attempt. Deliberately independent of `verifyWindowTerminalState`
+ * (never weakened or overloaded — see AGENTS.md / the PR B mission) rather
+ * than sharing its warning check: every non-warning field here is checked
+ * exactly as strictly as the normal path, and the warning check is replaced
+ * — not loosened generically — with the same R1-R6 eligibility rule that
+ * qualified the source run. The source run's benign warning authorizes only
+ * the *attempt*; this new run must independently satisfy the identical rule.
+ */
+export function verifyRecoveryWindowTerminalState(args: {
+  run: RunnerSyncRunRecord;
+  expectedWalletId: string;
+  expectedChainId: number;
+  expectedPolicyLabel: string;
+  expectedStartBlock: bigint;
+  expectedEndBlock: bigint;
+}): { ok: true } | { ok: false; reasons: string[] } {
+  const reasons: string[] = [];
+  const { run } = args;
+
+  if (run.trigger !== "MANUAL") {
+    reasons.push(`expected trigger MANUAL, got ${run.trigger}`);
+  }
+  if (run.status !== "COMPLETED") {
+    reasons.push(`expected status COMPLETED, got ${run.status}`);
+  }
+  if (run.errorMessage !== null) {
+    reasons.push(`expected errorMessage null, got ${JSON.stringify(run.errorMessage)}`);
+  }
+  if (run.failedSourceFamily !== null) {
+    reasons.push(`expected failedSourceFamily null, got ${run.failedSourceFamily}`);
+  }
+  if (run.failedFromBlock !== null || run.failedToBlock !== null) {
+    reasons.push("expected failedFromBlock/failedToBlock null");
+  }
+  if (
+    run.sourceFamilies.length !== 1 ||
+    run.sourceFamilies[0] !== WALLET_FORWARD_SYNC_SOURCE_FAMILIES[0]
+  ) {
+    reasons.push(`expected sourceFamilies ["TRANSFERS"], got ${JSON.stringify(run.sourceFamilies)}`);
+  }
+  if (run.walletId !== args.expectedWalletId) {
+    reasons.push(`expected walletId ${args.expectedWalletId}, got ${run.walletId}`);
+  }
+  if (run.chainId !== args.expectedChainId) {
+    reasons.push(`expected chainId ${args.expectedChainId}, got ${run.chainId}`);
+  }
+  if (run.policyLabel !== args.expectedPolicyLabel) {
+    reasons.push(`expected policyLabel ${args.expectedPolicyLabel}, got ${run.policyLabel}`);
+  }
+  if (run.startBlock !== args.expectedStartBlock) {
+    reasons.push(`expected startBlock ${args.expectedStartBlock}, got ${run.startBlock}`);
+  }
+  if (run.endBlock !== args.expectedEndBlock) {
+    reasons.push(`expected endBlock ${args.expectedEndBlock}, got ${run.endBlock}`);
+  }
+  if (run.latestSafeBlock !== args.expectedEndBlock) {
+    reasons.push(`expected latestSafeBlock ${args.expectedEndBlock}, got ${run.latestSafeBlock}`);
+  }
+
+  // A newly-recovered run that came back with zero warnings altogether is
+  // strictly better than the source run and trivially satisfies the normal
+  // (strict) contract — only fall back to the R1-R6 eligibility rule when
+  // the new run actually carries warnings. But "zero warnings" must itself
+  // be structurally proven, not just inferred from warningCount/legacy
+  // warningDetails: a contradictory structuredWarnings (non-empty, UNKNOWN,
+  // malformed, null, or truncated) must still fail closed even though the
+  // legacy fields look clean — recovery mode relies on structured
+  // classification, so it can never trust an unverified "clean" claim.
+  if (run.warningCount !== 0) {
+    const eligibility = verifyStructuredWarningsRecoveryEligible(run);
+    if (!eligibility.ok) {
+      reasons.push(`recovery window warning state not eligible: ${eligibility.reason}`);
+    }
+  } else {
+    if (!Array.isArray(run.warningDetails) || run.warningDetails.length !== 0) {
+      reasons.push(`expected warningDetails to be empty, got ${JSON.stringify(run.warningDetails)}`);
+    }
+    const raw = run.structuredWarnings;
+    const isKnownEmpty =
+      raw !== null &&
+      raw !== undefined &&
+      typeof raw === "object" &&
+      !Array.isArray(raw) &&
+      Array.isArray((raw as { warnings?: unknown }).warnings) &&
+      (raw as { warnings: unknown[] }).warnings.length === 0 &&
+      (raw as { truncatedCount?: unknown }).truncatedCount === 0;
+    if (!isKnownEmpty) {
+      reasons.push(
+        `recovery window reports warningCount 0 but structuredWarnings is not the known-empty shape { warnings: [], truncatedCount: 0 } — got ${JSON.stringify(raw)}`,
+      );
+    }
+  }
+
+  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+}
+
+/**
+ * Shared CLI mutual-requirement gate for --recovery-mode /
+ * --recovery-of-run-id: one flag without the other is always rejected, and
+ * neither flag present means normal (unchanged) behavior. Never infers
+ * recovery intent from anything but these two explicit flags together.
+ */
+export type RecoveryCliOptions = { sourceRunId: string } | undefined;
+
+export function parseRecoveryFlags(args: {
+  recoveryMode: boolean;
+  recoveryOfRunId: string | null;
+}): { ok: true; recovery: RecoveryCliOptions } | { ok: false; error: string } {
+  if (args.recoveryMode && !args.recoveryOfRunId) {
+    return { ok: false, error: "--recovery-mode requires --recovery-of-run-id" };
+  }
+  if (!args.recoveryMode && args.recoveryOfRunId) {
+    return { ok: false, error: "--recovery-of-run-id requires --recovery-mode" };
+  }
+  if (!args.recoveryMode) {
+    return { ok: true, recovery: undefined };
+  }
+  return { ok: true, recovery: { sourceRunId: args.recoveryOfRunId! } };
+}
+
+export function recoveryPolicyLabel(prefix: string, sourceRunId: string): string {
+  return `${prefix}-recovery-of-${sourceRunId}`;
+}
+
 // ─── Env validation ────────────────────────────────────────────────────────────
 
 export const REQUIRED_ENV_VARS = ["DATABASE_URL", "REDIS_URL"] as const;
