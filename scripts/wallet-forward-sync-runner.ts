@@ -67,7 +67,7 @@
  *   npx tsx --conditions react-server scripts/wallet-forward-sync-runner.ts \
  *     --wallet-address 0x08ac26d74013af7430c350c97eacd8be0bdc5613 \
  *     --chain-id 369 \
- *     --expected-cursor-from 25077549 --expected-cursor-to 25078548 \
+ *     --expected-cursor-from 25077549 --expected-cursor-to 25079548 \
  *     --first-window-start 25078549 --window-size 1000 \
  *     --max-windows 1 --policy-label-prefix wallet-forward-sync-window \
  *     --recovery-mode --recovery-of-run-id <SyncRun id> --recovery-only \
@@ -568,7 +568,36 @@ export async function runWalletForwardSyncRunner(
     windowSizeBlocks: options.windowSizeBlocks.toString(),
     maxWindows: options.maxWindows,
     policyLabelPrefix: options.policyLabelPrefix,
+    // Durable proof of the authorized scope, written before any POST: true
+    // only for --recovery-only, false for every ordinary invocation and for
+    // plain --recovery-mode (which still falls through to the ordinary
+    // loop). If execution is interrupted after a POST but before the final
+    // summary record, this preflight line is the only evidence that proves
+    // whether an ordinary forward window was ever authorized for this
+    // invocation — the summary record alone cannot be relied on for that.
+    recoveryOnly: options.recoveryOnly,
   });
+
+  // Fail-closed guard for direct (non-CLI) callers: parseRunnerCliArgs
+  // enforces "--recovery-only requires --recovery-mode" at the CLI boundary,
+  // but a caller invoking runWalletForwardSyncRunner directly could
+  // construct RunnerCliOptions with recoveryOnly: true and recovery left
+  // undefined — bypassing that check entirely. Without this guard, the
+  // recovery-only exit point below is only reached from inside the
+  // `if (options.recovery)` block, so recoveryOnly: true with no recovery
+  // object would silently fall through into the ordinary forward-window
+  // loop and could submit a POST, defeating the entire bounded-recovery-only
+  // guarantee. This mirrors parseRunnerCliArgs's own rule and stops before
+  // any wallet lookup, planning, or POST.
+  if (options.recoveryOnly && !options.recovery) {
+    return stop(
+      deps,
+      "recovery_only_requires_recovery_mode",
+      "options.recoveryOnly is true but options.recovery is missing; refusing to plan any ordinary window",
+      0,
+      null,
+    );
+  }
 
   const wallet = await deps.resolveWallet({
     walletAddress: options.walletAddress,

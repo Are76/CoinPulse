@@ -281,7 +281,7 @@ nothing):
 npm run backfill:wallet-forward -- \
   --wallet-address 0x08ac26d74013af7430c350c97eacd8be0bdc5613 \
   --chain-id 369 \
-  --expected-cursor-from 25077549 --expected-cursor-to 25078548 \
+  --expected-cursor-from 25077549 --expected-cursor-to 25079548 \
   --first-window-start 25078549 --window-size 1000 \
   --max-windows 1 --policy-label-prefix wallet-forward-sync-window \
   --recovery-mode --recovery-of-run-id <SyncRun id> --recovery-only \
@@ -294,7 +294,7 @@ Execute (submits exactly one recovery POST, verifies it, then stops):
 npm run backfill:wallet-forward -- \
   --wallet-address 0x08ac26d74013af7430c350c97eacd8be0bdc5613 \
   --chain-id 369 \
-  --expected-cursor-from 25077549 --expected-cursor-to 25078548 \
+  --expected-cursor-from 25077549 --expected-cursor-to 25079548 \
   --first-window-start 25078549 --window-size 1000 \
   --max-windows 1 --policy-label-prefix wallet-forward-sync-window \
   --recovery-mode --recovery-of-run-id <SyncRun id> --recovery-only \

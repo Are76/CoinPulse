@@ -892,6 +892,16 @@ describe("orchestrator — execute", () => {
       expect(() => JSON.parse(serialized)).not.toThrow();
     }
   });
+
+  it("preflight evidence records recoveryOnly: false for an ordinary invocation (no recovery flags)", async () => {
+    const db = makeFakeDb();
+    const { deps, evidence } = makeFakeDeps({ db });
+
+    await runWalletForwardSyncRunner(baseRunnerOptions({ maxWindows: 1 }), deps);
+
+    const preflight = evidence.find((e) => e.kind === "preflight");
+    expect(preflight?.recoveryOnly).toBe(false);
+  });
 });
 
 // ─── Blocker 2: exit-code allowlist at the CLI/main boundary ───────────────────
@@ -1572,6 +1582,16 @@ describe("recovery mode — orchestrator", () => {
     expect(summary.recovery?.recovered).toBe(false);
   });
 
+  it("preflight evidence records recoveryOnly: false for plain --recovery-mode (without --recovery-only) — distinguishable from recovery-only", async () => {
+    const db = recoveryDb();
+    const { deps, evidence } = makeFakeDeps({ db });
+
+    await runWalletForwardSyncRunner(recoveryOptions({ execute: false, maxWindows: 1 }), deps);
+
+    const preflight = evidence.find((e) => e.kind === "preflight");
+    expect(preflight?.recoveryOnly).toBe(false);
+  });
+
   it("P3: execute mode recovers exactly the one referenced window, then continues one ordinary strict window forward — no extra window is implicitly authorized", async () => {
     const db = recoveryDb();
     let postCount = 0;
@@ -1890,6 +1910,38 @@ describe("recovery-only mode — orchestrator", () => {
     expect(summary.windowsCompleted).toBe(0);
     expect(summary.lastWindowNumber).toBeNull();
     expect(computeExitCode(summary.stoppedReason)).toBe(0);
+  });
+
+  it("preflight evidence records recoveryOnly: true for a --recovery-only invocation, written before any POST", async () => {
+    const db = recoveryDb();
+    const { deps, evidence, httpPostCalls } = makeFakeDeps({ db });
+
+    await runWalletForwardSyncRunner(recoveryOnlyOptions({ execute: false, maxWindows: 1 }), deps);
+
+    const preflight = evidence.find((e) => e.kind === "preflight");
+    expect(preflight?.recoveryOnly).toBe(true);
+    // Preflight is always evidence[0], proving it is written before any POST
+    // could occur — durable proof of authorized scope even if execution were
+    // interrupted immediately after.
+    expect(evidence[0]?.kind).toBe("preflight");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("fail-closed guard: a direct caller setting recoveryOnly true with recovery missing is rejected before any wallet lookup, planning, or POST", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls, evidence } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(
+      // Bypasses parseRunnerCliArgs's own "--recovery-only requires
+      // --recovery-mode" rejection — simulates a direct (non-CLI) caller.
+      baseRunnerOptions({ execute: true, maxWindows: 5, recoveryOnly: true, recovery: undefined }),
+      deps,
+    );
+
+    expect(summary.stoppedReason).toBe("recovery_only_requires_recovery_mode");
+    expect(httpPostCalls).toHaveLength(0);
+    expect(computeExitCode(summary.stoppedReason)).toBe(1);
+    expect(evidence.some((e) => e.kind === "window")).toBe(false);
   });
 
   it("P2: execute mode submits exactly one recovery POST, verifies it, and stops — no ordinary-window POST, no W6 label/window", async () => {
