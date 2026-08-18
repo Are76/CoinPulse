@@ -235,6 +235,89 @@ fabricated-contamination pre-gate) for each of up to `--max-windows` proposed
 windows, writes one evidence record per proposed window, and **never**
 submits an HTTP POST or mutates any state.
 
+### Recovery mode
+
+`--recovery-mode --recovery-of-run-id <SyncRun id>` (both required together —
+either alone is rejected, and neither present leaves ordinary behavior
+byte-for-byte unchanged) lets an operator explicitly recover exactly one
+prior window whose only structured warning was the proven-benign
+`RAW_BLOCKS_ALREADY_PERSISTED` code, without weakening the ordinary strict
+`warningCount === 0` gate for every other window. The recovery window is
+derived from the CLI (`[--first-window-start, --first-window-start +
+--window-size - 1]`), not the live cursor, and `--expected-cursor-to` must
+already equal that window's `endBlock` — recovery only ever targets the
+current cursor frontier. Eligibility requires the full R1–R6 structured-
+warning contract (see `scripts/lib/wallet-forward-sync-primitives.ts`):
+well-formed and untruncated `structuredWarnings`, `warningCount` matching the
+structured list length, at least one warning, every warning carrying exactly
+`RAW_BLOCKS_ALREADY_PERSISTED`, and legacy `warningDetails` alignment — plus
+exact identity (trigger `MANUAL`, status `COMPLETED`, wallet, chain, source
+family, block range).
+
+**Recovery mode alone (without `--recovery-only`) always falls through into
+the ordinary forward-window loop afterward.** Because `--max-windows` has a
+syntactic minimum of 1, this means every plain `--recovery-mode` invocation
+plans and — in `--execute` mode — submits at least one ordinary forward
+window immediately after the recovered range, at
+`[--first-window-start + --window-size, ...]`. That window is fully strict
+(the recovery exception never applies to it).
+
+#### Recovery-only: bounded recovery execution, no forward window
+
+Add `--recovery-only` (requires `--recovery-mode`/`--recovery-of-run-id`) to
+authorize **exactly one recovery action and nothing else.** The runner
+validates the recovery source, performs the single recovery attempt (or, in
+dry-run, only proves eligibility), and returns — it never plans or submits
+an ordinary forward window, regardless of `--max-windows`. This exists
+because an eligible recovery could not otherwise be executed as a standalone
+bounded operator action: `--recovery-only` removes only that one coupling,
+without changing anything else about recovery eligibility, the strict
+ordinary-window gates, or plain `--recovery-mode` behavior.
+
+Dry-run (the safe default — proves eligibility, submits zero POSTs, mutates
+nothing):
+
+```bash
+npm run backfill:wallet-forward -- \
+  --wallet-address 0x08ac26d74013af7430c350c97eacd8be0bdc5613 \
+  --chain-id 369 \
+  --expected-cursor-from 25077549 --expected-cursor-to 25078548 \
+  --first-window-start 25078549 --window-size 1000 \
+  --max-windows 1 --policy-label-prefix wallet-forward-sync-window \
+  --recovery-mode --recovery-of-run-id <SyncRun id> --recovery-only \
+  --base-url http://localhost:3000
+```
+
+Execute (submits exactly one recovery POST, verifies it, then stops):
+
+```bash
+npm run backfill:wallet-forward -- \
+  --wallet-address 0x08ac26d74013af7430c350c97eacd8be0bdc5613 \
+  --chain-id 369 \
+  --expected-cursor-from 25077549 --expected-cursor-to 25078548 \
+  --first-window-start 25078549 --window-size 1000 \
+  --max-windows 1 --policy-label-prefix wallet-forward-sync-window \
+  --recovery-mode --recovery-of-run-id <SyncRun id> --recovery-only \
+  --base-url http://localhost:3000 \
+  --execute
+```
+
+The clean-stop reason for a successful recovery-only invocation (dry-run or
+execute) is `recovery_only_completed`, distinct from the ordinary loop's
+`max_windows_reached` — both exit `0`; every other stop reason, including
+every recovery-eligibility or postcondition failure, still exits `1`
+unchanged.
+
+**Recovery-only does not authorize the next forward window.** Completing a
+recovery-only run does not itself approve, plan, or imply approval for any
+subsequent ordinary window — a later forward batch still requires its own
+explicit `--expected-cursor-from`/`--expected-cursor-to`/
+`--first-window-start` derived from the live cursor and its own
+product-owner approval, exactly as described in "Approval semantics" below.
+There is no automatic retry of a failed recovery attempt, and recovery mode
+never tolerates any warning code other than `RAW_BLOCKS_ALREADY_PERSISTED` —
+`--recovery-only` changes nothing about that.
+
 ### Approval semantics: default rule vs. the bounded batch exception
 
 The default operator rule is **one live mutation window per explicit

@@ -78,6 +78,7 @@ function baseRunnerOptions(overrides: Partial<RunnerCliOptions> = {}): RunnerCli
     evidenceFile: "unused-in-tests/evidence.jsonl",
     pollIntervalMs: 1,
     pollTimeoutMs: 1000,
+    recoveryOnly: false,
     ...overrides,
   };
 }
@@ -904,7 +905,12 @@ describe("orchestrator — execute", () => {
 describe("exit-code allowlist (CLI/main boundary)", () => {
   it("CLEAN_STOP_REASONS is limited to genuine non-error completion", () => {
     expect(CLEAN_STOP_REASONS.has("max_windows_reached")).toBe(true);
-    expect(CLEAN_STOP_REASONS.size).toBe(1);
+    expect(CLEAN_STOP_REASONS.has("recovery_only_completed")).toBe(true);
+    expect(CLEAN_STOP_REASONS.size).toBe(2);
+  });
+
+  it("clean recovery-only completion (recovery_only_completed) exits 0", () => {
+    expect(computeExitCode("recovery_only_completed")).toBe(0);
   });
 
   it("clean dry-run completion (max_windows_reached) exits 0", () => {
@@ -1475,6 +1481,41 @@ describe("recovery mode — CLI flags", () => {
     ]);
     if (!parsed.ok) throw new Error("expected parse success");
     expect(parsed.options.recovery).toEqual({ sourceRunId: "run-source-1" });
+    expect(parsed.options.recoveryOnly).toBe(false);
+  });
+
+  it("neither flag: recoveryOnly defaults to false", () => {
+    const parsed = parseRunnerCliArgs(requiredArgv);
+    if (!parsed.ok) throw new Error("expected parse success");
+    expect(parsed.options.recoveryOnly).toBe(false);
+  });
+
+  it("--recovery-only without --recovery-mode is rejected", () => {
+    const parsed = parseRunnerCliArgs([...requiredArgv, "--recovery-only"]);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("--recovery-only without --recovery-of-run-id is rejected (transitively, via --recovery-mode's own requirement)", () => {
+    const parsed = parseRunnerCliArgs([...requiredArgv, "--recovery-only", "--recovery-mode"]);
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("--recovery-mode + --recovery-of-run-id + --recovery-only is accepted", () => {
+    const parsed = parseRunnerCliArgs([
+      ...requiredArgv,
+      "--recovery-mode",
+      "--recovery-of-run-id",
+      "run-source-1",
+      "--recovery-only",
+    ]);
+    if (!parsed.ok) throw new Error("expected parse success");
+    expect(parsed.options.recovery).toEqual({ sourceRunId: "run-source-1" });
+    expect(parsed.options.recoveryOnly).toBe(true);
+  });
+
+  it("normal mode (neither recovery flag) with --recovery-only alone is still rejected regardless of flag order", () => {
+    const parsed = parseRunnerCliArgs(["--recovery-only", ...requiredArgv]);
+    expect(parsed.ok).toBe(false);
   });
 });
 
@@ -1788,5 +1829,296 @@ describe("recovery mode — orchestrator", () => {
 
     expect(summary.stoppedReason).toBe("policy_label_overlong");
     expect(httpPostCalls).toHaveLength(0);
+  });
+});
+
+// ─── Recovery-only mode: bounded exit, no ordinary window planned/submitted ────
+
+describe("recovery-only mode — orchestrator", () => {
+  const RECOVERY_START = FIXTURE_FIRST_WINDOW_START; // 25_078_549n
+  const RECOVERY_END = FIXTURE_FIRST_WINDOW_START + FIXTURE_WINDOW_SIZE - 1n; // 25_079_548n
+  const SOURCE_RUN_ID = "run-source-1";
+  const RECOVERY_LABEL = recoveryPolicyLabel("wallet-forward-sync-window", SOURCE_RUN_ID);
+
+  function eligibleSourceRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
+    return completedManualRun({
+      id: SOURCE_RUN_ID,
+      startBlock: RECOVERY_START,
+      endBlock: RECOVERY_END,
+      latestSafeBlock: RECOVERY_END,
+      warningCount: 1,
+      warningDetails: ["some raw blocks were already persisted for this range"],
+      structuredWarnings: {
+        warnings: [
+          { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+        ],
+        truncatedCount: 0,
+      },
+      ...overrides,
+    });
+  }
+
+  function recoveryOnlyOptions(overrides: Partial<RunnerCliOptions> = {}) {
+    return baseRunnerOptions({
+      expectedCursorFromBlock: FIXTURE_CURSOR_FROM,
+      expectedCursorToBlock: RECOVERY_END,
+      firstWindowStart: RECOVERY_START,
+      recovery: { sourceRunId: SOURCE_RUN_ID },
+      recoveryOnly: true,
+      ...overrides,
+    });
+  }
+
+  function recoveryDb(overrides: Parameters<typeof makeFakeDb>[0] = {}) {
+    return makeFakeDb({
+      cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: RECOVERY_END },
+      runsById: { [SOURCE_RUN_ID]: eligibleSourceRun() },
+      ...overrides,
+    });
+  }
+
+  it("P1: dry-run proves eligibility, submits zero POSTs, mutates nothing, and plans zero ordinary windows", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOnlyOptions({ execute: false, maxWindows: 1 }), deps);
+
+    expect(httpPostCalls).toHaveLength(0);
+    expect(summary.stoppedReason).toBe("recovery_only_completed");
+    expect(summary.recovery?.eligible).toBe(true);
+    expect(summary.recovery?.recovered).toBe(false);
+    expect(summary.windowsCompleted).toBe(0);
+    expect(summary.lastWindowNumber).toBeNull();
+    expect(computeExitCode(summary.stoppedReason)).toBe(0);
+  });
+
+  it("P2: execute mode submits exactly one recovery POST, verifies it, and stops — no ordinary-window POST, no W6 label/window", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async (_url, body) => {
+        const b = body as { policyLabel: string; startBlock: string; endBlock: string };
+        expect(b.policyLabel).toBe(RECOVERY_LABEL);
+        expect(b.startBlock).toBe(RECOVERY_START.toString());
+        expect(b.endBlock).toBe(RECOVERY_END.toString());
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          if (id === "run-recovered") {
+            return completedManualRun({
+              id: "run-recovered",
+              policyLabel: RECOVERY_LABEL,
+              startBlock: RECOVERY_START,
+              endBlock: RECOVERY_END,
+              latestSafeBlock: RECOVERY_END,
+              warningCount: 1,
+              warningDetails: ["some raw blocks were already persisted for this range"],
+              structuredWarnings: {
+                warnings: [
+                  {
+                    code: "RAW_BLOCKS_ALREADY_PERSISTED",
+                    detail: "some raw blocks were already persisted for this range",
+                  },
+                ],
+                truncatedCount: 0,
+              },
+            });
+          }
+          return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+        };
+        // Cursor stays at RECOVERY_END: recovering an already-persisted range
+        // is idempotent and never advances the frontier past it.
+        return { status: 202, body: { data: { runId: "run-recovered" } } };
+      },
+    });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOnlyOptions({ execute: true, maxWindows: 1 }), deps);
+
+    expect(httpPostCalls).toHaveLength(1); // exactly one recovery POST, never a second (ordinary-window) POST
+    expect(summary.stoppedReason).toBe("recovery_only_completed");
+    expect(summary.recovery?.recovered).toBe(true);
+    expect(summary.windowsCompleted).toBe(0);
+    expect(summary.lastWindowNumber).toBeNull();
+    expect(computeExitCode(summary.stoppedReason)).toBe(0);
+  });
+
+  it("--max-windows above 1 is still ignored/unreachable in recovery-only mode (no extra window planned)", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(
+      recoveryOnlyOptions({ execute: false, maxWindows: 5 }),
+      deps,
+    );
+
+    expect(httpPostCalls).toHaveLength(0);
+    expect(summary.stoppedReason).toBe("recovery_only_completed");
+    expect(summary.windowsCompleted).toBe(0);
+  });
+
+  it("eligibility failure still hard-stops with the normal reason and exit code 1 — recovery-only does not weaken R1-R6", async () => {
+    const db = recoveryDb({ runsById: {} });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOnlyOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_source_run_ineligible");
+    expect(httpPostCalls).toHaveLength(0);
+    expect(computeExitCode(summary.stoppedReason)).toBe(1);
+  });
+
+  it("a NEW recovered run failing its own postcondition still hard-stops recovery-only with exit code 1 (no ordinary window)", async () => {
+    const db = recoveryDb();
+    const { deps, httpPostCalls } = makeFakeDeps({
+      db,
+      httpPost: async () => {
+        (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+          const id = (args as { where: { id: string } }).where.id;
+          if (id === "run-recovered") {
+            return completedManualRun({
+              id: "run-recovered",
+              policyLabel: RECOVERY_LABEL,
+              startBlock: RECOVERY_START,
+              endBlock: RECOVERY_END,
+              latestSafeBlock: RECOVERY_END,
+              warningCount: 1,
+              warningDetails: ["skipped non-transfer log"],
+              structuredWarnings: { warnings: [{ code: "UNKNOWN", detail: "skipped non-transfer log" }], truncatedCount: 0 },
+            });
+          }
+          return id === SOURCE_RUN_ID ? eligibleSourceRun() : null;
+        };
+        return { status: 202, body: { data: { runId: "run-recovered" } } };
+      },
+    });
+
+    const summary = await runWalletForwardSyncRunner(recoveryOnlyOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("recovery_invariant_failed_after_run");
+    expect(httpPostCalls).toHaveLength(1);
+    expect(computeExitCode(summary.stoppedReason)).toBe(1);
+  });
+
+  // ─── Real W5 architectural regression fixture ──────────────────────────────
+  //
+  // Mirrors the actual eligible recovery source run this feature exists to
+  // unblock: a COMPLETED MANUAL TRANSFERS run over [25203549, 25204548] with
+  // exactly one RAW_BLOCKS_ALREADY_PERSISTED warning, truncatedCount 0, and a
+  // canonical cursor frontier already sitting at 25204548. Wallet address is
+  // a fixture value, not the real production wallet.
+  describe("W5 regression fixture (25203549-25204548)", () => {
+    const W5_START = 25_203_549n;
+    const W5_END = 25_204_548n;
+    const W5_SOURCE_RUN_ID = "cmsyn1xau0a2elw5fqi5df94p";
+    const W5_LABEL = recoveryPolicyLabel("wallet-forward-sync-window", W5_SOURCE_RUN_ID);
+    const NEXT_ORDINARY_WINDOW_START = W5_END + 1n; // 25204549 — must NEVER be planned/submitted
+
+    function w5SourceRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
+      return completedManualRun({
+        id: W5_SOURCE_RUN_ID,
+        startBlock: W5_START,
+        endBlock: W5_END,
+        latestSafeBlock: W5_END,
+        warningCount: 1,
+        warningDetails: ["some raw blocks were already persisted for this range"],
+        structuredWarnings: {
+          warnings: [
+            { code: "RAW_BLOCKS_ALREADY_PERSISTED", detail: "some raw blocks were already persisted for this range" },
+          ],
+          truncatedCount: 0,
+        },
+        ...overrides,
+      });
+    }
+
+    function w5Options(overrides: Partial<RunnerCliOptions> = {}) {
+      return baseRunnerOptions({
+        expectedCursorFromBlock: FIXTURE_CURSOR_FROM,
+        expectedCursorToBlock: W5_END,
+        firstWindowStart: W5_START,
+        windowSizeBlocks: 1_000n,
+        recovery: { sourceRunId: W5_SOURCE_RUN_ID },
+        recoveryOnly: true,
+        ...overrides,
+      });
+    }
+
+    function w5Db(overrides: Parameters<typeof makeFakeDb>[0] = {}) {
+      return makeFakeDb({
+        cursor: { fromBlock: FIXTURE_CURSOR_FROM, toBlock: W5_END },
+        runsById: { [W5_SOURCE_RUN_ID]: w5SourceRun() },
+        ...overrides,
+      });
+    }
+
+    it("dry-run: eligible, zero ordinary-window evidence, W6 [25204549,25205548] is never planned", async () => {
+      const db = w5Db();
+      const { deps, httpPostCalls, evidence } = makeFakeDeps({ db });
+
+      const summary = await runWalletForwardSyncRunner(w5Options({ execute: false }), deps);
+
+      expect(summary.stoppedReason).toBe("recovery_only_completed");
+      expect(summary.recovery?.eligible).toBe(true);
+      expect(summary.recovery?.window).toEqual({
+        startBlock: W5_START.toString(),
+        endBlock: W5_END.toString(),
+      });
+      expect(httpPostCalls).toHaveLength(0);
+      // No "window" kind evidence record (that kind is only ever written by
+      // the ordinary forward loop) and no record mentions the next ordinary
+      // window's startBlock anywhere.
+      expect(evidence.some((r) => r.kind === "window")).toBe(false);
+      const serialized = evidence.map((r) => serializeEvidence(r)).join("\n");
+      expect(serialized.includes(NEXT_ORDINARY_WINDOW_START.toString())).toBe(false);
+    });
+
+    it("execute: exactly one recovery POST, zero ordinary POSTs, W6 is never submitted", async () => {
+      const db = w5Db();
+      const { deps, httpPostCalls } = makeFakeDeps({
+        db,
+        httpPost: async (_url, body) => {
+          const b = body as { policyLabel: string; startBlock: string; endBlock: string };
+          expect(b.policyLabel).toBe(W5_LABEL);
+          expect(b.startBlock).toBe(W5_START.toString());
+          expect(b.endBlock).toBe(W5_END.toString());
+          (db.syncRun.findUnique as unknown) = async (args: unknown) => {
+            const id = (args as { where: { id: string } }).where.id;
+            if (id === "run-w5-recovered") {
+              return completedManualRun({
+                id: "run-w5-recovered",
+                policyLabel: W5_LABEL,
+                startBlock: W5_START,
+                endBlock: W5_END,
+                latestSafeBlock: W5_END,
+                warningCount: 1,
+                warningDetails: ["some raw blocks were already persisted for this range"],
+                structuredWarnings: {
+                  warnings: [
+                    {
+                      code: "RAW_BLOCKS_ALREADY_PERSISTED",
+                      detail: "some raw blocks were already persisted for this range",
+                    },
+                  ],
+                  truncatedCount: 0,
+                },
+              });
+            }
+            return id === W5_SOURCE_RUN_ID ? w5SourceRun() : null;
+          };
+          return { status: 202, body: { data: { runId: "run-w5-recovered" } } };
+        },
+      });
+
+      const summary = await runWalletForwardSyncRunner(w5Options({ execute: true }), deps);
+
+      expect(httpPostCalls).toHaveLength(1);
+      expect(summary.stoppedReason).toBe("recovery_only_completed");
+      expect(summary.recovery?.recovered).toBe(true);
+      expect(summary.windowsCompleted).toBe(0);
+      // Prove no ordinary window for [25204549, 25205548] was ever submitted.
+      for (const call of httpPostCalls) {
+        const body = call.body as { startBlock: string; endBlock: string };
+        expect(body.startBlock).not.toBe(NEXT_ORDINARY_WINDOW_START.toString());
+      }
+    });
   });
 });
