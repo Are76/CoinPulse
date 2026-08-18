@@ -40,6 +40,10 @@
  *     (Base), is rejected before any planning happens.
  *   - Every invariant violation is a hard stop; nothing is auto-retried and
  *     execution never continues past a failed window.
+ *   - --recovery-only (requires --recovery-mode/--recovery-of-run-id) bounds
+ *     the entire invocation to exactly one recovery action: it never plans or
+ *     submits an ordinary forward window afterward, regardless of
+ *     --max-windows.
  *
  * Usage (dry-run, the safe default):
  *   npx tsx --conditions react-server scripts/wallet-forward-sync-runner.ts \
@@ -57,6 +61,17 @@
  *     --first-window-start 25078549 --window-size 1000 \
  *     --max-windows 1 --policy-label-prefix wallet-forward-sync-window \
  *     --execute
+ *
+ * Usage (recovery-only: recover exactly one eligible prior benign-warning
+ * window and stop — never plans or submits an ordinary forward window):
+ *   npx tsx --conditions react-server scripts/wallet-forward-sync-runner.ts \
+ *     --wallet-address 0x08ac26d74013af7430c350c97eacd8be0bdc5613 \
+ *     --chain-id 369 \
+ *     --expected-cursor-from 25077549 --expected-cursor-to 25079548 \
+ *     --first-window-start 25078549 --window-size 1000 \
+ *     --max-windows 1 --policy-label-prefix wallet-forward-sync-window \
+ *     --recovery-mode --recovery-of-run-id <SyncRun id> --recovery-only \
+ *     [--execute]
  *
  * See docs/wallet-scoped-historical-sync-runbook.md for the full operator
  * runbook and required contamination pre/post-checks.
@@ -248,6 +263,16 @@ export type RunnerCliOptions = {
    * the current cursor frontier, never an arbitrary historical window.
    */
   recovery?: RecoveryCliOptions;
+  /**
+   * Explicit, opt-in bounded-recovery-execution mode. Requires --recovery-mode
+   * (and therefore --recovery-of-run-id) to also be set — false (the default)
+   * means normal behavior, including ordinary recovery-then-forward-window
+   * behavior, is byte-for-byte unchanged from before this option existed.
+   * When true, the runner performs exactly the one recovery action described
+   * by `recovery` above and then returns — it never enters the ordinary
+   * forward-window loop, regardless of --max-windows.
+   */
+  recoveryOnly: boolean;
 };
 
 export type RunnerCliParseResult =
@@ -261,7 +286,7 @@ export const RUNNER_CLI_USAGE = [
   "         --policy-label-prefix <label> [--max-windows <1-5>] [--execute]",
   "         [--base-url <url>] [--evidence-file <path>]",
   "         [--poll-interval-ms <n>] [--poll-timeout-ms <n>]",
-  "         [--recovery-mode --recovery-of-run-id <SyncRun id>]",
+  "         [--recovery-mode --recovery-of-run-id <SyncRun id> [--recovery-only]]",
   "",
   "  Dry-run is the default and never submits an HTTP POST.",
   "  --max-windows defaults to 1 and is hard-capped at 5.",
@@ -273,6 +298,10 @@ export const RUNNER_CLI_USAGE = [
   "  not at all. Recovery targets exactly the window [--first-window-start,",
   "  --first-window-start + --window-size - 1], which --expected-cursor-to",
   "  must already equal (the current cursor frontier).",
+  "  --recovery-only requires --recovery-mode (and therefore",
+  "  --recovery-of-run-id). When set, the runner performs exactly the one",
+  "  recovery action and stops — it never plans or submits an ordinary",
+  "  forward window, regardless of --max-windows.",
 ].join("\n");
 
 const DEFAULT_BASE_URL = process.env.OPERATOR_RUNNER_BASE_URL ?? "http://localhost:3000";
@@ -304,6 +333,7 @@ export function parseRunnerCliArgs(argv: readonly string[]): RunnerCliParseResul
   let pollTimeoutMs = DEFAULT_POLL_TIMEOUT_MS;
   let recoveryMode = false;
   let recoveryOfRunId: string | null = null;
+  let recoveryOnly = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -314,6 +344,10 @@ export function parseRunnerCliArgs(argv: readonly string[]): RunnerCliParseResul
     }
     if (arg === "--recovery-mode") {
       recoveryMode = true;
+      continue;
+    }
+    if (arg === "--recovery-only") {
+      recoveryOnly = true;
       continue;
     }
     if (arg === "--recovery-of-run-id") {
@@ -461,6 +495,10 @@ export function parseRunnerCliArgs(argv: readonly string[]): RunnerCliParseResul
   const recoveryFlags = parseRecoveryFlags({ recoveryMode, recoveryOfRunId });
   if (!recoveryFlags.ok) return { ok: false, error: recoveryFlags.error };
 
+  if (recoveryOnly && !recoveryMode) {
+    return { ok: false, error: "--recovery-only requires --recovery-mode (and --recovery-of-run-id)." };
+  }
+
   return {
     ok: true,
     options: {
@@ -478,6 +516,7 @@ export function parseRunnerCliArgs(argv: readonly string[]): RunnerCliParseResul
       pollIntervalMs,
       pollTimeoutMs,
       recovery: recoveryFlags.recovery,
+      recoveryOnly,
     },
   };
 }
@@ -529,7 +568,36 @@ export async function runWalletForwardSyncRunner(
     windowSizeBlocks: options.windowSizeBlocks.toString(),
     maxWindows: options.maxWindows,
     policyLabelPrefix: options.policyLabelPrefix,
+    // Durable proof of the authorized scope, written before any POST: true
+    // only for --recovery-only, false for every ordinary invocation and for
+    // plain --recovery-mode (which still falls through to the ordinary
+    // loop). If execution is interrupted after a POST but before the final
+    // summary record, this preflight line is the only evidence that proves
+    // whether an ordinary forward window was ever authorized for this
+    // invocation — the summary record alone cannot be relied on for that.
+    recoveryOnly: options.recoveryOnly,
   });
+
+  // Fail-closed guard for direct (non-CLI) callers: parseRunnerCliArgs
+  // enforces "--recovery-only requires --recovery-mode" at the CLI boundary,
+  // but a caller invoking runWalletForwardSyncRunner directly could
+  // construct RunnerCliOptions with recoveryOnly: true and recovery left
+  // undefined — bypassing that check entirely. Without this guard, the
+  // recovery-only exit point below is only reached from inside the
+  // `if (options.recovery)` block, so recoveryOnly: true with no recovery
+  // object would silently fall through into the ordinary forward-window
+  // loop and could submit a POST, defeating the entire bounded-recovery-only
+  // guarantee. This mirrors parseRunnerCliArgs's own rule and stops before
+  // any wallet lookup, planning, or POST.
+  if (options.recoveryOnly && !options.recovery) {
+    return stop(
+      deps,
+      "recovery_only_requires_recovery_mode",
+      "options.recoveryOnly is true but options.recovery is missing; refusing to plan any ordinary window",
+      0,
+      null,
+    );
+  }
 
   const wallet = await deps.resolveWallet({
     walletAddress: options.walletAddress,
@@ -806,6 +874,29 @@ export async function runWalletForwardSyncRunner(
       }
 
       recoverySummary.recovered = true;
+    }
+
+    // ── Recovery-only bounded exit: the recovery action above is the entire
+    // authorized operation. Stop here — never plan or submit an ordinary
+    // forward window, regardless of --max-windows. Only reached when the
+    // recovery step itself did not already hard-stop (every eligibility/
+    // invariant failure above returns earlier with its own reason and exit
+    // code, unaffected by this flag). ──
+    if (options.recoveryOnly) {
+      await deps.writeEvidence({
+        kind: "summary",
+        at: deps.now().toISOString(),
+        stoppedReason: "recovery_only_completed",
+        windowsCompleted: 0,
+        lastWindowNumber: null,
+        recovery: recoverySummary,
+      });
+      return {
+        stoppedReason: "recovery_only_completed",
+        windowsCompleted: 0,
+        lastWindowNumber: null,
+        recovery: recoverySummary,
+      };
     }
   }
 
@@ -1117,7 +1208,10 @@ export async function stop(
  * match: adding a new stop reason to the orchestrator without adding it here
  * fails closed (exit 1) rather than silently succeeding.
  */
-export const CLEAN_STOP_REASONS: ReadonlySet<string> = new Set(["max_windows_reached"]);
+export const CLEAN_STOP_REASONS: ReadonlySet<string> = new Set([
+  "max_windows_reached",
+  "recovery_only_completed",
+]);
 
 export function computeExitCode(stoppedReason: string): 0 | 1 {
   return CLEAN_STOP_REASONS.has(stoppedReason) ? 0 : 1;
