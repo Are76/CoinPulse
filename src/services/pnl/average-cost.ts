@@ -5,6 +5,8 @@ import Decimal from "decimal.js";
 import type {
   AverageCostPnlResult,
   CalculateAverageCostPnlArgs,
+  PnLActionType,
+  PnLDirection,
   PnLEngine,
   PnLEntry,
   PnLWarning,
@@ -15,6 +17,48 @@ const TARGET_ACQUISITION_TYPES = new Set(["RECEIVE", "SWAP_IN"]);
 const TARGET_DISPOSITION_TYPES = new Set(["SEND", "SWAP_OUT"]);
 const LP_ACTION_TYPES = new Set(["LP_ADD", "LP_REMOVE"]);
 const STAKE_ACTION_TYPES = new Set(["HEX_STAKE_START", "HEX_STAKE_END", "HEX_STAKE_LOCK"]);
+// Action types where the existing normalizer already guarantees economically
+// coupled legs are grouped into one actionGroupId. The unresolved-coupling
+// guard must not second-guess those groups (LP/STAKE are already skipped
+// earlier; SWAP is excluded defensively per the same principle).
+const HIGHER_ORDER_ACTION_TYPES = new Set<PnLActionType>([
+  "SWAP",
+  "LP_ADD",
+  "LP_REMOVE",
+  "HEX_STAKE_START",
+  "HEX_STAKE_END",
+  "HEX_STAKE_LOCK",
+]);
+
+/**
+ * Detects the case where a group's disposal/acquisition would otherwise
+ * resolve to zero proceeds/cost only because the economically coupled leg
+ * was normalized into a different actionGroupId for the same on-chain
+ * transaction (e.g. an unrecognized swap split into separate SEND/RECEIVE
+ * groups). This is a structural signal only — it never infers protocol
+ * identity, it only prevents a fabricated zero.
+ */
+function hasUnresolvedSiblingCoupling(args: {
+  relevantEntries: readonly PnLEntry[];
+  triggerGroupId: string;
+  triggerActionType: PnLActionType;
+  txHash: string;
+  targetAssetId: string;
+  requiredDirection: PnLDirection;
+}): boolean {
+  if (HIGHER_ORDER_ACTION_TYPES.has(args.triggerActionType)) {
+    return false;
+  }
+
+  return args.relevantEntries.some(
+    (entry) =>
+      entry.txHash === args.txHash &&
+      entry.actionGroupId !== args.triggerGroupId &&
+      entry.entryType !== "FEE" &&
+      entry.direction === args.requiredDirection &&
+      entry.assetId !== args.targetAssetId,
+  );
+}
 
 export const averageCostEngine: PnLEngine = {
   calculate: calculateAverageCostPnl,
@@ -93,15 +137,39 @@ export async function calculateAverageCostPnl(
     const targetFeeEntries = targetEntries.filter((entry) => entry.entryType === "FEE");
 
     if (targetInEntries.length > 0 && targetOutEntries.length === 0 && targetFeeEntries.length === 0) {
+      const costSourceEntries = groupEntries.filter(
+        (entry) =>
+          entry.assetId !== args.assetId &&
+          entry.direction === "OUT" &&
+          entry.entryType !== "FEE" &&
+          entry.entryType !== "INTERNAL_TRANSFER",
+      );
+
+      if (
+        costSourceEntries.length === 0 &&
+        hasUnresolvedSiblingCoupling({
+          relevantEntries,
+          triggerGroupId: groupEntries[0].actionGroupId,
+          triggerActionType: groupEntries[0].actionType,
+          txHash: groupEntries[0].txHash,
+          targetAssetId: args.assetId,
+          requiredDirection: "OUT",
+        })
+      ) {
+        warnings.push({
+          code: "UNRESOLVED_ECONOMIC_COUPLING",
+          actionGroupId: groupEntries[0].actionGroupId,
+          assetId: args.assetId,
+          txHash: groupEntries[0].txHash,
+          detail:
+            "A sibling action group in the same transaction holds the economically coupled leg; refusing to treat this acquisition as zero-cost.",
+        });
+        continue;
+      }
+
       const acquiredQuantity = sumQuantities(targetInEntries);
       const acquisitionCost = await resolveGroupValue({
-        entries: groupEntries.filter(
-          (entry) =>
-            entry.assetId !== args.assetId &&
-            entry.direction === "OUT" &&
-            entry.entryType !== "FEE" &&
-            entry.entryType !== "INTERNAL_TRANSFER",
-        ),
+        entries: costSourceEntries,
         at: targetInEntries[0].occurredAt,
         chainId: args.chainId,
         quoteAsset: args.quoteAsset,
@@ -163,13 +231,37 @@ export async function calculateAverageCostPnl(
         continue;
       }
 
+      const proceedsSourceEntries = groupEntries.filter(
+        (entry) =>
+          entry.assetId !== args.assetId &&
+          entry.direction === "IN" &&
+          entry.entryType !== "INTERNAL_TRANSFER",
+      );
+
+      if (
+        proceedsSourceEntries.length === 0 &&
+        hasUnresolvedSiblingCoupling({
+          relevantEntries,
+          triggerGroupId: groupEntries[0].actionGroupId,
+          triggerActionType: groupEntries[0].actionType,
+          txHash: groupEntries[0].txHash,
+          targetAssetId: args.assetId,
+          requiredDirection: "IN",
+        })
+      ) {
+        warnings.push({
+          code: "UNRESOLVED_ECONOMIC_COUPLING",
+          actionGroupId: groupEntries[0].actionGroupId,
+          assetId: args.assetId,
+          txHash: groupEntries[0].txHash,
+          detail:
+            "A sibling action group in the same transaction holds the economically coupled leg; refusing to treat this disposal as zero-proceeds.",
+        });
+        continue;
+      }
+
       const proceeds = await resolveGroupValue({
-        entries: groupEntries.filter(
-          (entry) =>
-            entry.assetId !== args.assetId &&
-            entry.direction === "IN" &&
-            entry.entryType !== "INTERNAL_TRANSFER",
-        ),
+        entries: proceedsSourceEntries,
         at: targetOutEntries[0].occurredAt,
         chainId: args.chainId,
         quoteAsset: args.quoteAsset,

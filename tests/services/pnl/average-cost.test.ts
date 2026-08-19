@@ -561,6 +561,374 @@ describe("calculateAverageCostPnl", () => {
     expect(result.holdingsQuantity).toBe("10");
   });
 
+  it("fails closed instead of zero-proceeds when a SEND-only group has a same-tx sibling RECEIVE of another asset (protocol-detection-gap calibration, tx 0x25e9f8027e6d3efbaa17a50d3f6e08b1f6618a7b51572167d5f88abc20b61488)", async () => {
+    // Synthetic fixture modeled on the audited structure: gas/FEE group, SEND
+    // group, RECEIVE group — all sharing one txHash but split across three
+    // actionGroupIds because the swap protocol was not recognized.
+    const TX_HASH = "0x25e9f8027e6d3efbaa17a50d3f6e08b1f6618a7b51572167d5f88abc20b61488";
+
+    const result = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry({ quantity: "10" }),
+        createEntry({
+          id: "buy-pls",
+          assetId: PLS_ASSET,
+          entryType: "SWAP_OUT",
+          direction: "OUT",
+          quantity: "100",
+        }),
+        createEntry({
+          id: "gas-fee",
+          actionGroupId: "group-fee",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:0`,
+          actionType: "TRANSFER",
+          assetId: PLS_ASSET,
+          entryType: "FEE",
+          direction: "OUT",
+          quantity: "1",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+        createEntry({
+          id: "send-target",
+          actionGroupId: "group-send",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:1`,
+          actionType: "TRANSFER",
+          entryType: "SEND",
+          direction: "OUT",
+          quantity: "4",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+        createEntry({
+          id: "receive-other",
+          actionGroupId: "group-receive",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:2`,
+          actionType: "TRANSFER",
+          assetId: PLS_ASSET,
+          entryType: "RECEIVE",
+          direction: "IN",
+          quantity: "60",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+      ],
+      resolvePrice: createResolver([
+        createObservation({
+          id: "pls-buy",
+          observedAt: new Date("2026-05-08T12:00:00.000Z"),
+          price: "1",
+        }),
+      ]),
+    });
+
+    // Must not fabricate zero proceeds for the SEND-only group.
+    expect(result.holdingsQuantity).toBe("10");
+    expect(result.totalDisposedQuantity).toBe("0");
+    expect(result.realizedPnl).toBe("0");
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "UNRESOLVED_ECONOMIC_COUPLING",
+          actionGroupId: "group-send",
+          txHash: TX_HASH,
+        }),
+      ]),
+    );
+  });
+
+  it("fails closed instead of zero-proceeds for a DEX-coverage-gap calibration transaction with the same 3-group shape (tx 0xa24e369be05870cbf2fdf8a43b28e38b58396eb510acfaf29a7fc3310c044504)", async () => {
+    const TX_HASH = "0xa24e369be05870cbf2fdf8a43b28e38b58396eb510acfaf29a7fc3310c044504";
+
+    const result = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry({ quantity: "10" }),
+        createEntry({
+          id: "buy-pls",
+          assetId: PLS_ASSET,
+          entryType: "SWAP_OUT",
+          direction: "OUT",
+          quantity: "100",
+        }),
+        createEntry({
+          id: "gas-fee",
+          actionGroupId: "group-fee",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:0`,
+          actionType: "TRANSFER",
+          assetId: PLS_ASSET,
+          entryType: "FEE",
+          direction: "OUT",
+          quantity: "1",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+        createEntry({
+          id: "send-target",
+          actionGroupId: "group-send",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:1`,
+          actionType: "TRANSFER",
+          entryType: "SEND",
+          direction: "OUT",
+          quantity: "4",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+        createEntry({
+          id: "receive-other",
+          actionGroupId: "group-receive",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:2`,
+          actionType: "TRANSFER",
+          assetId: PLS_ASSET,
+          entryType: "RECEIVE",
+          direction: "IN",
+          quantity: "60",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+      ],
+      resolvePrice: createResolver([
+        createObservation({
+          id: "pls-buy",
+          observedAt: new Date("2026-05-08T12:00:00.000Z"),
+          price: "1",
+        }),
+      ]),
+    });
+
+    expect(result.holdingsQuantity).toBe("10");
+    expect(result.totalDisposedQuantity).toBe("0");
+    expect(result.realizedPnl).toBe("0");
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "UNRESOLVED_ECONOMIC_COUPLING",
+          actionGroupId: "group-send",
+          txHash: TX_HASH,
+        }),
+      ]),
+    );
+  });
+
+  it("fails closed instead of zero-cost when a RECEIVE-only group has a same-tx sibling SEND of another asset", async () => {
+    const result = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry({
+          id: "receive-target",
+          actionGroupId: "group-receive",
+          txHash: "0xtx-split",
+          sourceLogKey: "log:0xtx-split:0",
+          actionType: "TRANSFER",
+          entryType: "RECEIVE",
+          direction: "IN",
+          quantity: "10",
+        }),
+        createEntry({
+          id: "send-other",
+          actionGroupId: "group-send",
+          txHash: "0xtx-split",
+          sourceLogKey: "log:0xtx-split:1",
+          actionType: "TRANSFER",
+          assetId: PLS_ASSET,
+          entryType: "SEND",
+          direction: "OUT",
+          quantity: "100",
+        }),
+      ],
+      resolvePrice: createResolver([]),
+    });
+
+    expect(result.holdingsQuantity).toBe("0");
+    expect(result.totalAcquiredQuantity).toBe("0");
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "UNRESOLVED_ECONOMIC_COUPLING",
+          actionGroupId: "group-receive",
+          txHash: "0xtx-split",
+        }),
+      ]),
+    );
+  });
+
+  it("(synthetic false-positive guard) fails closed rather than inventing a SWAP classification for unrelated same-tx economic actions", async () => {
+    // Synthetic — not derived from any observed transaction. Models a
+    // hypothetical case where a payment OUT of asset A and an unrelated
+    // IN of asset B happen to land in the same transaction. The guard has
+    // no way to prove these are unrelated, so it must fail closed rather
+    // than silently accepting zero proceeds or inventing a swap.
+    const result = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry({ quantity: "10" }),
+        createEntry({
+          id: "buy-pls",
+          assetId: PLS_ASSET,
+          entryType: "SWAP_OUT",
+          direction: "OUT",
+          quantity: "100",
+        }),
+        createEntry({
+          id: "payment-out-target",
+          actionGroupId: "group-payment",
+          txHash: "0xtx-unrelated",
+          sourceLogKey: "log:0xtx-unrelated:0",
+          actionType: "TRANSFER",
+          entryType: "SEND",
+          direction: "OUT",
+          quantity: "2",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+        createEntry({
+          id: "unrelated-receive-other-asset",
+          actionGroupId: "group-unrelated",
+          txHash: "0xtx-unrelated",
+          sourceLogKey: "log:0xtx-unrelated:1",
+          actionType: "TRANSFER",
+          assetId: LP_ASSET,
+          entryType: "RECEIVE",
+          direction: "IN",
+          quantity: "1",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+      ],
+      resolvePrice: createResolver([
+        createObservation({
+          id: "pls-buy",
+          observedAt: new Date("2026-05-08T12:00:00.000Z"),
+          price: "1",
+        }),
+      ]),
+    });
+
+    expect(result.holdingsQuantity).toBe("10");
+    expect(result.totalDisposedQuantity).toBe("0");
+    expect(result.realizedPnl).toBe("0");
+    expect(
+      result.warnings.some((warning) => warning.code === "UNRESOLVED_ECONOMIC_COUPLING"),
+    ).toBe(true);
+    // Never fabricates a SWAP classification — actionType is caller-provided
+    // input, not something the guard infers or writes back.
+  });
+
+  it("does not trigger the coupling guard from a FEE-only sibling group (fee cannot satisfy the opposite-direction requirement)", async () => {
+    const result = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry({
+          id: "receive-target",
+          actionGroupId: "group-receive",
+          txHash: "0xtx-fee-only",
+          sourceLogKey: "log:0xtx-fee-only:0",
+          actionType: "TRANSFER",
+          entryType: "RECEIVE",
+          direction: "IN",
+          quantity: "10",
+        }),
+        createEntry({
+          id: "gas-fee-sibling",
+          actionGroupId: "group-fee",
+          txHash: "0xtx-fee-only",
+          sourceLogKey: "log:0xtx-fee-only:1",
+          actionType: "TRANSFER",
+          assetId: PLS_ASSET,
+          entryType: "FEE",
+          direction: "OUT",
+          quantity: "1",
+        }),
+      ],
+      resolvePrice: createResolver([]),
+    });
+
+    // Ordinary zero-cost acquisition (e.g. airdrop) — no coupling evidence,
+    // guard must stay silent and preserve normal gas/fee handling.
+    expect(result.holdingsQuantity).toBe("10");
+    expect(result.averageCost).toBe("0");
+    expect(
+      result.warnings.some((warning) => warning.code === "UNRESOLVED_ECONOMIC_COUPLING"),
+    ).toBe(false);
+  });
+
+  it("does not trigger the coupling guard for a correctly normalized SWAP action group (both legs already co-grouped)", async () => {
+    const result = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry(),
+        createEntry({
+          id: "buy-pls",
+          assetId: PLS_ASSET,
+          entryType: "SWAP_OUT",
+          direction: "OUT",
+          quantity: "100",
+        }),
+        createEntry({
+          id: "sell-target",
+          actionGroupId: "group-2",
+          txHash: "0xtx-2",
+          sourceLogKey: "log:0xtx-2:0",
+          entryType: "SWAP_OUT",
+          direction: "OUT",
+          quantity: "4",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+        createEntry({
+          id: "sell-pls",
+          actionGroupId: "group-2",
+          txHash: "0xtx-2",
+          assetId: PLS_ASSET,
+          entryType: "SWAP_IN",
+          direction: "IN",
+          quantity: "60",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+      ],
+      resolvePrice: createResolver([
+        createObservation({
+          id: "pls-buy",
+          observedAt: new Date("2026-05-08T12:00:00.000Z"),
+          price: "1",
+        }),
+        createObservation({
+          id: "pls-sell",
+          observedAt: new Date("2026-05-08T13:00:00.000Z"),
+          price: "1",
+        }),
+      ]),
+    });
+
+    expect(result.holdingsQuantity).toBe("6");
+    expect(result.realizedPnl).toBe("20");
+    expect(
+      result.warnings.some((warning) => warning.code === "UNRESOLVED_ECONOMIC_COUPLING"),
+    ).toBe(false);
+  });
+
   it("warns on unsupported lp and stake actions instead of fabricating truth", async () => {
     const result = await calculateAverageCostPnl({
       walletId: WALLET_ID,
