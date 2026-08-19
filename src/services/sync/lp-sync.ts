@@ -276,7 +276,7 @@ export function normalizeLpActions(args: {
   return drafts;
 }
 
-type AggregatedTransfer = {
+export type AggregatedTransfer = {
   tokenAddress: string;
   assetIdSnapshot: string;
   decimalsSnapshot: number;
@@ -285,7 +285,7 @@ type AggregatedTransfer = {
   rawTokenTransferIds: string[];
 };
 
-type LpShape =
+export type LpShape =
   | {
       ok: true;
       actionKind: "ADD" | "REMOVE";
@@ -322,7 +322,10 @@ function groupTransfersByTransaction(
   return grouped;
 }
 
-function summarizeWalletLpTransfers(args: {
+// Exported so historical canonical-provenance repair can reuse the exact
+// deterministic evidence-selection semantics used by live ingestion instead
+// of maintaining a second implementation that could drift from this one.
+export function summarizeWalletLpTransfers(args: {
   walletAddress: string;
   transfers: readonly WalletTransferSnapshot[];
 }): LpShape {
@@ -422,7 +425,10 @@ function sortPairAssets(transfers: readonly AggregatedTransfer[]) {
   );
 }
 
-function buildLpTransferEvidencePlans(args: {
+// Exported so historical canonical-provenance repair can reuse the exact
+// leg-role assignment used by live ingestion instead of maintaining a second
+// implementation that could drift from this one.
+export function buildLpTransferEvidencePlans(args: {
   chainId: number;
   txHash: string;
   blockHash: string;

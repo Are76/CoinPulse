@@ -990,6 +990,199 @@ export async function readCanonicallyConsumedRawTokenTransferIds(
   }
 }
 
+function toDecimalDigitString(value: unknown): string {
+  // Decimal(78, 0) column: serialize with toFixed() rather than toString().
+  // Prisma.Decimal.toString() emits exponential notation for magnitudes >= 1e21,
+  // which corrupts the digit-only raw string contract relied on downstream.
+  return typeof value === "string" ? value : (value as { toFixed(): string }).toFixed();
+}
+
+/**
+ * Bounded, cursor-paginated scan for ACTIVE RawDexSwap rows whose canonical
+ * raw-transfer provenance has never been evaluated (`rawTransferEvidenceStatus`
+ * is null). Historical provenance repair reads this to find candidates —
+ * it never touches rows already RECORDED or VERIFIED_EMPTY because those are
+ * excluded by the `rawTransferEvidenceStatus: null` filter itself.
+ */
+export async function readRawDexSwapProvenanceRepairCandidates(
+  args: {
+    chainId: number;
+    walletAddress?: string;
+    cursorId?: string | null;
+    take: number;
+  },
+  client: RawDexSwapReadClient = getDb() as never,
+) {
+  const records = await client.rawDexSwap.findMany({
+    where: {
+      chainId: args.chainId,
+      status: "ACTIVE",
+      rawTransferEvidenceStatus: null,
+      ...(args.walletAddress
+        ? { initiatorAddress: args.walletAddress.toLowerCase() }
+        : {}),
+      ...(args.cursorId ? { id: { gt: args.cursorId } } : {}),
+    },
+    orderBy: { id: "asc" },
+    take: args.take,
+    select: {
+      id: true,
+      chainId: true,
+      txHash: true,
+      blockNumber: true,
+      blockHash: true,
+      logIndex: true,
+      initiatorAddress: true,
+      soldAssetIdSnapshot: true,
+      soldAmountRaw: true,
+      boughtAssetIdSnapshot: true,
+      boughtAmountRaw: true,
+    },
+  });
+
+  return records.map((record) => ({
+    id: record.id as string,
+    chainId: record.chainId as number,
+    txHash: record.txHash as string,
+    blockNumber: record.blockNumber as bigint,
+    blockHash: record.blockHash as string,
+    logIndex: record.logIndex as number,
+    initiatorAddress: record.initiatorAddress as string,
+    soldAssetIdSnapshot: record.soldAssetIdSnapshot as string,
+    soldAmountRaw: toDecimalDigitString(record.soldAmountRaw),
+    boughtAssetIdSnapshot: record.boughtAssetIdSnapshot as string,
+    boughtAmountRaw: toDecimalDigitString(record.boughtAmountRaw),
+  }));
+}
+
+/**
+ * Bounded, cursor-paginated scan for ACTIVE RawLpAction rows whose canonical
+ * raw-transfer provenance has never been evaluated. See
+ * readRawDexSwapProvenanceRepairCandidates for the null-status contract.
+ */
+export async function readRawLpActionProvenanceRepairCandidates(
+  args: {
+    chainId: number;
+    walletAddress?: string;
+    cursorId?: string | null;
+    take: number;
+  },
+  client: RawLpActionReadClient = getDb() as never,
+) {
+  const records = await client.rawLpAction.findMany({
+    where: {
+      chainId: args.chainId,
+      status: "ACTIVE",
+      rawTransferEvidenceStatus: null,
+      ...(args.walletAddress
+        ? { initiatorAddress: args.walletAddress.toLowerCase() }
+        : {}),
+      ...(args.cursorId ? { id: { gt: args.cursorId } } : {}),
+    },
+    orderBy: { id: "asc" },
+    take: args.take,
+    select: {
+      id: true,
+      chainId: true,
+      actionKind: true,
+      txHash: true,
+      blockNumber: true,
+      blockHash: true,
+      logIndex: true,
+      initiatorAddress: true,
+      token0AssetIdSnapshot: true,
+      token0AmountRaw: true,
+      token1AssetIdSnapshot: true,
+      token1AmountRaw: true,
+      lpAssetIdSnapshot: true,
+      lpAmountRaw: true,
+    },
+  });
+
+  return records.map((record) => ({
+    id: record.id as string,
+    chainId: record.chainId as number,
+    actionKind: record.actionKind as "ADD" | "REMOVE",
+    txHash: record.txHash as string,
+    blockNumber: record.blockNumber as bigint,
+    blockHash: record.blockHash as string,
+    logIndex: record.logIndex as number,
+    initiatorAddress: record.initiatorAddress as string,
+    token0AssetIdSnapshot: record.token0AssetIdSnapshot as string,
+    token0AmountRaw: toDecimalDigitString(record.token0AmountRaw),
+    token1AssetIdSnapshot: record.token1AssetIdSnapshot as string,
+    token1AmountRaw: toDecimalDigitString(record.token1AmountRaw),
+    lpAssetIdSnapshot: record.lpAssetIdSnapshot as string,
+    lpAmountRaw: toDecimalDigitString(record.lpAmountRaw),
+  }));
+}
+
+/**
+ * Bounded, cursor-paginated scan for ACTIVE RawStakeAction rows whose
+ * canonical raw-transfer provenance has never been evaluated. Scoped to
+ * actionKind START/END and actionIndex 0 because those are the only shapes
+ * the live producer (stake-sync.ts) ever writes; anything else is legacy or
+ * out of current producer scope and must not be repaired here.
+ */
+export async function readRawStakeActionProvenanceRepairCandidates(
+  args: {
+    chainId: number;
+    walletAddress?: string;
+    cursorId?: string | null;
+    take: number;
+  },
+  client: RawStakeActionReadClient = getDb() as never,
+) {
+  const records = await client.rawStakeAction.findMany({
+    where: {
+      chainId: args.chainId,
+      status: "ACTIVE",
+      rawTransferEvidenceStatus: null,
+      actionKind: { in: ["START", "END"] },
+      actionIndex: 0,
+      ...(args.walletAddress
+        ? { initiatorAddress: args.walletAddress.toLowerCase() }
+        : {}),
+      ...(args.cursorId ? { id: { gt: args.cursorId } } : {}),
+    },
+    orderBy: { id: "asc" },
+    take: args.take,
+    select: {
+      id: true,
+      chainId: true,
+      actionKind: true,
+      txHash: true,
+      blockNumber: true,
+      blockHash: true,
+      actionIndex: true,
+      initiatorAddress: true,
+      tokenAddress: true,
+      principalLockedRaw: true,
+      totalReturnedRaw: true,
+    },
+  });
+
+  return records.map((record) => ({
+    id: record.id as string,
+    chainId: record.chainId as number,
+    actionKind: record.actionKind as "START" | "END",
+    txHash: record.txHash as string,
+    blockNumber: record.blockNumber as bigint,
+    blockHash: record.blockHash as string,
+    actionIndex: record.actionIndex as number,
+    initiatorAddress: record.initiatorAddress as string,
+    tokenAddress: record.tokenAddress as string,
+    principalLockedRaw:
+      record.principalLockedRaw === null || record.principalLockedRaw === undefined
+        ? null
+        : toDecimalDigitString(record.principalLockedRaw),
+    totalReturnedRaw:
+      record.totalReturnedRaw === null || record.totalReturnedRaw === undefined
+        ? null
+        : toDecimalDigitString(record.totalReturnedRaw),
+  }));
+}
+
 export async function readWalletRawTransactions(
   args: {
     chainId: number;

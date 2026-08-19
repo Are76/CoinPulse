@@ -344,7 +344,10 @@ function groupTransfersByTransaction(
   return grouped;
 }
 
-function summarizeWalletSwapTransfers(args: {
+// Exported so historical canonical-provenance repair can reuse the exact
+// deterministic evidence-selection semantics used by live ingestion instead
+// of maintaining a second implementation that could drift from this one.
+export function summarizeWalletSwapTransfers(args: {
   walletAddress: string;
   transfers: readonly WalletTransferSnapshot[];
 }) {
