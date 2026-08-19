@@ -62,12 +62,14 @@ export type PnLWarningCode =
   | "UNSUPPORTED_LP_ACTION"
   | "UNSUPPORTED_STAKE_ACTION"
   | "UNSUPPORTED_ACTION_GROUP"
-  | "INSUFFICIENT_COST_BASIS";
+  | "INSUFFICIENT_COST_BASIS"
+  | "UNRESOLVED_ECONOMIC_COUPLING";
 
 export type PnLWarning = {
   code: PnLWarningCode;
   actionGroupId?: string;
   assetId?: string;
+  txHash?: string;
   detail: string;
 };
 

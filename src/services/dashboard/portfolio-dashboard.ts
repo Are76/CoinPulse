@@ -429,7 +429,8 @@ function buildInitialPnlCoverage(args: {
       position.pnl.status === "incomplete_basis" ||
       warningCodes.includes("INSUFFICIENT_COST_BASIS") ||
       warningCodes.includes("COUNTER_ASSET_PRICE_UNAVAILABLE") ||
-      warningCodes.includes("UNSUPPORTED_ACTION_GROUP");
+      warningCodes.includes("UNSUPPORTED_ACTION_GROUP") ||
+      warningCodes.includes("UNRESOLVED_ECONOMIC_COUPLING");
     if (hasIncompleteBasis) {
       incompleteBasisPositionsCount += 1;
       reasons.add("insufficient_cost_basis");
@@ -718,9 +719,12 @@ function toPnlDto(
   if (result.warnings.length > 0) {
     if (
       result.warnings.some((warning) =>
-        ["COUNTER_ASSET_PRICE_UNAVAILABLE", "INSUFFICIENT_COST_BASIS", "UNSUPPORTED_ACTION_GROUP"].includes(
-          warning.code,
-        ),
+        [
+          "COUNTER_ASSET_PRICE_UNAVAILABLE",
+          "INSUFFICIENT_COST_BASIS",
+          "UNSUPPORTED_ACTION_GROUP",
+          "UNRESOLVED_ECONOMIC_COUPLING",
+        ].includes(warning.code),
       )
     ) {
       status = "incomplete_basis";
