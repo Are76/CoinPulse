@@ -311,3 +311,11 @@ explicit product-owner approval — not 1000, regardless of what
 - No continuation of the separately-governed paused chain-wide `TRANSFERS`
   backfill campaign (`scripts/transfer-backfill-runner.ts` and its own
   runbook) — entirely unrelated authorization.
+
+## Related: the completion supervisor
+
+`scripts/wallet-forward-supervisor.ts` is a separate, thin orchestration
+layer that repeatedly invokes this campaign runner (as a child process, one
+bounded child at a time) toward one immutable operator-authorized final
+block, without changing anything described in this runbook. See
+`docs/wallet-forward-supervisor-runbook.md` for its full contract.
