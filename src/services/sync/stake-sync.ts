@@ -523,7 +523,10 @@ function groupTransfersByTransaction(
   return grouped;
 }
 
-function summarizeStakeStartTransfers(args: {
+// Exported so historical canonical-provenance repair can reuse the exact
+// deterministic evidence-selection semantics used by live ingestion instead
+// of maintaining a second implementation that could drift from this one.
+export function summarizeStakeStartTransfers(args: {
   walletAddress: string;
   transfers: readonly WalletTransferSnapshot[];
 }) {
@@ -547,7 +550,10 @@ function summarizeStakeStartTransfers(args: {
   };
 }
 
-function summarizeStakeEndTransfers(args: {
+// Exported so historical canonical-provenance repair can reuse the exact
+// deterministic evidence-selection semantics used by live ingestion instead
+// of maintaining a second implementation that could drift from this one.
+export function summarizeStakeEndTransfers(args: {
   walletAddress: string;
   transfers: readonly WalletTransferSnapshot[];
 }) {
