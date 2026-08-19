@@ -132,8 +132,30 @@ export type PrismaLikeClient = {
   rawTokenTransfer?: {
     findMany(args: unknown): Promise<Array<{ id: string; txHash: string; logIndex: number }>>;
   };
-  $transaction?<T>(callback: (tx: PrismaLikeClient) => Promise<T>): Promise<T>;
+  $transaction?<T>(
+    callback: (tx: PrismaLikeClient) => Promise<T>,
+    options?: { maxWait?: number; timeout?: number },
+  ): Promise<T>;
 };
+
+/**
+ * Bounds for the interactive transaction persistNormalizedLedger opens
+ * around one batch's writes plus reconcileConsumedTransferShadows'
+ * read/delete work. Prisma's defaults (maxWait 2000ms, timeout 5000ms) are a
+ * reasonable floor but leave little headroom once reconciliation adds
+ * several sequential round trips (transfer-group lookup, entry lookup,
+ * raw-transfer lookup, evidence check, deletes) on top of the existing
+ * create/reassignment work. One persistNormalizedLedger call always covers
+ * exactly one bounded sync/rebuild window — the rebuild path is capped by
+ * REBUILD_MAX_BLOCK_SPAN (api/validation.ts, 1000 blocks) and live sync
+ * windows are smaller still — so the batch this transaction ever covers is
+ * bounded, not unbounded, and a generous-but-finite timeout is safe rather
+ * than a workaround for an open-ended workload.
+ */
+const LEDGER_PERSIST_TRANSACTION_OPTIONS = {
+  maxWait: 5_000,
+  timeout: 15_000,
+} as const;
 
 /**
  * Wraps a full Prisma-shaped client (production getDb(), or a Prisma
@@ -201,7 +223,11 @@ export function wrapPrismaClientAsLedgerStore(db: PrismaLikeClient): LedgerStore
         }
       : undefined,
     $transaction: db.$transaction
-      ? (callback) => db.$transaction!((tx) => callback(wrapPrismaClientAsLedgerStore(tx)))
+      ? (callback) =>
+          db.$transaction!(
+            (tx) => callback(wrapPrismaClientAsLedgerStore(tx)),
+            LEDGER_PERSIST_TRANSACTION_OPTIONS,
+          )
       : undefined,
   };
 }
@@ -584,16 +610,42 @@ async function reconcileConsumedTransferShadows(
     }
 
     const entryIdSet = new Set(entryIdsToDelete);
-    const groupIdsToDelete = Array.from(
-      new Set(
-        shadowEntries
-          .filter((entry) => entryIdSet.has(entry.id))
-          .map((entry) => entry.actionGroupId),
-      ),
-    );
+
+    // Safety invariant: a LedgerActionGroup may only be deleted when EVERY
+    // entry it currently owns (not just the proven-consumed ones) is also
+    // being deleted. shadowEntries is the complete membership list per group
+    // (fetched by actionGroupId, unfiltered by sourceLogIndex validity), so
+    // this check catches any group that turns out to have a surviving
+    // sibling entry — never inferred by amount/direction/symbol/ordering,
+    // only exact group/entry identity. A generic TRANSFER group is expected
+    // to always contain exactly one entry (transfer-normalizer.ts), but this
+    // does not rely on that invariant holding.
+    const entryIdsByGroup = new Map<string, string[]>();
+    for (const entry of shadowEntries) {
+      const ids = entryIdsByGroup.get(entry.actionGroupId) ?? [];
+      ids.push(entry.id);
+      entryIdsByGroup.set(entry.actionGroupId, ids);
+    }
+
+    const groupIdsToDelete: string[] = [];
+    for (const [groupId, memberEntryIds] of entryIdsByGroup) {
+      const anyMemberSelected = memberEntryIds.some((id) => entryIdSet.has(id));
+      if (!anyMemberSelected) {
+        continue;
+      }
+      const everyMemberSelected = memberEntryIds.every((id) => entryIdSet.has(id));
+      if (everyMemberSelected) {
+        groupIdsToDelete.push(groupId);
+      }
+      // else: a surviving sibling entry exists in this group — the group and
+      // its unconsumed sibling(s) are preserved; only the consumed shadow
+      // entry (still in entryIdsToDelete below) is removed.
+    }
 
     await reconciliation.deleteEntries({ ids: entryIdsToDelete });
-    await reconciliation.deleteActionGroups({ ids: groupIdsToDelete });
+    if (groupIdsToDelete.length > 0) {
+      await reconciliation.deleteActionGroups({ ids: groupIdsToDelete });
+    }
 
     entryCount += entryIdsToDelete.length;
     actionGroupCount += groupIdsToDelete.length;

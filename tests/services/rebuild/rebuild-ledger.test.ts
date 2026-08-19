@@ -1229,6 +1229,130 @@ describe("rebuildCanonicalLedger", () => {
     expect(phexMovements(stores, PHEX_ASSET_ID)).toHaveLength(2);
   });
 
+  // ─── Group-deletion safety: a LedgerActionGroup may only be deleted when
+  // every entry it owns is also being deleted (CodeRabbit critical finding).
+  // transfer-normalizer.ts never actually produces a multi-entry TRANSFER
+  // group, but reconcileConsumedTransferShadows must not rely on that
+  // invariant holding — these tests force two entries into the same group
+  // directly via seedLedger to prove the safety check itself, independent
+  // of whether the assumption it guards against can occur today.
+
+  it("reconciliation partial-group: deletes only the consumed shadow entry, preserves the group and its surviving sibling", async () => {
+    const stores = createMemoryDb();
+    const { PHEX_ASSET_ID, TX_HASH } = seedP1Fixture(stores);
+
+    // Two entries deliberately sharing one actionGroupKey/actionGroupId: one
+    // matches the evidenced transfer exactly (sourceLogIndex 3), one does
+    // not (sourceLogIndex 9, no evidence) — simulating a group that, for
+    // whatever reason, is not the usual single-entry TRANSFER shape.
+    await seedLedger(stores.db, [
+      createDraft({
+        txHash: TX_HASH,
+        actionType: "TRANSFER",
+        actionGroupKey: "shared-group",
+        dedupeKey: "shared-group-consumed",
+        assetId: PHEX_ASSET_ID,
+        quantity: "10000",
+        entryType: "RECEIVE",
+        direction: "IN",
+        sourceLogIndex: 3,
+        sourceLogKey: `log:${TX_HASH}:3:transfer:receive`,
+      }),
+      createDraft({
+        txHash: TX_HASH,
+        actionType: "TRANSFER",
+        actionGroupKey: "shared-group",
+        dedupeKey: "shared-group-surviving",
+        assetId: PHEX_ASSET_ID,
+        quantity: "10000",
+        entryType: "RECEIVE",
+        direction: "IN",
+        sourceLogIndex: 9,
+        sourceLogKey: `log:${TX_HASH}:9:transfer:receive`,
+      }),
+    ]);
+
+    const groupsBefore = Array.from(stores.ledgerActionGroups.values()).filter(
+      (g) => g.actionGroupKey === "shared-group",
+    );
+    expect(groupsBefore).toHaveLength(1);
+    const sharedGroupId = groupsBefore[0]!.id;
+    expect(
+      Array.from(stores.ledgerEntries.values()).filter((e) => e.actionGroupId === sharedGroupId),
+    ).toHaveLength(2);
+
+    await rebuildCanonicalLedger({
+      db: stores.db as never,
+      wallet: { id: WALLET_ID, chainId: 369, address: WALLET_ADDRESS },
+      fromBlock: 200n,
+      toBlock: 200n,
+      sourceFamilies: ["STAKING"],
+      normalizerVersion: "v1",
+    });
+
+    // The group survives (FK-valid: still referenced by its surviving entry).
+    expect(stores.ledgerActionGroups.has(sharedGroupId)).toBe(true);
+
+    const survivingGroupEntries = Array.from(stores.ledgerEntries.values()).filter(
+      (e) => e.actionGroupId === sharedGroupId,
+    );
+    expect(survivingGroupEntries).toHaveLength(1);
+    expect(survivingGroupEntries[0]?.sourceLogIndex).toBe(9);
+    expect(survivingGroupEntries[0]?.dedupeKey).toBe("shared-group-surviving");
+
+    // No orphaned entry: every remaining LedgerEntry.actionGroupId still
+    // resolves to an existing LedgerActionGroup.
+    for (const entry of stores.ledgerEntries.values()) {
+      expect(stores.ledgerActionGroups.has(entry.actionGroupId)).toBe(true);
+    }
+
+    expect(Array.from(stores.ledgerEntries.values()).some((e) => e.entryType === "STAKE_RETURN_UNALLOCATED")).toBe(
+      true,
+    );
+  });
+
+  it("reconciliation fully-consumed-group: deletes the entry and safely removes the now-empty group", async () => {
+    const stores = createMemoryDb();
+    const { TX_HASH } = seedP1Fixture(stores);
+
+    await seedLedger(stores.db, [
+      createDraft({
+        txHash: TX_HASH,
+        actionType: "TRANSFER",
+        actionGroupKey: "fully-consumed-group",
+        dedupeKey: "fully-consumed-only-entry",
+        assetId: "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+        quantity: "10000",
+        entryType: "RECEIVE",
+        direction: "IN",
+        sourceLogIndex: 3,
+        sourceLogKey: `log:${TX_HASH}:3:transfer:receive`,
+      }),
+    ]);
+
+    const sharedGroupId = Array.from(stores.ledgerActionGroups.values()).find(
+      (g) => g.actionGroupKey === "fully-consumed-group",
+    )!.id;
+
+    await rebuildCanonicalLedger({
+      db: stores.db as never,
+      wallet: { id: WALLET_ID, chainId: 369, address: WALLET_ADDRESS },
+      fromBlock: 200n,
+      toBlock: 200n,
+      sourceFamilies: ["STAKING"],
+      normalizerVersion: "v1",
+    });
+
+    expect(stores.ledgerActionGroups.has(sharedGroupId)).toBe(false);
+    expect(
+      Array.from(stores.ledgerEntries.values()).some((e) => e.actionGroupId === sharedGroupId),
+    ).toBe(false);
+    // No orphan anywhere in the store.
+    for (const entry of stores.ledgerEntries.values()) {
+      expect(stores.ledgerActionGroups.has(entry.actionGroupId)).toBe(true);
+    }
+  });
+
   it("P1-F: repeated STAKING-only reconciliation is idempotent", async () => {
     const stores = createMemoryDb();
     const { PHEX_ASSET_ID, TX_HASH } = seedP1Fixture(stores);

@@ -56,6 +56,7 @@ type StakePositionRecord = {
   returnedQuantity: string;
   yieldQuantity: string | null;
   penaltyQuantity: string | null;
+  unallocatedReturnedQuantity: string | null;
   status: string;
   startBlock: bigint | null;
   endBlock: bigint | null;
