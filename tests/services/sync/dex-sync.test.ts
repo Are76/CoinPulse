@@ -101,6 +101,7 @@ function createMemoryStores() {
   const rawTokenTransfers = new Map<string, RawTokenTransferRecord>();
   const rawTransactions = new Map<string, RawTransactionRecord>();
   const rawDexSwaps = new Map<string, RawDexSwapRecord>();
+  const rawDexSwapTransferEvidence = new Map<string, Record<string, unknown>>();
   const tokens = new Map<string, TokenRecord>();
   const tokenMetadataSources = new Map<string, Record<string, unknown>>();
   const ledgerActionGroups = new Map<string, Record<string, unknown>>();
@@ -327,18 +328,37 @@ function createMemoryStores() {
       },
       async findMany(args: {
         where: {
-          chainId: number;
-          status: "ACTIVE";
-          blockNumber: { gte: bigint; lte: bigint };
-          initiatorAddress: string;
+          chainId?: number;
+          status?: "ACTIVE";
+          blockNumber?: { gte: bigint; lte: bigint };
+          initiatorAddress?: string;
+          OR?: Array<{
+            chainId: number;
+            txHash: string;
+            blockHash: string;
+            logIndex: number;
+          }>;
         };
       }) {
+        if (args.where.OR) {
+          return Array.from(rawDexSwaps.values()).filter((item) =>
+            args.where.OR?.some(
+              (identity) =>
+                item.chainId === identity.chainId &&
+                item.txHash === identity.txHash &&
+                item.blockHash === identity.blockHash &&
+                item.logIndex === identity.logIndex,
+            ),
+          );
+        }
+
         return Array.from(rawDexSwaps.values())
           .filter(
             (item) =>
               item.chainId === args.where.chainId &&
               item.status === args.where.status &&
               item.initiatorAddress === args.where.initiatorAddress &&
+              args.where.blockNumber !== undefined &&
               item.blockNumber >= args.where.blockNumber.gte &&
               item.blockNumber <= args.where.blockNumber.lte,
           )
@@ -349,6 +369,25 @@ function createMemoryStores() {
           );
       },
       updateMany: vi.fn(async () => ({ count: 0 })),
+    },
+    rawDexSwapTransferEvidence: {
+      async createMany(args: {
+        data: Array<{
+          rawDexSwapId: string;
+          rawTokenTransferId: string;
+          legRole: string;
+        }>;
+      }) {
+        let count = 0;
+        for (const item of args.data) {
+          const key = `${item.rawDexSwapId}:${item.legRole}:${item.rawTokenTransferId}`;
+          if (!rawDexSwapTransferEvidence.has(key)) {
+            rawDexSwapTransferEvidence.set(key, item);
+            count += 1;
+          }
+        }
+        return { count };
+      },
     },
     token: {
       async findUnique(args: {
@@ -564,6 +603,7 @@ function createMemoryStores() {
   return {
     db,
     rawDexSwaps,
+    rawDexSwapTransferEvidence,
     rawTransactions,
     ledgerActionGroups,
     ledgerEntries,
@@ -722,6 +762,10 @@ describe("dex sync flow", () => {
     });
     expect(stores.rawTransactions.size).toBe(1);
     expect(stores.rawDexSwaps.size).toBe(1);
+    expect(stores.rawDexSwapTransferEvidence.size).toBe(2);
+    expect(
+      Array.from(stores.rawDexSwapTransferEvidence.values()).map((row) => row.legRole),
+    ).toEqual(["SOLD", "BOUGHT"]);
     expect(Array.from(stores.ledgerEntries.values()).map((entry) => entry.entryType)).toEqual([
       "SWAP_OUT",
       "SWAP_IN",
@@ -931,5 +975,167 @@ describe("dex sync flow", () => {
     expect(completedRun?.structuredWarnings?.warnings).toHaveLength(1);
     expect(completedRun?.structuredWarnings?.warnings[0].code).toBe("UNKNOWN");
     expect(completedRun?.structuredWarnings?.warnings[0].detail).toContain("skip-dex");
+  });
+
+  it("persists all exact transfer evidence for aggregated swap legs and excludes unrelated same-tx transfers", async () => {
+    const stores = createMemoryStores();
+    const walletAddress = "0x1111111111111111111111111111111111111111";
+    const walletTopic =
+      "0x0000000000000000000000001111111111111111111111111111111111111111";
+    const dependencies = createSyncDependencies({
+      db: stores.db as never,
+      publicClient: {
+        getLogs: vi.fn(async (args: { topics?: readonly (string | readonly string[] | null)[] }) => {
+          const outgoing = args.topics?.[1] === walletTopic;
+          return outgoing
+            ? [
+                {
+                  address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  blockHash: "0xblock102",
+                  blockNumber: 102n,
+                  data: "0x00000000000000000000000000000000000000000000000000000000004c4b40",
+                  logIndex: 1,
+                  transactionHash: "0xmultiswap",
+                  topics: [
+                    TRANSFER_EVENT_TOPIC0,
+                    walletTopic,
+                    "0x0000000000000000000000009999999999999999999999999999999999999999",
+                  ],
+                },
+                {
+                  address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  blockHash: "0xblock102",
+                  blockNumber: 102n,
+                  data: "0x00000000000000000000000000000000000000000000000000000000004c4b40",
+                  logIndex: 2,
+                  transactionHash: "0xmultiswap",
+                  topics: [
+                    TRANSFER_EVENT_TOPIC0,
+                    walletTopic,
+                    "0x0000000000000000000000008888888888888888888888888888888888888888",
+                  ],
+                },
+                {
+                  address: "0xcccccccccccccccccccccccccccccccccccccccc",
+                  blockHash: "0xblock102",
+                  blockNumber: 102n,
+                  data: "0x00000000000000000000000000000000000000000000000000000000004c4b40",
+                  logIndex: 4,
+                  transactionHash: "0xmultiswap",
+                  topics: [
+                    TRANSFER_EVENT_TOPIC0,
+                    "0x0000000000000000000000007777777777777777777777777777777777777777",
+                    "0x0000000000000000000000006666666666666666666666666666666666666666",
+                  ],
+                },
+              ]
+            : [
+                {
+                  address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  blockHash: "0xblock102",
+                  blockNumber: 102n,
+                  data: "0x00000000000000000000000000000000000000000000000000000000004c4b40",
+                  logIndex: 6,
+                  transactionHash: "0xmultiswap",
+                  topics: [
+                    TRANSFER_EVENT_TOPIC0,
+                    "0x0000000000000000000000009999999999999999999999999999999999999999",
+                    walletTopic,
+                  ],
+                },
+                {
+                  address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  blockHash: "0xblock102",
+                  blockNumber: 102n,
+                  data: "0x00000000000000000000000000000000000000000000000000000000004c4b40",
+                  logIndex: 7,
+                  transactionHash: "0xmultiswap",
+                  topics: [
+                    TRANSFER_EVENT_TOPIC0,
+                    "0x0000000000000000000000008888888888888888888888888888888888888888",
+                    walletTopic,
+                  ],
+                },
+              ];
+        }),
+        getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+          number: blockNumber,
+          hash: "0xblock102",
+          parentHash: "0xblock101",
+          timestamp: 1_700_000_200n,
+        })),
+        readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
+          if (functionName === "decimals") return 6;
+          if (functionName === "symbol") return "TOK";
+          return "Token";
+        }),
+        getTransaction: vi.fn(async () => ({
+          hash: "0xmultiswap",
+          blockHash: "0xblock102",
+          blockNumber: 102n,
+          transactionIndex: 0,
+          from: walletAddress,
+          to: "0x7777777777777777777777777777777777777777",
+          value: 0n,
+          gasPrice: 2_000_000_000n,
+        })),
+        getTransactionReceipt: vi.fn(async () => ({
+          transactionHash: "0xmultiswap",
+          blockHash: "0xblock102",
+          blockNumber: 102n,
+          gasUsed: 100_000n,
+          effectiveGasPrice: 2_000_000_000n,
+          logs: [
+            {
+              address: "0x9999999999999999999999999999999999999999",
+              blockHash: "0xblock102",
+              blockNumber: 102n,
+              logIndex: 5,
+              transactionHash: "0xmultiswap",
+              topics: [SWAP_EVENT_TOPIC0],
+              data: "0x",
+            },
+          ],
+        })),
+      } as never,
+    });
+
+    const first = await runWalletSync({
+      wallet: { id: "wallet_1", chainId: 369, address: walletAddress },
+      sourceFamilies: ["DEX"],
+      startBlock: 102n,
+      endBlock: 102n,
+      policyLabel: "dex-multi-leg",
+      dependencies,
+    });
+    const second = await runWalletSync({
+      wallet: { id: "wallet_1", chainId: 369, address: walletAddress },
+      sourceFamilies: ["DEX"],
+      startBlock: 102n,
+      endBlock: 102n,
+      policyLabel: "dex-multi-leg",
+      dependencies,
+    });
+
+    expect(first.counts.ledgerEntries).toBe(3);
+    expect(second.counts.ledgerEntries).toBe(0);
+    expect(stores.rawDexSwaps.size).toBe(1);
+    expect([...stores.rawDexSwaps.values()][0]).toMatchObject({
+      soldAmountRaw: "10000000",
+      boughtAmountRaw: "10000000",
+    });
+    const evidence = Array.from(stores.rawDexSwapTransferEvidence.values());
+    expect(evidence).toHaveLength(4);
+    expect(evidence.filter((row) => row.legRole === "SOLD").map((row) => row.rawTokenTransferId)).toEqual([
+      "369:0xmultiswap:1:0xblock102",
+      "369:0xmultiswap:2:0xblock102",
+    ]);
+    expect(evidence.filter((row) => row.legRole === "BOUGHT").map((row) => row.rawTokenTransferId)).toEqual([
+      "369:0xmultiswap:6:0xblock102",
+      "369:0xmultiswap:7:0xblock102",
+    ]);
+    expect(evidence.map((row) => row.rawTokenTransferId)).not.toContain(
+      "369:0xmultiswap:4:0xblock102",
+    );
   });
 });

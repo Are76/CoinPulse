@@ -6,6 +6,7 @@ import { CORE_ASSETS, PHEX_ADDRESS, PHEX_DECIMALS } from "@/config/assets";
 import { CORE_PROTOCOLS } from "@/config/protocols";
 import {
   persistRawStakeActions,
+  persistRawStakeActionTransferEvidence,
   persistRawTransactions,
   readStakeStartSnapshotByStakeId,
   readWalletRawStakeActions,
@@ -262,6 +263,21 @@ export async function ingestStakeActions(args: {
         args.db as never,
       );
 
+      await persistRawStakeActionTransferEvidence(
+        [
+          {
+            chainId: args.wallet.chainId,
+            txHash: transaction.hash,
+            blockHash: transaction.blockHash,
+            actionKind: "START",
+            actionIndex: 0,
+            legRole: "PRINCIPAL_LOCKED_OUT",
+            rawTokenTransferIds: startShape.rawTokenTransferIds,
+          },
+        ],
+        args.db as never,
+      );
+
       continue;
     }
 
@@ -331,6 +347,21 @@ export async function ingestStakeActions(args: {
           feeAssetIdSnapshot: NATIVE_SWAP_FEE_ASSET.assetId,
           feeDecimalsSnapshot: NATIVE_SWAP_FEE_ASSET.decimals,
           feeAmountRaw: (receipt.gasUsed * feeGasPrice).toString(),
+        },
+      ],
+      args.db as never,
+    );
+
+    await persistRawStakeActionTransferEvidence(
+      [
+        {
+          chainId: args.wallet.chainId,
+          txHash: transaction.hash,
+          blockHash: transaction.blockHash,
+          actionKind: "END",
+          actionIndex: 0,
+          legRole: "RETURN_IN",
+          rawTokenTransferIds: endShape.rawTokenTransferIds,
         },
       ],
       args.db as never,
@@ -510,7 +541,10 @@ function summarizeStakeStartTransfers(args: {
     };
   }
 
-  return { ok: true as const };
+  return {
+    ok: true as const,
+    rawTokenTransferIds: outbound.map((transfer) => transfer.id),
+  };
 }
 
 function summarizeStakeEndTransfers(args: {
@@ -534,5 +568,6 @@ function summarizeStakeEndTransfers(args: {
   return {
     ok: true as const,
     totalReturnedRaw: inbound[0].amountRaw,
+    rawTokenTransferIds: [inbound[0].id],
   };
 }

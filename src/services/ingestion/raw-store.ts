@@ -133,6 +133,30 @@ export type PersistRawStakeActionInput = {
   feeAmountRaw: string;
 };
 
+type RawActionTransferEvidenceInputBase = {
+  chainId: number;
+  txHash: string;
+  blockHash: string;
+  legRole: string;
+  rawTokenTransferIds: readonly string[];
+};
+
+export type PersistRawDexSwapTransferEvidenceInput =
+  RawActionTransferEvidenceInputBase & {
+    logIndex: number;
+  };
+
+export type PersistRawLpActionTransferEvidenceInput =
+  RawActionTransferEvidenceInputBase & {
+    logIndex: number;
+  };
+
+export type PersistRawStakeActionTransferEvidenceInput =
+  RawActionTransferEvidenceInputBase & {
+    actionKind: "START" | "END";
+    actionIndex: number;
+  };
+
 type RawLogReadClient = {
   rawLog: {
     findMany(args: {
@@ -342,6 +366,54 @@ type RawStakeActionReadClient = {
   rawStakeAction: {
     findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
     findFirst?(args: unknown): Promise<Record<string, unknown> | null>;
+  };
+};
+
+type RawDexSwapTransferEvidenceStoreClient = RawDexSwapReadClient & {
+  rawDexSwap: RawDexSwapReadClient["rawDexSwap"] & {
+    updateMany(args: unknown): Promise<{ count: number }>;
+  };
+  rawDexSwapTransferEvidence: {
+    createMany(args: {
+      data: Array<{
+        rawDexSwapId: string;
+        rawTokenTransferId: string;
+        legRole: string;
+      }>;
+      skipDuplicates: boolean;
+    }): Promise<{ count: number }>;
+  };
+};
+
+type RawLpActionTransferEvidenceStoreClient = RawLpActionReadClient & {
+  rawLpAction: RawLpActionReadClient["rawLpAction"] & {
+    updateMany(args: unknown): Promise<{ count: number }>;
+  };
+  rawLpActionTransferEvidence: {
+    createMany(args: {
+      data: Array<{
+        rawLpActionId: string;
+        rawTokenTransferId: string;
+        legRole: string;
+      }>;
+      skipDuplicates: boolean;
+    }): Promise<{ count: number }>;
+  };
+};
+
+type RawStakeActionTransferEvidenceStoreClient = RawStakeActionReadClient & {
+  rawStakeAction: RawStakeActionReadClient["rawStakeAction"] & {
+    updateMany(args: unknown): Promise<{ count: number }>;
+  };
+  rawStakeActionTransferEvidence: {
+    createMany(args: {
+      data: Array<{
+        rawStakeActionId: string;
+        rawTokenTransferId: string;
+        legRole: string;
+      }>;
+      skipDuplicates: boolean;
+    }): Promise<{ count: number }>;
   };
 };
 
@@ -559,6 +631,197 @@ export async function persistRawStakeActions(
   });
 }
 
+export async function persistRawDexSwapTransferEvidence(
+  plans: readonly PersistRawDexSwapTransferEvidenceInput[],
+  client: RawDexSwapTransferEvidenceStoreClient = getDb() as never,
+) {
+  if (plans.length === 0) {
+    return { count: 0 };
+  }
+
+  const actionRows = await client.rawDexSwap.findMany({
+    where: {
+      OR: plans.map((plan) => ({
+        chainId: plan.chainId,
+        txHash: plan.txHash.toLowerCase(),
+        blockHash: plan.blockHash.toLowerCase(),
+        logIndex: plan.logIndex,
+      })),
+    },
+    select: {
+      id: true,
+      chainId: true,
+      txHash: true,
+      blockHash: true,
+      logIndex: true,
+    },
+  });
+  const actionIdByIdentity = new Map(
+    actionRows.map((row) => [
+      rawLogActionIdentity(row as RawLogActionIdentity),
+      typeof row.id === "string"
+        ? row.id
+        : rawLogActionIdentity(row as RawLogActionIdentity),
+    ]),
+  );
+  const rows = plans.flatMap((plan) => {
+    const rawDexSwapId = actionIdByIdentity.get(rawLogActionIdentity(plan));
+    if (!rawDexSwapId) {
+      return [];
+    }
+
+    return uniqueStrings(plan.rawTokenTransferIds).map((rawTokenTransferId) => ({
+      rawDexSwapId,
+      rawTokenTransferId,
+      legRole: plan.legRole,
+    }));
+  });
+
+  await updateRawActionEvidenceStatuses({
+    model: client.rawDexSwap,
+    actionIdByIdentity,
+    plans,
+    identity: rawLogActionIdentity,
+  });
+
+  if (rows.length === 0) {
+    return { count: 0 };
+  }
+
+  return client.rawDexSwapTransferEvidence.createMany({
+    data: rows,
+    skipDuplicates: true,
+  });
+}
+
+export async function persistRawLpActionTransferEvidence(
+  plans: readonly PersistRawLpActionTransferEvidenceInput[],
+  client: RawLpActionTransferEvidenceStoreClient = getDb() as never,
+) {
+  if (plans.length === 0) {
+    return { count: 0 };
+  }
+
+  const actionRows = await client.rawLpAction.findMany({
+    where: {
+      OR: plans.map((plan) => ({
+        chainId: plan.chainId,
+        txHash: plan.txHash.toLowerCase(),
+        blockHash: plan.blockHash.toLowerCase(),
+        logIndex: plan.logIndex,
+      })),
+    },
+    select: {
+      id: true,
+      chainId: true,
+      txHash: true,
+      blockHash: true,
+      logIndex: true,
+    },
+  });
+  const actionIdByIdentity = new Map(
+    actionRows.map((row) => [
+      rawLogActionIdentity(row as RawLogActionIdentity),
+      typeof row.id === "string"
+        ? row.id
+        : rawLogActionIdentity(row as RawLogActionIdentity),
+    ]),
+  );
+  const rows = plans.flatMap((plan) => {
+    const rawLpActionId = actionIdByIdentity.get(rawLogActionIdentity(plan));
+    if (!rawLpActionId) {
+      return [];
+    }
+
+    return uniqueStrings(plan.rawTokenTransferIds).map((rawTokenTransferId) => ({
+      rawLpActionId,
+      rawTokenTransferId,
+      legRole: plan.legRole,
+    }));
+  });
+
+  await updateRawActionEvidenceStatuses({
+    model: client.rawLpAction,
+    actionIdByIdentity,
+    plans,
+    identity: rawLogActionIdentity,
+  });
+
+  if (rows.length === 0) {
+    return { count: 0 };
+  }
+
+  return client.rawLpActionTransferEvidence.createMany({
+    data: rows,
+    skipDuplicates: true,
+  });
+}
+
+export async function persistRawStakeActionTransferEvidence(
+  plans: readonly PersistRawStakeActionTransferEvidenceInput[],
+  client: RawStakeActionTransferEvidenceStoreClient = getDb() as never,
+) {
+  if (plans.length === 0) {
+    return { count: 0 };
+  }
+
+  const actionRows = await client.rawStakeAction.findMany({
+    where: {
+      OR: plans.map((plan) => ({
+        chainId: plan.chainId,
+        txHash: plan.txHash.toLowerCase(),
+        blockHash: plan.blockHash.toLowerCase(),
+        actionKind: plan.actionKind,
+        actionIndex: plan.actionIndex,
+      })),
+    },
+    select: {
+      id: true,
+      chainId: true,
+      txHash: true,
+      blockHash: true,
+      actionKind: true,
+      actionIndex: true,
+    },
+  });
+  const actionIdByIdentity = new Map(
+    actionRows.map((row) => [
+      rawStakeActionIdentity(row as RawStakeActionIdentity),
+      typeof row.id === "string"
+        ? row.id
+        : rawStakeActionIdentity(row as RawStakeActionIdentity),
+    ]),
+  );
+  const rows = plans.flatMap((plan) => {
+    const rawStakeActionId = actionIdByIdentity.get(rawStakeActionIdentity(plan));
+    if (!rawStakeActionId) {
+      return [];
+    }
+
+    return uniqueStrings(plan.rawTokenTransferIds).map((rawTokenTransferId) => ({
+      rawStakeActionId,
+      rawTokenTransferId,
+      legRole: plan.legRole,
+    }));
+  });
+
+  await updateRawActionEvidenceStatuses({
+    model: client.rawStakeAction,
+    actionIdByIdentity,
+    plans,
+    identity: rawStakeActionIdentity,
+  });
+
+  if (rows.length === 0) {
+    return { count: 0 };
+  }
+
+  return client.rawStakeActionTransferEvidence.createMany({
+    data: rows,
+    skipDuplicates: true,
+  });
+}
+
 export async function readWalletTransferRawLogs(
   args: {
     chainId: number;
@@ -611,6 +874,10 @@ export async function readWalletTransferRawTokenTransfers(
 
   return records.map((record) => ({
     chainId: record.chainId as number,
+    id:
+      typeof record.id === "string"
+        ? record.id
+        : rawLogActionIdentity(record as RawLogActionIdentity),
     tokenId: record.tokenId as string,
     tokenAddress: record.tokenAddress as string,
     assetIdSnapshot: record.assetIdSnapshot as string,
@@ -771,6 +1038,10 @@ export async function readWalletDexSwapSnapshots(
 
   return records.map((record) => ({
     chainId: record.chainId as number,
+    id:
+      typeof record.id === "string"
+        ? record.id
+        : rawLogActionIdentity(record as RawLogActionIdentity),
     protocolSlug: record.protocolSlug as string,
     txHash: record.txHash as string,
     blockNumber: record.blockNumber as bigint,
@@ -834,6 +1105,10 @@ export async function readWalletRawLpActions(
 
   return records.map((record) => ({
     chainId: record.chainId as number,
+    id:
+      typeof record.id === "string"
+        ? record.id
+        : rawLogActionIdentity(record as RawLogActionIdentity),
     protocolSlug: record.protocolSlug as string,
     actionKind: record.actionKind as "ADD" | "REMOVE",
     txHash: record.txHash as string,
@@ -905,6 +1180,10 @@ export async function readWalletRawStakeActions(
 
   return records.map((record) => ({
     chainId: record.chainId as number,
+    id:
+      typeof record.id === "string"
+        ? record.id
+        : rawStakeActionIdentity(record as RawStakeActionIdentity),
     protocolSlug: record.protocolSlug as string,
     actionKind: record.actionKind as "START" | "END",
     txHash: record.txHash as string,
@@ -1092,4 +1371,82 @@ export async function markRawDataRangeReorged(
 
 function toTopicAddress(address: string) {
   return `0x000000000000000000000000${address.toLowerCase().replace(/^0x/, "")}`;
+}
+
+type RawLogActionIdentity = {
+  chainId: number;
+  txHash: string;
+  blockHash: string;
+  logIndex: number;
+};
+
+type RawStakeActionIdentity = {
+  chainId: number;
+  txHash: string;
+  blockHash: string;
+  actionKind: string;
+  actionIndex: number;
+};
+
+function rawLogActionIdentity(value: RawLogActionIdentity) {
+  return `${value.chainId}:${value.txHash.toLowerCase()}:${value.logIndex}:${value.blockHash.toLowerCase()}`;
+}
+
+function rawStakeActionIdentity(value: RawStakeActionIdentity) {
+  return `${value.chainId}:${value.txHash.toLowerCase()}:${value.actionKind}:${value.actionIndex}:${value.blockHash.toLowerCase()}`;
+}
+
+function uniqueStrings(values: readonly string[]) {
+  return Array.from(new Set(values));
+}
+
+async function updateRawActionEvidenceStatuses<TPlan extends { rawTokenTransferIds: readonly string[] }>(args: {
+  model: { updateMany(args: unknown): Promise<{ count: number }> };
+  actionIdByIdentity: Map<string, string>;
+  plans: readonly TPlan[];
+  identity: (plan: TPlan) => string;
+}) {
+  const recordedIds: string[] = [];
+  const verifiedEmptyIds: string[] = [];
+
+  for (const plan of args.plans) {
+    const id = args.actionIdByIdentity.get(args.identity(plan));
+    if (!id) {
+      continue;
+    }
+
+    if (plan.rawTokenTransferIds.length > 0) {
+      recordedIds.push(id);
+    } else {
+      verifiedEmptyIds.push(id);
+    }
+  }
+
+  await updateRawActionEvidenceStatus(args.model, uniqueStrings(recordedIds), "RECORDED");
+  await updateRawActionEvidenceStatus(
+    args.model,
+    uniqueStrings(verifiedEmptyIds),
+    "VERIFIED_EMPTY",
+  );
+}
+
+async function updateRawActionEvidenceStatus(
+  model: { updateMany(args: unknown): Promise<{ count: number }> },
+  ids: readonly string[],
+  status: "RECORDED" | "VERIFIED_EMPTY",
+) {
+  if (ids.length === 0) {
+    return;
+  }
+
+  await model.updateMany({
+    where: {
+      id: {
+        in: [...ids],
+      },
+    },
+    data: {
+      rawTransferEvidenceStatus: status,
+    },
+  });
 }

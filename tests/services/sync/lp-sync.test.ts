@@ -63,6 +63,7 @@ function createMemoryStores() {
   const rawTokenTransfers = new Map<string, RawTokenTransferRecord>();
   const rawTransactions = new Map<string, RawTransactionRecord>();
   const rawLpActions = new Map<string, RawLpActionRecord>();
+  const rawLpActionTransferEvidence = new Map<string, Record<string, unknown>>();
   const tokens = new Map<string, Record<string, unknown>>();
   const tokenMetadataSources = new Map<string, Record<string, unknown>>();
   const ledgerActionGroups = new Map<string, Record<string, unknown>>();
@@ -230,6 +231,21 @@ function createMemoryStores() {
         return { count };
       },
       async findMany(args: { where: { chainId: number; status: "ACTIVE"; blockNumber: { gte: bigint; lte: bigint }; initiatorAddress: string } }) {
+        if ("OR" in args.where && Array.isArray((args.where as { OR?: unknown }).OR)) {
+          const identities = (args.where as {
+            OR: Array<{ chainId: number; txHash: string; blockHash: string; logIndex: number }>;
+          }).OR;
+          return Array.from(rawLpActions.values()).filter((item) =>
+            identities.some(
+              (identity) =>
+                item.chainId === identity.chainId &&
+                item.txHash === identity.txHash &&
+                item.blockHash === identity.blockHash &&
+                item.logIndex === identity.logIndex,
+            ),
+          );
+        }
+
         return Array.from(rawLpActions.values())
           .filter(
             (item) =>
@@ -246,6 +262,25 @@ function createMemoryStores() {
           );
       },
       updateMany: vi.fn(async () => ({ count: 0 })),
+    },
+    rawLpActionTransferEvidence: {
+      async createMany(args: {
+        data: Array<{
+          rawLpActionId: string;
+          rawTokenTransferId: string;
+          legRole: string;
+        }>;
+      }) {
+        let count = 0;
+        for (const item of args.data) {
+          const key = `${item.rawLpActionId}:${item.legRole}:${item.rawTokenTransferId}`;
+          if (!rawLpActionTransferEvidence.has(key)) {
+            rawLpActionTransferEvidence.set(key, item);
+            count += 1;
+          }
+        }
+        return { count };
+      },
     },
     rawDexSwap: {
       updateMany: vi.fn(async () => ({ count: 0 })),
@@ -392,6 +427,7 @@ function createMemoryStores() {
   return {
     db,
     rawLpActions,
+    rawLpActionTransferEvidence,
     rawTransactions,
     ledgerEntries,
     cursors,
@@ -591,6 +627,132 @@ describe("lp sync flow", () => {
     });
     expect(stores.rawTransactions.size).toBe(1);
     expect(stores.rawLpActions.size).toBe(1);
+    expect(
+      Array.from(stores.rawLpActionTransferEvidence.values()).map((row) => row.legRole),
+    ).toEqual(["TOKEN0_OUT", "TOKEN1_OUT", "LP_IN"]);
+  });
+
+  it("persists many-to-one lp evidence and does not claim unrelated transfer rows", async () => {
+    const stores = createMemoryStores();
+    const walletAddress = "0x1111111111111111111111111111111111111111";
+    const walletTopic =
+      "0x0000000000000000000000001111111111111111111111111111111111111111";
+    const dependencies = createSyncDependencies({
+      db: stores.db as never,
+      publicClient: {
+        getLogs: vi.fn(async (args: { topics?: readonly (string | readonly string[] | null)[] }) => {
+          const outgoing = args.topics?.[1] === walletTopic;
+          return outgoing
+            ? [
+                {
+                  address: "0xtoken0",
+                  blockHash: "0xblock123",
+                  blockNumber: 123n,
+                  data: "0x0000000000000000000000000000000000000000000000000000000000000064",
+                  logIndex: 1,
+                  transactionHash: "0xlpmulti",
+                  topics: [TRANSFER_EVENT_TOPIC0, walletTopic, "0x000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+                },
+                {
+                  address: "0xtoken0",
+                  blockHash: "0xblock123",
+                  blockNumber: 123n,
+                  data: "0x0000000000000000000000000000000000000000000000000000000000000064",
+                  logIndex: 2,
+                  transactionHash: "0xlpmulti",
+                  topics: [TRANSFER_EVENT_TOPIC0, walletTopic, "0x000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+                },
+                {
+                  address: "0xtoken1",
+                  blockHash: "0xblock123",
+                  blockNumber: 123n,
+                  data: "0x0000000000000000000000000000000000000000000000000000000000000032",
+                  logIndex: 3,
+                  transactionHash: "0xlpmulti",
+                  topics: [TRANSFER_EVENT_TOPIC0, walletTopic, "0x000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+                },
+                {
+                  address: "0xnoise",
+                  blockHash: "0xblock123",
+                  blockNumber: 123n,
+                  data: "0x0000000000000000000000000000000000000000000000000000000000000064",
+                  logIndex: 4,
+                  transactionHash: "0xlpmulti",
+                  topics: [TRANSFER_EVENT_TOPIC0, "0x000000000000000000000000cccccccccccccccccccccccccccccccccccccccc", "0x000000000000000000000000dddddddddddddddddddddddddddddddddddddddd"],
+                },
+              ]
+            : [
+                {
+                  address: "0xlp",
+                  blockHash: "0xblock123",
+                  blockNumber: 123n,
+                  data: "0x0000000000000000000000000000000000000000000000000000000000000019",
+                  logIndex: 5,
+                  transactionHash: "0xlpmulti",
+                  topics: [TRANSFER_EVENT_TOPIC0, "0x000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", walletTopic],
+                },
+              ];
+        }),
+        getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+          number: blockNumber,
+          hash: "0xblock123",
+          parentHash: "0xblock122",
+          timestamp: 1_700_000_500n,
+        })),
+        readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
+          if (functionName === "decimals") return 0;
+          if (functionName === "symbol") return "TOK";
+          return "Token";
+        }),
+        getTransaction: vi.fn(async () => ({
+          hash: "0xlpmulti",
+          blockHash: "0xblock123",
+          blockNumber: 123n,
+          transactionIndex: 6,
+          from: walletAddress,
+          to: "0xrouter",
+          value: 0n,
+          gasPrice: 2_000_000_000n,
+        })),
+        getTransactionReceipt: vi.fn(async () => ({
+          transactionHash: "0xlpmulti",
+          blockHash: "0xblock123",
+          blockNumber: 123n,
+          gasUsed: 160_000n,
+          effectiveGasPrice: 2_000_000_000n,
+          logs: [],
+        })),
+      } as never,
+    });
+
+    await runWalletSync({
+      wallet: { id: "wallet_1", chainId: 369, address: walletAddress },
+      sourceFamilies: ["LP"],
+      startBlock: 123n,
+      endBlock: 123n,
+      policyLabel: "lp-many-to-one",
+      dependencies,
+    });
+    await runWalletSync({
+      wallet: { id: "wallet_1", chainId: 369, address: walletAddress },
+      sourceFamilies: ["LP"],
+      startBlock: 123n,
+      endBlock: 123n,
+      policyLabel: "lp-many-to-one",
+      dependencies,
+    });
+
+    expect([...stores.rawLpActions.values()][0]).toMatchObject({
+      token0AmountRaw: "200",
+      token1AmountRaw: "50",
+      lpAmountRaw: "25",
+    });
+    const evidence = Array.from(stores.rawLpActionTransferEvidence.values());
+    expect(evidence).toHaveLength(4);
+    expect(evidence.filter((row) => row.legRole === "TOKEN0_OUT")).toHaveLength(2);
+    expect(evidence.map((row) => row.rawTokenTransferId)).not.toContain(
+      "369:0xlpmulti:4:0xblock123",
+    );
   });
 
   it("normalizes from persisted raw lp snapshots even if token rows mutate later", async () => {

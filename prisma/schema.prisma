@@ -47,6 +47,11 @@ enum RawRecordStatus {
   REORGED
 }
 
+enum RawTransferEvidenceStatus {
+  RECORDED
+  VERIFIED_EMPTY
+}
+
 enum SourceFamily {
   TRANSFERS
   DEX
@@ -335,23 +340,26 @@ model RawLog {
 }
 
 model RawTokenTransfer {
-  id               String          @id @default(cuid())
-  chainId          Int
-  tokenId          String
-  tokenAddress     String
-  assetIdSnapshot  String
-  decimalsSnapshot Int
-  txHash           String
-  blockNumber      BigInt
-  blockHash        String
-  logIndex         Int
-  fromAddress      String
-  toAddress        String
-  amountRaw        Decimal         @db.Decimal(78, 0)
-  status           RawRecordStatus @default(ACTIVE)
-  createdAt        DateTime        @default(now())
-  chain            Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
-  token            Token           @relation(fields: [tokenId], references: [id], onDelete: Restrict)
+  id                  String                           @id @default(cuid())
+  chainId             Int
+  tokenId             String
+  tokenAddress        String
+  assetIdSnapshot     String
+  decimalsSnapshot    Int
+  txHash              String
+  blockNumber         BigInt
+  blockHash           String
+  logIndex            Int
+  fromAddress         String
+  toAddress           String
+  amountRaw           Decimal                          @db.Decimal(78, 0)
+  status              RawRecordStatus                  @default(ACTIVE)
+  createdAt           DateTime                         @default(now())
+  chain               Chain                            @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  token               Token                            @relation(fields: [tokenId], references: [id], onDelete: Restrict)
+  dexSwapEvidence     RawDexSwapTransferEvidence[]
+  lpActionEvidence    RawLpActionTransferEvidence[]
+  stakeActionEvidence RawStakeActionTransferEvidence[]
 
   @@unique([chainId, txHash, logIndex, blockHash])
   @@index([chainId, tokenId, blockNumber])
@@ -359,30 +367,32 @@ model RawTokenTransfer {
 }
 
 model RawDexSwap {
-  id                     String          @id @default(cuid())
-  chainId                Int
-  protocolSlug           String
-  txHash                 String
-  blockNumber            BigInt
-  blockHash              String
-  logIndex               Int
-  pairAddress            String
-  initiatorAddress       String
-  counterpartyAddress    String?
-  soldTokenAddress       String
-  soldAssetIdSnapshot    String
-  soldDecimalsSnapshot   Int
-  soldAmountRaw          Decimal         @db.Decimal(78, 0)
-  boughtTokenAddress     String
-  boughtAssetIdSnapshot  String
-  boughtDecimalsSnapshot Int
-  boughtAmountRaw        Decimal         @db.Decimal(78, 0)
-  feeAssetIdSnapshot     String
-  feeDecimalsSnapshot    Int
-  feeAmountRaw           Decimal         @db.Decimal(78, 0)
-  status                 RawRecordStatus @default(ACTIVE)
-  createdAt              DateTime        @default(now())
-  chain                  Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  id                        String                       @id @default(cuid())
+  chainId                   Int
+  protocolSlug              String
+  txHash                    String
+  blockNumber               BigInt
+  blockHash                 String
+  logIndex                  Int
+  pairAddress               String
+  initiatorAddress          String
+  counterpartyAddress       String?
+  soldTokenAddress          String
+  soldAssetIdSnapshot       String
+  soldDecimalsSnapshot      Int
+  soldAmountRaw             Decimal                      @db.Decimal(78, 0)
+  boughtTokenAddress        String
+  boughtAssetIdSnapshot     String
+  boughtDecimalsSnapshot    Int
+  boughtAmountRaw           Decimal                      @db.Decimal(78, 0)
+  feeAssetIdSnapshot        String
+  feeDecimalsSnapshot       Int
+  feeAmountRaw              Decimal                      @db.Decimal(78, 0)
+  rawTransferEvidenceStatus RawTransferEvidenceStatus?
+  status                    RawRecordStatus              @default(ACTIVE)
+  createdAt                 DateTime                     @default(now())
+  chain                     Chain                        @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  transferEvidence          RawDexSwapTransferEvidence[]
 
   @@unique([chainId, txHash, logIndex, blockHash])
   @@index([chainId, initiatorAddress, blockNumber])
@@ -391,35 +401,37 @@ model RawDexSwap {
 }
 
 model RawLpAction {
-  id                     String          @id @default(cuid())
-  chainId                Int
-  protocolSlug           String
-  actionKind             String
-  txHash                 String
-  blockNumber            BigInt
-  blockHash              String
-  logIndex               Int
-  pairAddress            String
-  initiatorAddress       String
-  counterpartyAddress    String?
-  token0Address          String
-  token0AssetIdSnapshot  String
-  token0DecimalsSnapshot Int
-  token0AmountRaw        Decimal         @db.Decimal(78, 0)
-  token1Address          String
-  token1AssetIdSnapshot  String
-  token1DecimalsSnapshot Int
-  token1AmountRaw        Decimal         @db.Decimal(78, 0)
-  lpTokenAddress         String
-  lpAssetIdSnapshot      String
-  lpDecimalsSnapshot     Int
-  lpAmountRaw            Decimal         @db.Decimal(78, 0)
-  feeAssetIdSnapshot     String
-  feeDecimalsSnapshot    Int
-  feeAmountRaw           Decimal         @db.Decimal(78, 0)
-  status                 RawRecordStatus @default(ACTIVE)
-  createdAt              DateTime        @default(now())
-  chain                  Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  id                        String                        @id @default(cuid())
+  chainId                   Int
+  protocolSlug              String
+  actionKind                String
+  txHash                    String
+  blockNumber               BigInt
+  blockHash                 String
+  logIndex                  Int
+  pairAddress               String
+  initiatorAddress          String
+  counterpartyAddress       String?
+  token0Address             String
+  token0AssetIdSnapshot     String
+  token0DecimalsSnapshot    Int
+  token0AmountRaw           Decimal                       @db.Decimal(78, 0)
+  token1Address             String
+  token1AssetIdSnapshot     String
+  token1DecimalsSnapshot    Int
+  token1AmountRaw           Decimal                       @db.Decimal(78, 0)
+  lpTokenAddress            String
+  lpAssetIdSnapshot         String
+  lpDecimalsSnapshot        Int
+  lpAmountRaw               Decimal                       @db.Decimal(78, 0)
+  feeAssetIdSnapshot        String
+  feeDecimalsSnapshot       Int
+  feeAmountRaw              Decimal                       @db.Decimal(78, 0)
+  rawTransferEvidenceStatus RawTransferEvidenceStatus?
+  status                    RawRecordStatus               @default(ACTIVE)
+  createdAt                 DateTime                      @default(now())
+  chain                     Chain                         @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  transferEvidence          RawLpActionTransferEvidence[]
 
   @@unique([chainId, txHash, logIndex, blockHash])
   @@index([chainId, initiatorAddress, blockNumber])
@@ -429,40 +441,81 @@ model RawLpAction {
 }
 
 model RawStakeAction {
-  id                   String          @id @default(cuid())
-  chainId              Int
-  protocolSlug         String
-  actionKind           String
-  txHash               String
-  blockNumber          BigInt
-  blockHash            String
-  actionIndex          Int
-  contractAddress      String
-  initiatorAddress     String
-  stakeId              BigInt?
-  stakeIndex           Int?
-  stakedDays           Int?
-  lockedDay            Int?
-  stakeShares          Decimal?        @db.Decimal(78, 0)
-  tokenAddress         String
-  assetIdSnapshot      String
-  decimalsSnapshot     Int
-  principalLockedRaw   Decimal?        @db.Decimal(78, 0)
-  totalReturnedRaw     Decimal?        @db.Decimal(78, 0)
-  principalReturnedRaw Decimal?        @db.Decimal(78, 0)
-  yieldRaw             Decimal?        @db.Decimal(78, 0)
-  penaltyRaw           Decimal?        @db.Decimal(78, 0)
-  feeAssetIdSnapshot   String
-  feeDecimalsSnapshot  Int
-  feeAmountRaw         Decimal         @db.Decimal(78, 0)
-  status               RawRecordStatus @default(ACTIVE)
-  createdAt            DateTime        @default(now())
-  chain                Chain           @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  id                        String                           @id @default(cuid())
+  chainId                   Int
+  protocolSlug              String
+  actionKind                String
+  txHash                    String
+  blockNumber               BigInt
+  blockHash                 String
+  actionIndex               Int
+  contractAddress           String
+  initiatorAddress          String
+  stakeId                   BigInt?
+  stakeIndex                Int?
+  stakedDays                Int?
+  lockedDay                 Int?
+  stakeShares               Decimal?                         @db.Decimal(78, 0)
+  tokenAddress              String
+  assetIdSnapshot           String
+  decimalsSnapshot          Int
+  principalLockedRaw        Decimal?                         @db.Decimal(78, 0)
+  totalReturnedRaw          Decimal?                         @db.Decimal(78, 0)
+  principalReturnedRaw      Decimal?                         @db.Decimal(78, 0)
+  yieldRaw                  Decimal?                         @db.Decimal(78, 0)
+  penaltyRaw                Decimal?                         @db.Decimal(78, 0)
+  feeAssetIdSnapshot        String
+  feeDecimalsSnapshot       Int
+  feeAmountRaw              Decimal                          @db.Decimal(78, 0)
+  rawTransferEvidenceStatus RawTransferEvidenceStatus?
+  status                    RawRecordStatus                  @default(ACTIVE)
+  createdAt                 DateTime                         @default(now())
+  chain                     Chain                            @relation(fields: [chainId], references: [id], onDelete: Restrict)
+  transferEvidence          RawStakeActionTransferEvidence[]
 
   @@unique([chainId, txHash, actionKind, actionIndex, blockHash])
   @@index([chainId, initiatorAddress, blockNumber])
   @@index([chainId, stakeId, blockNumber])
   @@index([chainId, assetIdSnapshot, blockNumber])
+}
+
+model RawDexSwapTransferEvidence {
+  id                 String           @id @default(cuid())
+  rawDexSwapId       String
+  rawTokenTransferId String
+  legRole            String
+  createdAt          DateTime         @default(now())
+  rawDexSwap         RawDexSwap       @relation(fields: [rawDexSwapId], references: [id], onDelete: Cascade)
+  rawTokenTransfer   RawTokenTransfer @relation(fields: [rawTokenTransferId], references: [id], onDelete: Restrict)
+
+  @@unique([rawDexSwapId, legRole, rawTokenTransferId])
+  @@index([rawTokenTransferId])
+}
+
+model RawLpActionTransferEvidence {
+  id                 String           @id @default(cuid())
+  rawLpActionId      String
+  rawTokenTransferId String
+  legRole            String
+  createdAt          DateTime         @default(now())
+  rawLpAction        RawLpAction      @relation(fields: [rawLpActionId], references: [id], onDelete: Cascade)
+  rawTokenTransfer   RawTokenTransfer @relation(fields: [rawTokenTransferId], references: [id], onDelete: Restrict)
+
+  @@unique([rawLpActionId, legRole, rawTokenTransferId])
+  @@index([rawTokenTransferId])
+}
+
+model RawStakeActionTransferEvidence {
+  id                 String           @id @default(cuid())
+  rawStakeActionId   String
+  rawTokenTransferId String
+  legRole            String
+  createdAt          DateTime         @default(now())
+  rawStakeAction     RawStakeAction   @relation(fields: [rawStakeActionId], references: [id], onDelete: Cascade)
+  rawTokenTransfer   RawTokenTransfer @relation(fields: [rawTokenTransferId], references: [id], onDelete: Restrict)
+
+  @@unique([rawStakeActionId, legRole, rawTokenTransferId])
+  @@index([rawTokenTransferId])
 }
 
 model LedgerActionGroup {
