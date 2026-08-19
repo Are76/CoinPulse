@@ -129,17 +129,29 @@ export const CHILD_PROCESS_STARTUP_MARGIN_MS = 5 * 60_000;
  * and poll timeout (gate/query round-trips, evidence writes, checkpoints). */
 export const CHILD_PROCESS_PER_WINDOW_OVERHEAD_MS = 60_000;
 
+/** Node's `child_process.spawn` `timeout` option is implemented on top of
+ * `setTimeout`, which silently truncates any delay beyond a 32-bit signed
+ * integer (2,147,483,647 ms, ~24.8 days) instead of honoring it — a value
+ * past this ceiling does not become "wait longer," it becomes "kill almost
+ * immediately." `computeChildProcessTimeoutMs` must never hand `spawn` a
+ * value beyond this, or a large, legitimate `--campaign-max-windows` /
+ * `--poll-timeout-ms` combination would silently self-sabotage into
+ * spurious `child_process_ambiguous_termination` stops. */
+export const MAX_CHILD_PROCESS_TIMEOUT_MS = 2_147_483_647;
+
 /** Derives a bounded child-process timeout from the operator-supplied poll
  * timeout and the child's own window budget, so a hung `npx`/`tsx`/startup
  * path (before the child's own `--poll-timeout-ms` loop even engages) can
  * never make the supervisor wait forever. This is NOT the same failure mode
  * as the child's internal poll timeout — it exists purely to bound the
- * supervisor's own wait on the child OS process. */
+ * supervisor's own wait on the child OS process. Always clamped to
+ * `MAX_CHILD_PROCESS_TIMEOUT_MS` — see that constant's doc comment for why
+ * an unclamped value would be actively dangerous, not merely generous. */
 export function computeChildProcessTimeoutMs(args: { childMaxWindows: number; pollTimeoutMs: number }): number {
-  return (
+  const derived =
     CHILD_PROCESS_STARTUP_MARGIN_MS +
-    args.childMaxWindows * (args.pollTimeoutMs + HTTP_REQUEST_TIMEOUT_MS + CHILD_PROCESS_PER_WINDOW_OVERHEAD_MS)
-  );
+    args.childMaxWindows * (args.pollTimeoutMs + HTTP_REQUEST_TIMEOUT_MS + CHILD_PROCESS_PER_WINDOW_OVERHEAD_MS);
+  return Math.min(derived, MAX_CHILD_PROCESS_TIMEOUT_MS);
 }
 
 // ─── Pure planning: next bounded child campaign from canonical state ─────────
@@ -1028,6 +1040,20 @@ export async function runWalletForwardSupervisor(
       deps,
       "initial_health_baseline_failed",
       (startHealth.gate as { ok: false; reason: string }).reason,
+      0,
+      null,
+    );
+  }
+  // A missing app.env at baseline must fail closed, not silently disable
+  // drift detection: evaluateEnvironmentDrift compares supervisorStartAppEnv
+  // against each iteration's currentAppEnv, and undefined === undefined
+  // would otherwise let a backend that never reports app.env pass every
+  // environment-identity check for the entire run.
+  if (startHealth.appEnv === undefined) {
+    return stopSupervisor(
+      deps,
+      "initial_health_baseline_failed",
+      "health check response did not include app.env — cannot establish an environment identity baseline required for cross-child drift detection",
       0,
       null,
     );

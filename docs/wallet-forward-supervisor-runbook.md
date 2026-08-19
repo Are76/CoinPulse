@@ -178,7 +178,18 @@ cannot know whether the child had already submitted its manual-sync request
 before being killed, a signal-terminated process is reported as the distinct
 `child_process_ambiguous_termination` stop reason, explicitly flagging that
 canonical state may already have been mutated and that human review — never
-automatic continuation or retry — is required.
+automatic continuation or retry — is required. The derived timeout is always
+clamped to `2_147_483_647` ms (~24.8 days) — Node's `setTimeout`-based
+`timeout` option silently truncates any larger value instead of honoring it,
+which would otherwise make an unclamped, legitimately large
+`--campaign-max-windows`/`--poll-timeout-ms` combination kill its own child
+almost immediately.
+
+Backend environment identity is likewise required, not merely captured: if
+the initial `/api/debug/health` response never reports `app.env` at all, the
+supervisor fails closed at startup (`initial_health_baseline_failed`) rather
+than silently comparing `undefined` to `undefined` on every later iteration
+and reporting no drift protection while claiming to provide one.
 
 ## Canonical state
 

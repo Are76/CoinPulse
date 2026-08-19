@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildChildCampaignId,
   computeChildProcessTimeoutMs,
+  MAX_CHILD_PROCESS_TIMEOUT_MS,
   computeNextChildPlan,
   computeStartingChildCampaignNumber,
   computeSupervisorExitCode,
@@ -624,6 +625,24 @@ describe("computeChildProcessTimeoutMs", () => {
     const timeout = computeChildProcessTimeoutMs({ childMaxWindows: 1, pollTimeoutMs: 0 });
     expect(timeout).toBeGreaterThanOrEqual(5 * 60_000);
   });
+
+  it("clamps to MAX_CHILD_PROCESS_TIMEOUT_MS instead of overflowing Node's 32-bit setTimeout ceiling (regression)", () => {
+    // A 1000-window campaign at a generous 1-hour --poll-timeout-ms derives
+    // an unclamped value of 3,720,300,000 ms — past Node's 2,147,483,647 ms
+    // (2^31-1) setTimeout ceiling. Node silently truncates an oversized
+    // `timeout` option instead of honoring it, which would otherwise kill
+    // the child almost immediately and produce a spurious
+    // child_process_ambiguous_termination on a perfectly legitimate,
+    // approved, large campaign.
+    const timeout = computeChildProcessTimeoutMs({ childMaxWindows: 1000, pollTimeoutMs: 3_600_000 });
+    expect(timeout).toBe(MAX_CHILD_PROCESS_TIMEOUT_MS);
+    expect(timeout).toBeLessThanOrEqual(2_147_483_647);
+  });
+
+  it("does not clamp a reasonable derived timeout that is already under the ceiling", () => {
+    const timeout = computeChildProcessTimeoutMs({ childMaxWindows: 5, pollTimeoutMs: 1_200_000 });
+    expect(timeout).toBeLessThan(MAX_CHILD_PROCESS_TIMEOUT_MS);
+  });
 });
 
 describe("parseSupervisorCliArgs", () => {
@@ -1040,6 +1059,24 @@ describe("runWalletForwardSupervisor", () => {
 
     expect(summary.stoppedReason).toBe("initial_health_baseline_failed");
     expect(runChildCampaign).not.toHaveBeenCalled();
+  });
+
+  it("a healthy backend that never reports app.env fails closed at startup instead of silently disabling environment drift detection", async () => {
+    const options = baseOptions();
+    const db = makeFakeDb({ cursor: { fromBlock: FIXTURE_ANCHOR_FROM, toBlock: 25_078_548n } });
+    const runChildCampaign = vi.fn(async (): Promise<ChildProcessResult> => ({ exitCode: 0, stdout: "", stderr: "" }));
+    const deps = makeDeps({
+      db,
+      runChildCampaign,
+      httpGet: async () => ({ status: 200, body: { data: { status: "ok" } } }), // no app field at all
+    });
+
+    const summary = await runWalletForwardSupervisor(options, deps);
+
+    expect(summary.stoppedReason).toBe("initial_health_baseline_failed");
+    expect(summary.detail).toMatch(/app\.env/);
+    expect(runChildCampaign).not.toHaveBeenCalled();
+    expect(computeSupervisorExitCode(summary.stoppedReason)).toBe(1);
   });
 
   it("scenario 14: interruption before a child starts prevents that child from running", async () => {
