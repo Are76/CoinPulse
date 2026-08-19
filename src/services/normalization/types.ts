@@ -21,6 +21,7 @@ export type NormalizedEntryType =
   | "STAKE_LOCK"
   | "STAKE_UNLOCK"
   | "STAKE_REWARD"
+  | "STAKE_RETURN_UNALLOCATED"
   | "INTERNAL_TRANSFER"
   | "APPROVAL_IGNORE";
 

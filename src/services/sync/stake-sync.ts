@@ -449,6 +449,7 @@ export function normalizeStakeActions(args: {
         principalReturnedRaw: rawLog.principalReturnedRaw,
         yieldRaw: rawLog.yieldRaw,
         penaltyRaw: rawLog.penaltyRaw,
+        totalReturnedRaw: rawLog.totalReturnedRaw,
         feeAssetId: canonicalizeSnapshotAssetId(rawLog.feeAssetIdSnapshot),
         feeAmountRaw: rawLog.feeAmountRaw,
         feeDecimals: rawLog.feeDecimalsSnapshot,

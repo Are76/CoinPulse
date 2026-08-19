@@ -16,6 +16,7 @@ export type PnLEntryType =
   | "STAKE_PRINCIPAL_RETURNED"
   | "STAKE_YIELD_RECEIVED"
   | "STAKE_PENALTY"
+  | "STAKE_RETURN_UNALLOCATED"
   | "INTERNAL_TRANSFER";
 
 export type PnLActionType =

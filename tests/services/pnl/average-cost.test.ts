@@ -1528,4 +1528,56 @@ describe("calculateAverageCostPnl", () => {
       ]),
     );
   });
+
+  it("keeps a HEX_STAKE_END group carrying STAKE_RETURN_UNALLOCATED excluded from average-cost PnL (fails closed, no fabricated basis)", async () => {
+    const result = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry({
+          id: "stake-end-marker",
+          actionGroupId: "group-stake-end",
+          txHash: "0xtx-stake-end",
+          sourceLogKey: "log:0xtx-stake-end:0:stake:end:800372:end",
+          actionType: "HEX_STAKE_END",
+          entryType: "STAKE_END",
+          direction: "INTERNAL",
+          quantity: "0",
+          occurredAt: new Date("2026-05-08T13:30:00.000Z"),
+        }),
+        createEntry({
+          id: "stake-return-unallocated",
+          actionGroupId: "group-stake-end",
+          txHash: "0xtx-stake-end",
+          sourceLogKey: "log:0xtx-stake-end:0:stake:end:800372:return-unallocated",
+          actionType: "HEX_STAKE_END",
+          entryType: "STAKE_RETURN_UNALLOCATED",
+          direction: "IN",
+          quantity: "22337.55002516",
+          occurredAt: new Date("2026-05-08T13:30:00.000Z"),
+        }),
+      ],
+      resolvePrice: createResolver([]),
+    });
+
+    // The whole group is excluded, exactly like a known STAKE_PRINCIPAL_RETURNED
+    // group would be — no zero-cost acquisition, no fabricated realized PnL,
+    // no fabricated yield, nothing added to holdings/cost basis.
+    expect(result.holdingsQuantity).toBe("0");
+    expect(result.totalAcquiredQuantity).toBe("0");
+    expect(result.totalDisposedQuantity).toBe("0");
+    expect(result.averageCost).toBe("0");
+    expect(result.realizedPnl).toBe("0");
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "UNSUPPORTED_STAKE_ACTION",
+          actionGroupId: "group-stake-end",
+        }),
+      ]),
+    );
+  });
 });

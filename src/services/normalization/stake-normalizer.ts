@@ -29,6 +29,11 @@ type NormalizeStakeEndArgs = StakeBaseArgs & {
   principalReturnedRaw?: string | null;
   yieldRaw?: string | null;
   penaltyRaw?: string | null;
+  // The exact evidenced inbound quantity for this stake end (RETURN_IN raw
+  // transfer evidence), used only as a quantity-preserving fallback when the
+  // principal/yield/penalty split below is unknown. Never used to fabricate
+  // principalReturnedRaw/yieldRaw/penaltyRaw.
+  totalReturnedRaw?: string | null;
 };
 
 export function normalizeStakeStart(
@@ -118,6 +123,45 @@ export function normalizeStakeEnd(
       sourceRef: `${args.sourceRef}:end`,
     }),
   ];
+
+  // Unknown-decomposition fallback: totalReturnedRaw is the exact evidenced
+  // RETURN_IN quantity, but the principal/yield/penalty split could not be
+  // computed (no matching START evidence). Preserve the known quantity
+  // without fabricating which economic component it represents. Never
+  // co-emitted with an allocated split — this branch and the three below are
+  // mutually exclusive by construction (stake-sync.ts always sets all three
+  // allocated fields together or leaves them all null).
+  const hasKnownDecomposition = Boolean(
+    (args.principalReturnedRaw && args.principalReturnedRaw !== "0") ||
+      (args.yieldRaw && args.yieldRaw !== "0") ||
+      (args.penaltyRaw && args.penaltyRaw !== "0"),
+  );
+
+  if (
+    !hasKnownDecomposition &&
+    args.totalReturnedRaw &&
+    args.totalReturnedRaw !== "0"
+  ) {
+    entries.push(
+      createLedgerEntryDraft({
+        chainId: args.chainId,
+        walletId: args.walletId,
+        walletAddress: args.walletAddress,
+        txHash: args.txHash,
+        blockNumber: args.blockNumber,
+        actionType: "HEX_STAKE_END",
+        actionGroupKey,
+        entryType: "STAKE_RETURN_UNALLOCATED",
+        assetId: args.assetId,
+        amountRaw: args.totalReturnedRaw,
+        decimals: args.decimals,
+        direction: "IN",
+        occurredAt: args.occurredAt,
+        normalizerVersion: args.normalizerVersion,
+        sourceRef: `${args.sourceRef}:return-unallocated`,
+      }),
+    );
+  }
 
   if (args.principalReturnedRaw && args.principalReturnedRaw !== "0") {
     entries.push(

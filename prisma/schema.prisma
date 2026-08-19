@@ -38,6 +38,11 @@ enum LedgerEntryType {
   STAKE_LOCK
   STAKE_UNLOCK
   STAKE_REWARD
+  // Emitted for HEX_STAKE_END actions when totalReturnedRaw is known but the
+  // principal/yield/penalty split cannot be reconstructed (no matching START
+  // evidence). Means only "this exact quantity returned"; never implies
+  // principal, yield, reward, or cost basis. See stake-normalizer.ts.
+  STAKE_RETURN_UNALLOCATED
   INTERNAL_TRANSFER
   APPROVAL_IGNORE
 }

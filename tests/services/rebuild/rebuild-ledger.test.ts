@@ -11,6 +11,7 @@ type RawBlockRecord = {
 };
 
 type RawTokenTransferRecord = {
+  id?: string;
   chainId: number;
   tokenId: string;
   tokenAddress: string;
@@ -94,6 +95,8 @@ type RawLpActionRecord = {
 };
 
 type RawStakeActionRecord = {
+  id?: string;
+  rawTransferEvidenceStatus?: "RECORDED" | "VERIFIED_EMPTY" | null;
   chainId: number;
   protocolSlug: string;
   actionKind: "START" | "END";
@@ -118,6 +121,13 @@ type RawStakeActionRecord = {
   feeDecimalsSnapshot: number;
   feeAmountRaw: string;
   status: "ACTIVE";
+};
+
+type RawStakeActionTransferEvidenceRecord = {
+  id: string;
+  rawStakeActionId: string;
+  rawTokenTransferId: string;
+  legRole: string;
 };
 
 type ActionGroupRecord = {
@@ -183,6 +193,7 @@ function createMemoryDb() {
   const rawDexSwaps: RawDexSwapRecord[] = [];
   const rawLpActions: RawLpActionRecord[] = [];
   const rawStakeActions: RawStakeActionRecord[] = [];
+  const rawStakeActionTransferEvidence: RawStakeActionTransferEvidenceRecord[] = [];
   const ledgerActionGroups = new Map<string, ActionGroupRecord>();
   const ledgerEntries = new Map<string, LedgerEntryRecord>();
 
@@ -332,6 +343,35 @@ function createMemoryDb() {
           );
       },
     },
+    // No dex/lp provenance is exercised by these fixtures; always empty,
+    // matching production shape (findMany, not a rejection).
+    rawDexSwapTransferEvidence: {
+      async findMany() {
+        return [] as Array<{ rawTokenTransferId: string }>;
+      },
+    },
+    rawLpActionTransferEvidence: {
+      async findMany() {
+        return [] as Array<{ rawTokenTransferId: string }>;
+      },
+    },
+    rawStakeActionTransferEvidence: {
+      async findMany(args: { where: { rawTokenTransferId: { in: string[] } } }) {
+        const wantedIds = new Set(args.where.rawTokenTransferId.in);
+        return rawStakeActionTransferEvidence
+          .filter((row) => wantedIds.has(row.rawTokenTransferId))
+          .filter((row) => {
+            const transfer = rawTokenTransfers.find((t) => t.id === row.rawTokenTransferId);
+            const action = rawStakeActions.find((a) => a.id === row.rawStakeActionId);
+            return (
+              transfer?.status === "ACTIVE" &&
+              action?.status === "ACTIVE" &&
+              action?.rawTransferEvidenceStatus === "RECORDED"
+            );
+          })
+          .map((row) => ({ rawTokenTransferId: row.rawTokenTransferId }));
+      },
+    },
     ledgerActionGroup: {
       async createMany(args: { data: ActionGroupRecord[] }) {
         let count = 0;
@@ -414,6 +454,7 @@ function createMemoryDb() {
     rawDexSwaps,
     rawLpActions,
     rawStakeActions,
+    rawStakeActionTransferEvidence,
     ledgerActionGroups,
     ledgerEntries,
   };
@@ -745,6 +786,146 @@ describe("rebuildCanonicalLedger", () => {
       "STAKE_YIELD_RECEIVED",
       "FEE",
     ]);
+  });
+
+  it("suppresses the canonical-evidenced generic TRANSFER shadow and emits STAKE_RETURN_UNALLOCATED exactly once, not twice and not zero times", async () => {
+    const stores = createMemoryDb();
+    const PHEX_ASSET_ID = "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39";
+    const RETURN_TX_HASH = "0xtx-stake-return";
+    const RETURN_BLOCK_HASH = "0xblock105";
+
+    stores.rawBlocks.push({
+      chainId: 369,
+      blockNumber: 105n,
+      blockHash: RETURN_BLOCK_HASH,
+      timestamp: new Date("2026-05-08T10:20:00.000Z"),
+    });
+
+    // The exact evidenced RETURN_IN raw transfer for this stake end.
+    stores.rawTokenTransfers.push({
+      id: "rt-return-1",
+      chainId: 369,
+      tokenId: "token_phex",
+      tokenAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+      assetIdSnapshot: PHEX_ASSET_ID,
+      decimalsSnapshot: 8,
+      txHash: RETURN_TX_HASH,
+      blockNumber: 105n,
+      blockHash: RETURN_BLOCK_HASH,
+      logIndex: 7,
+      fromAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+      toAddress: WALLET_ADDRESS,
+      amountRaw: "2233755002516",
+      status: "ACTIVE",
+    });
+
+    // The canonical STAKE END action, with the unknown-decomposition shape:
+    // totalReturnedRaw known, principal/yield/penalty unknown (no matching
+    // START row) — the exact production shape proven in the prior read-only
+    // investigation. rawTransferEvidenceStatus RECORDED means PR #377's
+    // suppression is authorized to consume the evidenced transfer above.
+    stores.rawStakeActions.push({
+      id: "stake-end-return-1",
+      rawTransferEvidenceStatus: "RECORDED",
+      chainId: 369,
+      protocolSlug: "hex",
+      actionKind: "END",
+      txHash: RETURN_TX_HASH,
+      blockNumber: 105n,
+      blockHash: RETURN_BLOCK_HASH,
+      actionIndex: 0,
+      contractAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+      initiatorAddress: WALLET_ADDRESS,
+      stakeId: 800372n,
+      stakeIndex: 5,
+      stakedDays: 400,
+      tokenAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+      assetIdSnapshot: PHEX_ASSET_ID,
+      decimalsSnapshot: 8,
+      principalLockedRaw: null,
+      totalReturnedRaw: "2233755002516",
+      principalReturnedRaw: null,
+      yieldRaw: null,
+      penaltyRaw: null,
+      feeAssetIdSnapshot: "chain:369:native:0x0000000000000000000000000000000000000000",
+      feeDecimalsSnapshot: 18,
+      feeAmountRaw: "300000000000000",
+      status: "ACTIVE",
+    });
+
+    // Exact canonical provenance: this raw transfer is proven consumed by
+    // this exact stake action's RETURN_IN leg. No txHash/amount/symbol
+    // matching — this is the same evidence relation PR #377 reads.
+    stores.rawStakeActionTransferEvidence.push({
+      id: "ev-return-1",
+      rawStakeActionId: "stake-end-return-1",
+      rawTokenTransferId: "rt-return-1",
+      legRole: "RETURN_IN",
+    });
+
+    // Simulate a pre-fix ledger: a stale generic TRANSFER shadow for the same
+    // raw transfer, as it would have existed before this bounded fix and
+    // before provenance suppression could observe RECORDED evidence.
+    await seedLedger(stores.db, [
+      createDraft({
+        txHash: RETURN_TX_HASH,
+        actionType: "TRANSFER",
+        actionGroupKey: "stale-transfer-shadow",
+        dedupeKey: "stale-transfer-shadow-dedupe",
+        assetId: PHEX_ASSET_ID,
+        quantity: "22337.55002516",
+        entryType: "RECEIVE",
+        direction: "IN",
+        sourceLogIndex: 7,
+        sourceLogKey: `log:${RETURN_TX_HASH}:7:transfer:receive`,
+      }),
+    ]);
+
+    const report = await rebuildCanonicalLedger({
+      db: stores.db as never,
+      wallet: { id: WALLET_ID, chainId: 369, address: WALLET_ADDRESS },
+      fromBlock: 105n,
+      toBlock: 105n,
+      sourceFamilies: ["TRANSFERS", "STAKING"],
+      normalizerVersion: "v1",
+    });
+
+    const finalEntries = Array.from(stores.ledgerEntries.values());
+    const finalGroups = Array.from(stores.ledgerActionGroups.values());
+
+    // The stale TRANSFER shadow group is gone; suppression removed it and
+    // normalizeTransfers never recreated it (isCanonicallySuppressedTransferShadow).
+    expect(finalGroups.some((group) => group.actionType === "TRANSFER")).toBe(false);
+    expect(finalEntries.some((entry) => entry.entryType === "RECEIVE")).toBe(false);
+
+    // The STAKING-family group carries the quantity-preserving fallback
+    // instead — never relabeled as principal or yield.
+    expect(finalEntries.map((entry) => entry.entryType).sort()).toEqual(
+      ["FEE", "STAKE_END", "STAKE_RETURN_UNALLOCATED"].sort(),
+    );
+    expect(finalEntries.some((entry) => entry.entryType === "STAKE_PRINCIPAL_RETURNED")).toBe(
+      false,
+    );
+    expect(finalEntries.some((entry) => entry.entryType === "STAKE_YIELD_RECEIVED")).toBe(false);
+
+    const unallocated = finalEntries.find(
+      (entry) => entry.entryType === "STAKE_RETURN_UNALLOCATED",
+    );
+    expect(unallocated?.quantity).toBe("22337.55002516");
+    expect(unallocated?.direction).toBe("IN");
+
+    // The exact wallet-facing pHEX movement across the ENTIRE final ledger
+    // appears exactly once: not 2X (double count from an un-suppressed
+    // shadow) and not 0 (lost value). Compared as exact strings, never
+    // Number()/parseFloat() — there is exactly one non-internal pHEX entry.
+    const nonInternalPhexEntries = finalEntries.filter(
+      (entry) => entry.assetId === PHEX_ASSET_ID && entry.direction !== "INTERNAL",
+    );
+    expect(nonInternalPhexEntries).toHaveLength(1);
+    expect(nonInternalPhexEntries[0]?.quantity).toBe("22337.55002516");
+    expect(nonInternalPhexEntries[0]?.direction).toBe("IN");
+
+    expect(report.warnings).toEqual([]);
   });
 
   it("rebuilds mixed source families in one run", async () => {
