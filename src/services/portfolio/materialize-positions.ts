@@ -86,6 +86,11 @@ type StakeAccumulator = {
   returnedQuantityScaled: bigint;
   yieldQuantityScaled: bigint | null;
   penaltyQuantityScaled: bigint | null;
+  // Non-null only when a STAKE_RETURN_UNALLOCATED entry exists for this
+  // stake — a known returned quantity with unresolved principal/yield/
+  // penalty attribution. Never folded into returnedQuantityScaled, which
+  // means a known principal return.
+  unallocatedReturnedQuantityScaled: bigint | null;
   started: boolean;
   ended: boolean;
 };
@@ -244,6 +249,10 @@ export async function materializeCurrentPortfolioPositions(args: {
         position.penaltyQuantityScaled === null
           ? null
           : scaledBigIntToDecimal(position.penaltyQuantityScaled),
+      unallocatedReturnedQuantity:
+        position.unallocatedReturnedQuantityScaled === null
+          ? null
+          : scaledBigIntToDecimal(position.unallocatedReturnedQuantityScaled),
       status: position.ended ? "ENDED" : position.started ? "ACTIVE" : "UNKNOWN",
       startBlock: null,
       endBlock: null,
@@ -423,6 +432,7 @@ function accumulateStakePosition(args: {
         returnedQuantityScaled: 0n,
         yieldQuantityScaled: null,
         penaltyQuantityScaled: null,
+        unallocatedReturnedQuantityScaled: null,
         started: false,
         ended: false,
       };
@@ -447,6 +457,10 @@ function accumulateStakePosition(args: {
         break;
       case "STAKE_PENALTY":
         position.penaltyQuantityScaled = (position.penaltyQuantityScaled ?? 0n) + quantityScaled;
+        break;
+      case "STAKE_RETURN_UNALLOCATED":
+        position.unallocatedReturnedQuantityScaled =
+          (position.unallocatedReturnedQuantityScaled ?? 0n) + quantityScaled;
         break;
       default:
         break;

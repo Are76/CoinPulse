@@ -235,24 +235,36 @@ export async function assemblePortfolioDashboard(args: {
     warnings: ["lp-valuation-unsupported-v1"],
   }));
 
-  const stakeDtos = stakePositions.map((row) => ({
-    stakeKey: row.stakeKey,
-    tokenAssetId: row.tokenAssetId,
-    tokenAddress: row.tokenAddress,
-    principalQuantity: toStringValue(row.principalQuantity),
-    returnedQuantity: toStringValue(row.returnedQuantity),
-    yieldQuantity: nullableToString(row.yieldQuantity),
-    penaltyQuantity: nullableToString(row.penaltyQuantity),
-    status: row.status,
-    startBlock: bigintToString(row.startBlock),
-    endBlock: bigintToString(row.endBlock),
-    valuation: {
-      status: "unsupported" as const,
-      valueQuote: null,
-    },
-    pnl: unsupportedPnl("Stake PnL is unsupported in this slice."),
-    warnings: ["stake-valuation-unsupported-v1"],
-  }));
+  const stakeDtos = stakePositions.map((row) => {
+    const unallocatedReturnedQuantity = nullableToString(row.unallocatedReturnedQuantity);
+    const warnings = ["stake-valuation-unsupported-v1"];
+    // Distinguishes "known zero" from "known total, unresolved allocation":
+    // never claim returnedQuantity (principal) is known when only the total
+    // is known, and never silently render the total as if it were zero.
+    if (unallocatedReturnedQuantity !== null) {
+      warnings.push("stake-return-unallocated-v1");
+    }
+
+    return {
+      stakeKey: row.stakeKey,
+      tokenAssetId: row.tokenAssetId,
+      tokenAddress: row.tokenAddress,
+      principalQuantity: toStringValue(row.principalQuantity),
+      returnedQuantity: toStringValue(row.returnedQuantity),
+      yieldQuantity: nullableToString(row.yieldQuantity),
+      penaltyQuantity: nullableToString(row.penaltyQuantity),
+      unallocatedReturnedQuantity,
+      status: row.status,
+      startBlock: bigintToString(row.startBlock),
+      endBlock: bigintToString(row.endBlock),
+      valuation: {
+        status: "unsupported" as const,
+        valueQuote: null,
+      },
+      pnl: unsupportedPnl("Stake PnL is unsupported in this slice."),
+      warnings,
+    };
+  });
 
   const totalPositions = tokenPositionDtos.length + lpDtos.length + stakeDtos.length;
   const unvaluedPositions = totalPositions - valuedPositions;

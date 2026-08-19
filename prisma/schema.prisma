@@ -625,6 +625,13 @@ model PortfolioStakePosition {
   returnedQuantity  Decimal  @db.Decimal(65, 18)
   yieldQuantity     Decimal? @db.Decimal(65, 18)
   penaltyQuantity   Decimal? @db.Decimal(65, 18)
+  // Non-null only when this stake has a STAKE_RETURN_UNALLOCATED ledger
+  // entry: a canonically known returned quantity whose principal/yield/
+  // penalty split could not be determined (no matching historical START
+  // evidence). Distinct from returnedQuantity, which means a known
+  // principal return — never fold this value into that field. Null means
+  // "not applicable" (no unresolved return for this stake), not zero.
+  unallocatedReturnedQuantity Decimal? @db.Decimal(65, 18)
   status            String
   startBlock        BigInt?
   endBlock          BigInt?

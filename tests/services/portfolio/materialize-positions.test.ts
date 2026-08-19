@@ -518,12 +518,35 @@ describe("materializeCurrentPortfolioPositions", () => {
     // Stake-position principal/returned/yield fields must NOT absorb the
     // unallocated quantity — returnedQuantityScaled has no case for
     // STAKE_RETURN_UNALLOCATED, so it stays at its zero default rather than
-    // falsely claiming a known principal return.
+    // falsely claiming a known principal return. The known-but-unresolved
+    // quantity is instead preserved in the dedicated field (P2 fix).
     expect(stores.portfolioStakePositions.get(`${WALLET_ID}:${CHAIN_ID}:800372`))
       .toMatchObject({
         principalQuantity: "5",
         returnedQuantity: "0",
+        unallocatedReturnedQuantity: "22337.55002516",
         status: "ENDED",
+      });
+  });
+
+  it("keeps unallocatedReturnedQuantity null when the stake return is fully known (no false positive)", async () => {
+    const stores = createMemoryDb();
+    seedTokens(stores.tokens);
+
+    await seedLedger(stores.db, [
+      createDraft({ txHash: "0xstake-end-known", actionType: "HEX_STAKE_END", actionGroupKey: "g3", dedupeKey: "d5", assetId: PHEX_ASSET_ID, quantity: "0", entryType: "STAKE_END", direction: "INTERNAL", sourceLogKey: "log:0xstake-end-known:stake:end:77:end" }),
+      createDraft({ txHash: "0xstake-end-known", actionType: "HEX_STAKE_END", actionGroupKey: "g3", dedupeKey: "d6", assetId: PHEX_ASSET_ID, quantity: "1.25", entryType: "STAKE_PRINCIPAL_RETURNED", sourceLogKey: "log:0xstake-end-known:stake:end:77:principal" }),
+    ]);
+
+    await materializeCurrentPortfolioPositions({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      db: stores.db as never,
+    });
+
+    expect(stores.portfolioStakePositions.get(`${WALLET_ID}:${CHAIN_ID}:77`))
+      .toMatchObject({
+        returnedQuantity: "1.25",
+        unallocatedReturnedQuantity: null,
       });
   });
 

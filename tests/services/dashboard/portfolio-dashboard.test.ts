@@ -1686,6 +1686,7 @@ describe("assemblePortfolioDashboard", () => {
             returnedQuantity: "0",
             yieldQuantity: null,
             penaltyQuantity: null,
+            unallocatedReturnedQuantity: null,
             status: "ACTIVE",
             startBlock: null,
             endBlock: null,
@@ -1730,6 +1731,84 @@ describe("assemblePortfolioDashboard", () => {
       pricedPositionsCount: 1,
       unsupportedPositionsCount: 2,
     });
+  });
+
+  it("surfaces a known-but-unresolved stake return without exposing a false known zero or a fabricated principal (P2)", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [],
+        lpPositions: [],
+        stakePositions: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            stakeKey: "800372",
+            tokenAssetId: STAKE_ASSET,
+            tokenAddress: STAKE_ADDRESS,
+            principalQuantity: "0",
+            returnedQuantity: "0",
+            yieldQuantity: null,
+            penaltyQuantity: null,
+            unallocatedReturnedQuantity: "22337.55002516",
+            status: "ENDED",
+            startBlock: null,
+            endBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      calculatePnl: async () => createPnlResult({ holdingsQuantity: "0" }),
+    });
+
+    const stake = result.stakePositions[0];
+    // returnedQuantity stays "0" (never fabricated as the total) but is
+    // paired with the unresolved-allocation quantity and warning, so "known
+    // zero" and "known total, unresolved split" remain distinguishable.
+    expect(stake).toMatchObject({
+      returnedQuantity: "0",
+      unallocatedReturnedQuantity: "22337.55002516",
+    });
+    expect(stake?.warnings).toContain("stake-return-unallocated-v1");
+  });
+
+  it("does not add the unresolved-return warning when a stake has no unallocated return", async () => {
+    const result = await assemblePortfolioDashboard({
+      wallet: { id: WALLET_ID, address: WALLET_ADDRESS, chainId: CHAIN_ID },
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T12:04:00.000Z"),
+      db: createMemoryDb({
+        tokenBalances: [],
+        lpPositions: [],
+        stakePositions: [
+          {
+            walletId: WALLET_ID,
+            walletAddress: WALLET_ADDRESS,
+            chainId: CHAIN_ID,
+            stakeKey: "77",
+            tokenAssetId: STAKE_ASSET,
+            tokenAddress: STAKE_ADDRESS,
+            principalQuantity: "1.25",
+            returnedQuantity: "1.25",
+            yieldQuantity: null,
+            penaltyQuantity: null,
+            unallocatedReturnedQuantity: null,
+            status: "ENDED",
+            startBlock: null,
+            endBlock: null,
+          },
+        ],
+      }) as never,
+      resolvePrice: async () => createResolvedPrice({ selected: null, rejected: [] }),
+      calculatePnl: async () => createPnlResult({ holdingsQuantity: "0" }),
+    });
+
+    const stake = result.stakePositions[0];
+    expect(stake?.unallocatedReturnedQuantity).toBeNull();
+    expect(stake?.warnings).not.toContain("stake-return-unallocated-v1");
   });
 
   it("assembles without rpc usage or unexpected dependencies", async () => {

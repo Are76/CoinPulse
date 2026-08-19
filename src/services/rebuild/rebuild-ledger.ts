@@ -16,6 +16,8 @@ import {
 import {
   deleteScopedLedgerEntries,
   persistNormalizedLedger,
+  wrapPrismaClientAsLedgerStore,
+  type PrismaLikeClient,
 } from "@/services/sync/ledger-store";
 import {
   getOccurredAtForDexSwap,
@@ -261,7 +263,10 @@ export async function rebuildCanonicalLedger(args: {
       },
       client,
     );
-    const persisted = await persistNormalizedLedger(drafts, client);
+    const persisted = await persistNormalizedLedger(
+      drafts,
+      wrapPrismaClientAsLedgerStore(client as unknown as PrismaLikeClient),
+    );
 
     return { deleted, persisted };
   };
