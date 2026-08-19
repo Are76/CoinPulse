@@ -283,6 +283,7 @@ export async function calculateAverageCostPnl(
         (entry) =>
           entry.assetId !== args.assetId &&
           entry.direction === "IN" &&
+          entry.entryType !== "FEE" &&
           entry.entryType !== "INTERNAL_TRANSFER",
       );
 

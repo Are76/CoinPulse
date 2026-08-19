@@ -1285,6 +1285,109 @@ describe("calculateAverageCostPnl", () => {
     ).toBe(false);
   });
 
+  it("[E] does not treat an in-group IN-direction FEE entry as disposal proceeds, and it cannot suppress the coupling guard", async () => {
+    // CodeRabbit nitpick: costSourceEntries excludes FEE entries but
+    // proceedsSourceEntries did not, so a rare IN-direction FEE entry (e.g.
+    // a gas rebate/refund) for another asset, co-grouped with the target
+    // disposal, would have been treated as real disposal proceeds — and,
+    // because that made proceedsSourceEntries non-empty, would have skipped
+    // the hasUnresolvedSiblingCoupling check entirely, masking a genuinely
+    // unresolved coupling elsewhere in the same transaction.
+    const TX_HASH = "0xtx-fee-in-does-not-count-as-proceeds";
+
+    const result = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        // Prior holdings so the disposal below clears the cost-basis check
+        // and actually reaches the proceeds/coupling logic.
+        createEntry({ quantity: "10" }),
+        createEntry({
+          id: "buy-pls",
+          assetId: PLS_ASSET,
+          entryType: "SWAP_OUT",
+          direction: "OUT",
+          quantity: "100",
+        }),
+        // Disposal group: target SEND plus an IN-direction FEE entry for a
+        // different asset in the SAME actionGroupId (e.g. a gas refund).
+        createEntry({
+          id: "send-target",
+          actionGroupId: "group-disposal",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:0`,
+          actionType: "TRANSFER",
+          entryType: "SEND",
+          direction: "OUT",
+          quantity: "5",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+        createEntry({
+          id: "fee-refund-in",
+          actionGroupId: "group-disposal",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:1`,
+          actionType: "TRANSFER",
+          assetId: PLS_ASSET,
+          entryType: "FEE",
+          direction: "IN",
+          quantity: "0.5",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+        // Genuine, separate sibling group in the same tx holding the real
+        // (unresolved) counter-leg evidence.
+        createEntry({
+          id: "receive-other",
+          actionGroupId: "group-receive-other",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:2`,
+          actionType: "TRANSFER",
+          assetId: LP_ASSET,
+          entryType: "RECEIVE",
+          direction: "IN",
+          quantity: "20",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+      ],
+      resolvePrice: createResolver([
+        createObservation({
+          id: "pls-buy",
+          observedAt: new Date("2026-05-08T12:00:00.000Z"),
+          price: "1",
+        }),
+        // If the FEE-IN entry were wrongly treated as proceeds, this
+        // observation would let it price successfully — proving the
+        // assertion below isn't passing merely because pricing failed.
+        createObservation({
+          id: "pls-fee-refund",
+          assetId: PLS_ASSET,
+          observedAt: new Date("2026-05-08T13:00:00.000Z"),
+          price: "1",
+        }),
+      ]),
+    });
+
+    // Not finalized at a fabricated proceeds figure derived from the FEE
+    // entry, and not silently skipped without a warning either: the real
+    // unresolved counter-leg (group-receive-other) must still trigger the
+    // guard.
+    expect(result.totalDisposedQuantity).toBe("0");
+    expect(result.holdingsQuantity).toBe("10");
+    expect(result.realizedPnl).toBe("0");
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "UNRESOLVED_ECONOMIC_COUPLING",
+          actionGroupId: "group-disposal",
+          txHash: TX_HASH,
+        }),
+      ]),
+    );
+  });
+
   it("[H] avoids per-group full-ledger scans (index is built once and stays correct across many unrelated transactions)", async () => {
     // Not a timing/perf assertion (those are brittle) — a scale-sanity check
     // that correctness holds when relevantEntries contains many unrelated
