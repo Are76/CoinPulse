@@ -1032,6 +1032,97 @@ describe("calculateAverageCostPnl", () => {
     expect(result.realizedPnl).toBe("20");
   });
 
+  it("[B2] does not silently drop an independent TRANSFER that only coincidentally shares asset+direction with a complete higher-order sibling at a different quantity", async () => {
+    // CodeRabbit follow-up: (assetId, direction) alone is not a safe shadow
+    // key, because normalizeTransfer's sourceLogKey embeds the raw ERC-20
+    // Transfer log index while normalizeSwap's embeds the raw DEX Swap
+    // event's own log index (`swap:<protocol>:<logIndex>` in dex-sync.ts) —
+    // there is no shared raw-event identifier between the two families to
+    // prove "same underlying movement" without a normalizer change. The
+    // shadow check additionally requires an EXACT quantity match. Here the
+    // TRANSFER SEND is for a different quantity (7) than the SWAP's own
+    // SEND-direction leg (4), so it must NOT be treated as a shadow — it
+    // must fall through to ordinary processing (and, since no other
+    // evidence resolves its proceeds, to the unresolved-coupling guard,
+    // which still finds no *opposite-direction* candidate here and lets it
+    // finalize with zero proceeds — it is never silently discarded without
+    // being counted).
+    const TX_HASH = "0xtx-coincidental-asset-direction-collision";
+
+    const result = await calculateAverageCostPnl({
+      walletId: WALLET_ID,
+      chainId: CHAIN_ID,
+      assetId: TARGET_ASSET,
+      quoteAsset: QUOTE_ASSET,
+      asOf: new Date("2026-05-08T14:00:00.000Z"),
+      entries: [
+        createEntry({ quantity: "20" }),
+        createEntry({
+          id: "buy-pls",
+          assetId: PLS_ASSET,
+          entryType: "SWAP_OUT",
+          direction: "OUT",
+          quantity: "100",
+        }),
+        // Canonical SWAP group: SEND-direction leg of quantity 4.
+        createEntry({
+          id: "swap-out-target",
+          actionGroupId: "group-swap",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:swap:out`,
+          actionType: "SWAP",
+          entryType: "SWAP_OUT",
+          direction: "OUT",
+          quantity: "4",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+        createEntry({
+          id: "swap-in-pls",
+          actionGroupId: "group-swap",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:swap:in`,
+          actionType: "SWAP",
+          assetId: PLS_ASSET,
+          entryType: "SWAP_IN",
+          direction: "IN",
+          quantity: "60",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+        // Independent TRANSFER SEND of the SAME asset and direction, but a
+        // DIFFERENT quantity (7, not 4) — a genuinely separate disposal that
+        // happens to share (assetId, direction) with the SWAP's own leg.
+        createEntry({
+          id: "independent-send-target",
+          actionGroupId: "group-independent-transfer",
+          txHash: TX_HASH,
+          sourceLogKey: `log:${TX_HASH}:transfer:9`,
+          actionType: "TRANSFER",
+          entryType: "SEND",
+          direction: "OUT",
+          quantity: "7",
+          occurredAt: new Date("2026-05-08T13:00:00.000Z"),
+        }),
+      ],
+      resolvePrice: createResolver([
+        createObservation({
+          id: "pls-buy",
+          observedAt: new Date("2026-05-08T12:00:00.000Z"),
+          price: "1",
+        }),
+        createObservation({
+          id: "pls-swap",
+          observedAt: new Date("2026-05-08T13:00:00.000Z"),
+          price: "1",
+        }),
+      ]),
+    });
+
+    // Not silently dropped: it is counted as a disposal (quantity 7), on top
+    // of the canonical SWAP's own disposal (quantity 4) — total 11.
+    expect(result.totalDisposedQuantity).toBe("11");
+    expect(result.holdingsQuantity).toBe("9");
+  });
+
   it("[C] does not trigger the guard for a plain TRANSFER group sharing a tx with a separate, unrelated, complete higher-order SWAP", async () => {
     // A TRANSFER SEND-only group has no counter-value evidence at all inside
     // its own actionGroupId. The only same-tx sibling entries come from a
@@ -1114,6 +1205,10 @@ describe("calculateAverageCostPnl", () => {
     // for this TRANSFER group once the unrelated SWAP is excluded).
     expect(result.totalDisposedQuantity).toBe("4");
     expect(result.holdingsQuantity).toBe("6");
+    // Locks the documented "proceeds resolve to 0" behavior directly — a
+    // regression that fabricated non-zero proceeds for this group would
+    // still pass the two assertions above but would fail this one.
+    expect(result.realizedPnl).toBe("-40");
   });
 
   it("[D] does not treat a zero-quantity opposite-direction sibling as coupling evidence", async () => {
@@ -1219,6 +1314,10 @@ describe("calculateAverageCostPnl", () => {
     });
 
     expect(result.holdingsQuantity).toBe("500");
+    // States the fail-closed outcome directly rather than only implying it
+    // through holdingsQuantity: the unresolved SEND group must not have
+    // contributed a disposal at all.
+    expect(result.totalDisposedQuantity).toBe("0");
     expect(
       result.warnings.some(
         (warning) =>

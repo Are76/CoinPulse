@@ -34,19 +34,34 @@ type SiblingCouplingIndex = {
   /** All relevant entries for a txHash, keyed for O(1) per-group lookup instead of a full-ledger scan per group. */
   entriesByTxHash: ReadonlyMap<string, readonly PnLEntry[]>;
   /**
-   * For each txHash, the set of "assetId|direction" legs already recorded by
-   * a *complete* higher-order action group (SWAP/LP/STAKE — both a non-fee
-   * IN leg and a non-fee OUT leg present in that group). TRANSFERS-family
-   * normalization runs independently of DEX/LP/STAKE-family normalization
-   * and unconditionally emits a generic TRANSFER SEND/RECEIVE "shadow"
-   * action group for every raw transfer in a transaction (see
+   * For each txHash, the set of "assetId|direction|quantity" legs already
+   * recorded by a *complete* higher-order action group (SWAP/LP/STAKE — both
+   * a non-fee IN leg and a non-fee OUT leg present in that group).
+   * TRANSFERS-family normalization runs independently of DEX/LP/STAKE-family
+   * normalization and unconditionally emits a generic TRANSFER SEND/RECEIVE
+   * "shadow" action group for every raw transfer in a transaction (see
    * normalizeTransfers/buildTransferNormalizationSnapshots — it does not
    * exclude transfers that another family already turned into a canonical
    * higher-order group). So a correctly recognized swap can coexist with
    * plain TRANSFER shadow groups mirroring its own legs for the very same
-   * transaction. This index lets those specific shadow legs be recognized
-   * as already-accounted-for evidence, without inferring anything about
-   * *which* protocol produced them.
+   * transaction.
+   *
+   * The leg key intentionally includes the exact canonical quantity, not
+   * just (assetId, direction). `normalizeTransfer`'s sourceLogKey embeds the
+   * raw ERC-20 Transfer event's own log index, while `normalizeSwap`'s
+   * embeds the raw DEX Swap event's log index (`swap:<protocol>:<logIndex>`,
+   * via dex-sync.ts) — these two families never share a common raw-event
+   * identifier, so a shared "same underlying event" provenance key cannot be
+   * derived without a normalizer change (out of scope here). Requiring an
+   * exact quantity match on top of (assetId, direction) is the strongest
+   * signal available purely from already-persisted ledger data: a
+   * coincidental, truly independent transfer sharing the same asset,
+   * direction, *and* exact quantity as a complete higher-order group's own
+   * leg within the same transaction is not a realistic false-positive
+   * surface, whereas (assetId, direction) alone can collide with a genuinely
+   * unrelated transfer. If quantities don't match exactly, this group is
+   * treated as independent (not shadowed) and falls through to the ordinary
+   * unresolved-coupling check below.
    */
   shadowedLegsByTxHash: ReadonlyMap<string, ReadonlySet<string>>;
 };
@@ -55,8 +70,8 @@ function isZeroQuantity(quantity: string): boolean {
   return new Decimal(quantity).isZero();
 }
 
-function legKey(assetId: string, direction: PnLDirection): string {
-  return `${assetId}|${direction}`;
+function legKey(assetId: string, direction: PnLDirection, quantity: Decimal): string {
+  return `${assetId}|${direction}|${quantity.toFixed()}`;
 }
 
 function buildSiblingCouplingIndex(relevantEntries: readonly PnLEntry[]): SiblingCouplingIndex {
@@ -96,7 +111,7 @@ function buildSiblingCouplingIndex(relevantEntries: readonly PnLEntry[]): Siblin
     } else if (entry.direction === "OUT") {
       state.hasOut = true;
     }
-    state.legs.add(legKey(entry.assetId, entry.direction));
+    state.legs.add(legKey(entry.assetId, entry.direction, new Decimal(entry.quantity)));
     higherOrderGroups.set(entry.actionGroupId, state);
   }
 
@@ -120,12 +135,15 @@ function buildSiblingCouplingIndex(relevantEntries: readonly PnLEntry[]): Siblin
 
 /**
  * True when this action group's target-asset movement (in the given
- * direction) is already recorded by a complete higher-order action group
- * for the same transaction — i.e. this group is a generic TRANSFER "shadow"
- * of a leg the canonical SWAP/LP/STAKE group already accounts for. Matching
- * is by exact (assetId, direction) leg identity taken directly from the
- * existing higher-order group's own recorded entries — it never infers
- * protocol identity or reconstructs economic meaning.
+ * direction, for the exact quantity of the entries being evaluated) is
+ * already recorded by a complete higher-order action group for the same
+ * transaction — i.e. this group is a generic TRANSFER "shadow" of a leg the
+ * canonical SWAP/LP/STAKE group already accounts for. Matching is by exact
+ * (assetId, direction, quantity) leg identity taken directly from the
+ * existing higher-order group's own recorded entries — see
+ * SiblingCouplingIndex for why quantity is required and why exact raw-event
+ * provenance cannot be used instead. This never infers protocol identity or
+ * reconstructs economic meaning.
  */
 function isShadowedByCompleteHigherOrderAction(args: {
   index: SiblingCouplingIndex;
@@ -133,13 +151,14 @@ function isShadowedByCompleteHigherOrderAction(args: {
   txHash: string;
   targetAssetId: string;
   direction: PnLDirection;
+  quantity: Decimal;
 }): boolean {
   if (HIGHER_ORDER_ACTION_TYPES.has(args.triggerActionType)) {
     return false;
   }
 
   const shadowedLegs = args.index.shadowedLegsByTxHash.get(args.txHash);
-  return shadowedLegs?.has(legKey(args.targetAssetId, args.direction)) ?? false;
+  return shadowedLegs?.has(legKey(args.targetAssetId, args.direction, args.quantity)) ?? false;
 }
 
 /**
@@ -253,10 +272,15 @@ export async function calculateAverageCostPnl(
     const targetFeeEntries = targetEntries.filter((entry) => entry.entryType === "FEE");
 
     // A complete higher-order group (SWAP/LP/STAKE) elsewhere in this same
-    // transaction already recorded this exact (assetId, direction) leg —
-    // this group is a generic TRANSFER shadow of that already-accounted-for
-    // movement, not an independent economic event. Skip it silently (like
-    // INTERNAL_TRANSFER) rather than double-counting it or flagging it.
+    // transaction already recorded this exact (assetId, direction, quantity)
+    // leg — this group is a generic TRANSFER shadow of that
+    // already-accounted-for movement, not an independent economic event.
+    // Skip it silently (like INTERNAL_TRANSFER) rather than double-counting
+    // it or flagging it. Requiring an exact quantity match (see
+    // SiblingCouplingIndex) means a coincidentally same-asset/same-direction
+    // but differently-sized independent transfer is NOT treated as a
+    // shadow — it falls through to the ordinary disposal/acquisition and
+    // unresolved-coupling handling below.
     if (
       (targetInEntries.length > 0 &&
         isShadowedByCompleteHigherOrderAction({
@@ -265,6 +289,7 @@ export async function calculateAverageCostPnl(
           txHash: groupEntries[0].txHash,
           targetAssetId: args.assetId,
           direction: "IN",
+          quantity: sumQuantities(targetInEntries),
         })) ||
       (targetOutEntries.length > 0 &&
         isShadowedByCompleteHigherOrderAction({
@@ -273,6 +298,7 @@ export async function calculateAverageCostPnl(
           txHash: groupEntries[0].txHash,
           targetAssetId: args.assetId,
           direction: "OUT",
+          quantity: sumQuantities(targetOutEntries),
         }))
     ) {
       continue;
