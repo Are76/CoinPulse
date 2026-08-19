@@ -154,5 +154,13 @@ planning its next child.
 - No chain-head or "latest safe block" policy — that remains a separate,
   unbuilt decision.
 - No automatic execution of any live window. This document authorizes zero
-  live windows; see `docs/wallet-forward-campaign-runbook.md`'s staged
-  rollout table for how live child-campaign authorization is granted.
+  live windows. Live supervisor execution requires a separate, explicit
+  product-owner approval of one immutable total `--authorized-final-block`
+  before the supervisor is invoked — per "Authorization model" above, clean
+  bounded child campaigns then proceed sequentially within that single
+  approval, with no fresh per-child approval required. This is a different
+  authorization shape than `docs/wallet-forward-campaign-runbook.md`'s staged
+  10 → 50 → 250 → 1000 rollout table, which still governs any standalone
+  campaign-runner execution or recovery invocation run outside a supervisor
+  session — it is not an additional per-child approval requirement layered
+  on top of an already-authorized supervisor run.
