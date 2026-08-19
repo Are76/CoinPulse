@@ -114,10 +114,11 @@ stays `null`), never guessed.
   time) execution order, PostgreSQL aborts *this* transaction with a
   serialization failure (SQLSTATE `40001`, surfaced by Prisma as error code
   `P2034`) rather than let it commit against stale data. On that failure,
-  the whole transaction body is retried up to 3 times — matching the
-  existing repo-native pattern in `sync-state-store.ts`'s
-  `runCursorTransactionWithRetry` — after which the error propagates and
-  apply mode fails outright rather than silently giving up on the batch.
+  the whole transaction body is retried for up to 3 total attempts (1
+  initial attempt plus 2 retries) — matching the existing repo-native
+  pattern in `sync-state-store.ts`'s `runCursorTransactionWithRetry` —
+  after which the error propagates and apply mode fails outright rather
+  than silently giving up on the batch.
   A final count-based recheck (re-verifying the same ACTIVE conditions as
   the last statement before the transaction body returns) is also present
   as a defensive, testable belt-and-suspenders check, but it is **not**

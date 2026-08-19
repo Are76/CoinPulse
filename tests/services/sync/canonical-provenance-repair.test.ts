@@ -269,13 +269,6 @@ function createRepairMockDb(seed: {
     $transaction: async <T>(fn: (tx: unknown) => Promise<T>, options?: unknown) => {
       transactionCalls.push({ options });
 
-      if (remainingForcedConflicts > 0) {
-        remainingForcedConflicts -= 1;
-        const conflict = new Error("Transaction failed due to a write conflict or a deadlock.");
-        (conflict as unknown as { code: string }).code = "P2034";
-        throw conflict;
-      }
-
       const snapshot = {
         swaps: swaps.map((s) => ({ ...s })),
         lpActions: lpActions.map((l) => ({ ...l })),
@@ -284,6 +277,16 @@ function createRepairMockDb(seed: {
         lpEvidence: [...lpEvidence],
         stakeEvidence: [...stakeEvidence],
       };
+      const rollback = () => {
+        swaps.splice(0, swaps.length, ...snapshot.swaps);
+        lpActions.splice(0, lpActions.length, ...snapshot.lpActions);
+        stakeActions.splice(0, stakeActions.length, ...snapshot.stakeActions);
+        dexEvidence.splice(0, dexEvidence.length, ...snapshot.dexEvidence);
+        lpEvidence.splice(0, lpEvidence.length, ...snapshot.lpEvidence);
+        stakeEvidence.splice(0, stakeEvidence.length, ...snapshot.stakeEvidence);
+      };
+
+      let result: T;
       try {
         // Real Prisma's interactive-transaction client (`tx`) does NOT
         // itself expose `$transaction` — nested transactions aren't a
@@ -293,16 +296,28 @@ function createRepairMockDb(seed: {
         // and open a second, redundant nested transaction.
         const txWithoutTransaction: Record<string, unknown> = { ...client };
         delete txWithoutTransaction.$transaction;
-        return await fn(txWithoutTransaction);
+        result = await fn(txWithoutTransaction);
       } catch (error) {
-        swaps.splice(0, swaps.length, ...snapshot.swaps);
-        lpActions.splice(0, lpActions.length, ...snapshot.lpActions);
-        stakeActions.splice(0, stakeActions.length, ...snapshot.stakeActions);
-        dexEvidence.splice(0, dexEvidence.length, ...snapshot.dexEvidence);
-        lpEvidence.splice(0, lpEvidence.length, ...snapshot.lpEvidence);
-        stakeEvidence.splice(0, stakeEvidence.length, ...snapshot.stakeEvidence);
+        rollback();
         throw error;
       }
+
+      // Simulate a COMMIT-time serialization failure: the closure ran to
+      // completion (its writes are visible above), but the transaction
+      // still fails to commit and Postgres rolls it back. This is the
+      // realistic case — a P2034 can happen at COMMIT, not only mid-body —
+      // and it is the case that actually exercises whether the closure's
+      // *return value* (not any premature side effect on shared JS state)
+      // is what the caller correctly relies on across a retry.
+      if (remainingForcedConflicts > 0) {
+        remainingForcedConflicts -= 1;
+        rollback();
+        const conflict = new Error("Transaction failed due to a write conflict or a deadlock.");
+        (conflict as unknown as { code: string }).code = "P2034";
+        throw conflict;
+      }
+
+      return result;
     },
   };
 
@@ -745,12 +760,26 @@ describe("repairCanonicalRawTransferProvenance — SWAP", () => {
     });
   });
 
-  it("fails closed in apply mode when the client has no $transaction capability, instead of running unprotected", async () => {
+  it("fails closed in apply mode when the client has no $transaction capability, before any candidate scan, instead of running unprotected", async () => {
     const store = createRepairMockDbWithoutTransactionCapability({
       transfers: baseSwapTransfers(),
       swaps: [baseSwapAction()],
     });
     expect("$transaction" in store.client).toBe(false);
+
+    // Prove the refusal happens before the candidate scan even runs, not
+    // just before the eventual write — a wasted full bounded scan is itself
+    // something apply mode should avoid when it cannot provide the
+    // Serializable-transaction guarantee at all.
+    const rawDexSwap = (
+      store.client as { rawDexSwap: { findMany: (args: unknown) => Promise<unknown> } }
+    ).rawDexSwap;
+    const realSwapFindMany = rawDexSwap.findMany;
+    let candidateScanAttempted = false;
+    rawDexSwap.findMany = async (queryArgs: unknown) => {
+      candidateScanAttempted = true;
+      return realSwapFindMany(queryArgs);
+    };
 
     await expect(
       repairCanonicalRawTransferProvenance(
@@ -761,10 +790,26 @@ describe("repairCanonicalRawTransferProvenance — SWAP", () => {
       /apply mode requires a Prisma client capable of an interactive \$transaction with an explicit isolationLevel/,
     );
 
+    expect(candidateScanAttempted).toBe(false);
     // Nothing was written — the refusal happens before any evidence/status
     // mutation is attempted, not as a rollback after a partial write.
     expect(store.swaps[0].rawTransferEvidenceStatus).toBeNull();
     expect(store.dexEvidence).toEqual([]);
+  });
+
+  it("dry-run never requires $transaction capability — it performs no writes", async () => {
+    const store = createRepairMockDbWithoutTransactionCapability({
+      transfers: baseSwapTransfers(),
+      swaps: [baseSwapAction()],
+    });
+
+    const report = await repairCanonicalRawTransferProvenance(
+      { chainId: CHAIN_ID, family: "SWAP" }, // apply omitted -> dry-run
+      store.client as never,
+    );
+
+    expect(report.deterministicallyRepairable).toBe(1);
+    expect(report.apply).toBe(false);
   });
 
   it("retries a serialization conflict (Prisma P2034) up to the bounded attempt cap, then succeeds", async () => {
@@ -787,6 +832,92 @@ describe("repairCanonicalRawTransferProvenance — SWAP", () => {
     ]);
     expect(report.deterministicallyRepairable).toBe(1);
     expect(store.swaps[0].rawTransferEvidenceStatus).toBe("RECORDED");
+  });
+
+  it("report counters are not double-applied when a retried attempt also has a revalidation-invalidated action", async () => {
+    // Two candidates: one healthy (repairs cleanly across every attempt),
+    // one whose backing transfer is still ACTIVE at the initial scan (so it
+    // enters `pending` normally) but gets reorged the moment the
+    // transaction's OWN step-1 recheck queries it — on EVERY attempt,
+    // including the one that fails via a forced COMMIT-time conflict.
+    // Combined, this proves the "invalidated" bookkeeping the closure
+    // computes is applied to the shared report exactly once, only after the
+    // retry that actually succeeds — if it were applied per-attempt (the
+    // bug this test targets), the failed first attempt's bookkeeping would
+    // already have decremented report.deterministicallyRepairable and
+    // pushed an unresolved entry, and the successful retry would do so
+    // again, leaving report.unresolved with a duplicate entry and
+    // report.deterministicallyRepairable double-decremented.
+    const healthy = baseSwapAction({ id: "swap_healthy" });
+    const staleAction = baseSwapAction({
+      id: "swap_stale",
+      txHash: "0xswapstale",
+      blockHash: "0xblockstale",
+    });
+    const healthyTransfers = baseSwapTransfers();
+    const staleTransfers = [
+      transfer({
+        id: "t_sold_stale",
+        txHash: "0xswapstale",
+        blockHash: "0xblockstale",
+        logIndex: 0,
+        tokenAddress: TOKEN_A,
+        assetIdSnapshot: `chain:369:erc20:${TOKEN_A}`,
+        fromAddress: WALLET,
+        toAddress: "0xrouter000000000000000000000000000000000",
+        amountRaw: "1000",
+      }),
+      transfer({
+        id: "t_bought_stale",
+        txHash: "0xswapstale",
+        blockHash: "0xblockstale",
+        logIndex: 2,
+        tokenAddress: TOKEN_B,
+        assetIdSnapshot: `chain:369:erc20:${TOKEN_B}`,
+        fromAddress: "0xrouter000000000000000000000000000000000",
+        toAddress: WALLET,
+        amountRaw: "2000",
+      }),
+    ];
+    const store = createRepairMockDb({
+      transfers: [...healthyTransfers, ...staleTransfers],
+      swaps: [healthy, staleAction],
+      forcedSerializationConflicts: 1, // fails once, succeeds on the retry
+    });
+
+    const realFindMany = store.client.rawTokenTransfer.findMany;
+    store.client.rawTokenTransfer.findMany = (async (queryArgs: {
+      where: Record<string, unknown>;
+    }) => {
+      const isTransactionStep1Query =
+        queryArgs.where.id !== undefined && queryArgs.where.blockNumber === undefined;
+      if (isTransactionStep1Query) {
+        const staleTransfer = store.transfers.find((t) => t.id === "t_sold_stale");
+        if (staleTransfer) staleTransfer.status = "REORGED";
+      }
+      return realFindMany(queryArgs);
+    }) as typeof realFindMany;
+
+    const report = await repairCanonicalRawTransferProvenance(
+      { chainId: CHAIN_ID, family: "SWAP", apply: true },
+      store.client as never,
+    );
+
+    expect(store.transactionCalls).toHaveLength(2);
+    // Exactly one unresolved entry for the stale action, not two (which a
+    // per-attempt report mutation bug would have produced by applying the
+    // failed first attempt's bookkeeping AND the successful retry's).
+    expect(report.unresolved).toEqual([
+      expect.objectContaining({ actionId: "swap_stale", reason: "revalidation-failed-possible-reorg" }),
+    ]);
+    expect(report.deterministicallyRepairable).toBe(1);
+    expect(report.repaired).toEqual([
+      expect.objectContaining({ actionId: "swap_healthy" }),
+    ]);
+    expect(store.swaps.find((s) => s.id === "swap_healthy")?.rawTransferEvidenceStatus).toBe(
+      "RECORDED",
+    );
+    expect(store.swaps.find((s) => s.id === "swap_stale")?.rawTransferEvidenceStatus).toBeNull();
   });
 
   it("propagates a serialization conflict once the bounded retry cap is exhausted, without persisting anything", async () => {

@@ -74,9 +74,10 @@ import type { SyncDbClient } from "@/services/sync/sync-common";
  * by Prisma as error code P2034) rather than let it commit against stale
  * data. That failure can occur at any statement, including implicitly at
  * COMMIT. On a serialization failure, this module retries the whole
- * transaction body up to 3 times (matching the existing repo-native retry
- * pattern in `sync-state-store.ts`'s `runCursorTransactionWithRetry`); if
- * every attempt fails, the error propagates and NOTHING commits.
+ * transaction body for up to 3 total attempts (1 initial attempt + 2
+ * retries — matching the existing repo-native retry pattern in
+ * `sync-state-store.ts`'s `runCursorTransactionWithRetry`); if every
+ * attempt fails, the error propagates and NOTHING commits.
  *
  * The final count-based recheck (re-counting the same ACTIVE conditions
  * checked at the start of the transaction, as the last statement before the
@@ -292,11 +293,12 @@ function isRetryableSerializationConflict(error: unknown): boolean {
 
 /**
  * Opens the ONE Serializable-isolation transaction apply mode writes
- * through, retrying up to `MAX_SERIALIZABLE_TRANSACTION_ATTEMPTS` times on a
- * PostgreSQL serialization failure / deadlock (Prisma P2034) before letting
- * the error propagate. Fails closed — throws immediately, before any DB
- * call — if the client does not expose `$transaction` with isolation-level
- * support; it never falls back to running the operation non-transactionally.
+ * through, for up to `MAX_SERIALIZABLE_TRANSACTION_ATTEMPTS` total attempts
+ * (1 initial attempt plus retries) on a PostgreSQL serialization failure /
+ * deadlock (Prisma P2034) before letting the error propagate. Fails closed
+ * — throws immediately, before any DB call — if the client does not expose
+ * `$transaction` with isolation-level support; it never falls back to
+ * running the operation non-transactionally.
  */
 async function runSerializableTransactionWithRetry<T>(
   client: SyncDbClient,
@@ -349,6 +351,14 @@ async function runSerializableTransactionWithRetry<T>(
  * mutates the report — it already reflects scan-time state, which is what a
  * dry-run report is supposed to show.
  */
+type TransactionAttemptResult<TPlan> = {
+  persistResult: { count: number };
+  /** Items this attempt found ineligible, local to this attempt — NOT
+   * applied to the shared report until the whole retryable operation has
+   * finally succeeded. See the surrounding function doc for why. */
+  invalidated: readonly PendingRepair<TPlan>[];
+};
+
 async function applyPendingRepairsAtomically<TPlan>(args: {
   apply: boolean;
   client: SyncDbClient;
@@ -363,108 +373,130 @@ async function applyPendingRepairsAtomically<TPlan>(args: {
     return { count: 0 };
   }
 
-  return runSerializableTransactionWithRetry(client, async (tx) => {
-    const actionModel = tx[actionModelKey] as unknown as EligibilityModel;
-    const transferModel = tx.rawTokenTransfer as unknown as EligibilityModel;
+  // The transaction body below can run more than once (see
+  // runSerializableTransactionWithRetry): a P2034 serialization conflict
+  // rolls back the database but does NOT undo any plain JS-side mutation
+  // the closure already made. `report` is a plain object shared with the
+  // caller, not something Postgres can roll back — so the closure must
+  // never mutate it directly. Instead it returns a local, attempt-scoped
+  // "invalidated" list, and `report` is mutated exactly once, only after
+  // the whole retryable operation has finally succeeded (i.e. reflecting
+  // only the attempt that actually committed).
+  const attemptResult = await runSerializableTransactionWithRetry<TransactionAttemptResult<TPlan>>(
+    client,
+    async (tx) => {
+      const actionModel = tx[actionModelKey] as unknown as EligibilityModel;
+      const transferModel = tx.rawTokenTransfer as unknown as EligibilityModel;
 
-    const actionIds = [...new Set(pending.map((item) => item.actionId))];
-    const transferIds = [...new Set(pending.flatMap((item) => item.transferIds))];
+      const actionIds = [...new Set(pending.map((item) => item.actionId))];
+      const transferIds = [...new Set(pending.flatMap((item) => item.transferIds))];
 
-    // Step 1: re-check eligibility inside this transaction, as close to the
-    // write as this codebase's Prisma model API allows.
-    const [eligibleActionRows, activeTransferRows] = await Promise.all([
-      actionModel.findMany({
-        where: {
-          id: { in: actionIds },
-          status: "ACTIVE",
-          rawTransferEvidenceStatus: null,
-        },
-        select: { id: true },
-      }),
-      transferIds.length === 0
-        ? Promise.resolve([])
-        : transferModel.findMany({
-            where: { id: { in: transferIds }, status: "ACTIVE" },
-            select: { id: true },
-          }),
-    ]);
+      // Step 1: re-check eligibility inside this transaction, as close to
+      // the write as this codebase's Prisma model API allows.
+      const [eligibleActionRows, activeTransferRows] = await Promise.all([
+        actionModel.findMany({
+          where: {
+            id: { in: actionIds },
+            status: "ACTIVE",
+            rawTransferEvidenceStatus: null,
+          },
+          select: { id: true },
+        }),
+        transferIds.length === 0
+          ? Promise.resolve([])
+          : transferModel.findMany({
+              where: { id: { in: transferIds }, status: "ACTIVE" },
+              select: { id: true },
+            }),
+      ]);
 
-    const eligibleActionIds = new Set(eligibleActionRows.map((row) => row.id));
-    const activeTransferIds = new Set(activeTransferRows.map((row) => row.id));
+      const eligibleActionIds = new Set(eligibleActionRows.map((row) => row.id));
+      const activeTransferIds = new Set(activeTransferRows.map((row) => row.id));
 
-    const survivors: PendingRepair<TPlan>[] = [];
+      const survivors: PendingRepair<TPlan>[] = [];
+      const invalidated: PendingRepair<TPlan>[] = [];
 
-    for (const item of pending) {
-      const actionStillEligible = eligibleActionIds.has(item.actionId);
-      const transfersStillActive = item.transferIds.every((id) => activeTransferIds.has(id));
+      for (const item of pending) {
+        const actionStillEligible = eligibleActionIds.has(item.actionId);
+        const transfersStillActive = item.transferIds.every((id) => activeTransferIds.has(id));
 
-      if (actionStillEligible && transfersStillActive) {
-        survivors.push(item);
-        continue;
+        if (actionStillEligible && transfersStillActive) {
+          survivors.push(item);
+        } else {
+          invalidated.push(item);
+        }
       }
 
-      report.deterministicallyRepairable -= 1;
-      report.evidenceRowsPlanned -= item.evidenceRowsPlanned;
-      report.repaired = report.repaired.filter((row) => row.actionId !== item.actionId);
-      report.unresolved.push({
-        actionId: item.actionId,
-        txHash: item.txHash,
-        blockHash: item.blockHash,
-        reason: "revalidation-failed-possible-reorg",
-      });
-    }
+      if (survivors.length === 0) {
+        return { persistResult: { count: 0 }, invalidated };
+      }
 
-    if (survivors.length === 0) {
-      return { count: 0 };
-    }
+      const finalPlans = survivors.flatMap((item) => item.planEntries);
 
-    const finalPlans = survivors.flatMap((item) => item.planEntries);
+      // Step 2: the actual write, via the exact PR #376 persister, executed
+      // against `tx`. `tx` is an interactive-transaction client and does
+      // not itself expose `$transaction`, so persistRaw*TransferEvidence's
+      // own internal transaction-detection falls through to running
+      // directly against `tx` — its createMany + updateMany become part of
+      // THIS transaction, not a second one.
+      const persistResult = await persist(finalPlans, tx);
 
-    // Step 2: the actual write, via the exact PR #376 persister, executed
-    // against `tx`. `tx` is an interactive-transaction client and does not
-    // itself expose `$transaction`, so persistRaw*TransferEvidence's own
-    // internal transaction-detection falls through to running directly
-    // against `tx` — its createMany + updateMany become part of THIS
-    // transaction, not a second one.
-    const persistResult = await persist(finalPlans, tx);
+      // Step 3: final belt-and-suspenders recheck, the last read before
+      // this transaction body returns. Re-counts the exact same ACTIVE
+      // conditions checked in step 1 for every surviving id. This is NOT
+      // what provides the concurrency guarantee — that comes from
+      // PostgreSQL SERIALIZABLE isolation covering this entire transaction
+      // (see module doc): if any concurrent transaction committed a change
+      // this transaction's result depends on, PostgreSQL aborts this
+      // transaction with a serialization failure regardless of what this
+      // guard finds. This guard exists so a still-committed-successfully
+      // transaction that nonetheless observed a stale count (a case the
+      // database guarantee is not expected to leave open, but this is
+      // cheap insurance against a mistaken assumption about that
+      // guarantee) produces a clear, testable domain error instead of
+      // silently persisting evidence built from a snapshot the code itself
+      // no longer trusts.
+      const survivorActionIds = [...new Set(survivors.map((item) => item.actionId))];
+      const survivorTransferIds = [...new Set(survivors.flatMap((item) => item.transferIds))];
 
-    // Step 3: final belt-and-suspenders recheck, the last read before this
-    // transaction body returns. Re-counts the exact same ACTIVE conditions
-    // checked in step 1 for every surviving id. This is NOT what provides
-    // the concurrency guarantee — that comes from PostgreSQL SERIALIZABLE
-    // isolation covering this entire transaction (see module doc): if any
-    // concurrent transaction committed a change this transaction's result
-    // depends on, PostgreSQL aborts this transaction with a serialization
-    // failure regardless of what this guard finds. This guard exists so a
-    // still-committed-successfully transaction that nonetheless observed a
-    // stale count (a case the database guarantee is not expected to leave
-    // open, but this is cheap insurance against a mistaken assumption about
-    // that guarantee) produces a clear, testable domain error instead of
-    // silently persisting evidence built from a snapshot the code itself no
-    // longer trusts.
-    const survivorActionIds = [...new Set(survivors.map((item) => item.actionId))];
-    const survivorTransferIds = [...new Set(survivors.flatMap((item) => item.transferIds))];
+      const [finalActiveActionCount, finalActiveTransferCount] = await Promise.all([
+        actionModel.count({ where: { id: { in: survivorActionIds }, status: "ACTIVE" } }),
+        survivorTransferIds.length === 0
+          ? Promise.resolve(0)
+          : transferModel.count({
+              where: { id: { in: survivorTransferIds }, status: "ACTIVE" },
+            }),
+      ]);
 
-    const [finalActiveActionCount, finalActiveTransferCount] = await Promise.all([
-      actionModel.count({ where: { id: { in: survivorActionIds }, status: "ACTIVE" } }),
-      survivorTransferIds.length === 0
-        ? Promise.resolve(0)
-        : transferModel.count({
-            where: { id: { in: survivorTransferIds }, status: "ACTIVE" },
-          }),
-    ]);
+      if (
+        finalActiveActionCount !== survivorActionIds.length ||
+        finalActiveTransferCount !== survivorTransferIds.length
+      ) {
+        throw new Error(
+          "canonical-provenance-repair: concurrent canonical state change detected immediately before commit; rolled back to avoid persisting stale evidence.",
+        );
+      }
 
-    if (
-      finalActiveActionCount !== survivorActionIds.length ||
-      finalActiveTransferCount !== survivorTransferIds.length
-    ) {
-      throw new Error(
-        "canonical-provenance-repair: concurrent canonical state change detected immediately before commit; rolled back to avoid persisting stale evidence.",
-      );
-    }
+      return { persistResult, invalidated };
+    },
+  );
 
-    return persistResult;
-  });
+  // Applied exactly once, only now that the transaction has actually
+  // committed — reflecting the attempt that succeeded, never a retried
+  // attempt's stale/duplicate view.
+  for (const item of attemptResult.invalidated) {
+    report.deterministicallyRepairable -= 1;
+    report.evidenceRowsPlanned -= item.evidenceRowsPlanned;
+    report.repaired = report.repaired.filter((row) => row.actionId !== item.actionId);
+    report.unresolved.push({
+      actionId: item.actionId,
+      txHash: item.txHash,
+      blockHash: item.blockHash,
+      reason: "revalidation-failed-possible-reorg",
+    });
+  }
+
+  return attemptResult.persistResult;
 }
 
 export async function repairCanonicalRawTransferProvenance(
@@ -474,6 +506,22 @@ export async function repairCanonicalRawTransferProvenance(
   validateArgs(args);
 
   const apply = args.apply === true;
+
+  // Fail closed BEFORE any candidate scan or transfer read, not just before
+  // the eventual write: an apply-mode call that can't provide the
+  // Serializable-transaction guarantee must refuse outright rather than
+  // let a full bounded scan run for nothing (or, worse, be tempted later to
+  // silently execute the write unprotected once the scan is done).
+  if (apply && !hasSerializableTransactionCapability(client)) {
+    throw new Error(
+      "canonical-provenance-repair: apply mode requires a Prisma client capable of " +
+        "an interactive $transaction with an explicit isolationLevel (Serializable). " +
+        "The provided client does not expose this capability; refusing to run apply " +
+        "mode unprotected against concurrent canonical-state changes rather than " +
+        "silently falling back to a non-transactional write.",
+    );
+  }
+
   const maxActions = args.maxActions ?? PROVENANCE_REPAIR_DEFAULT_MAX_ACTIONS;
   const walletAddress = args.walletAddress?.toLowerCase();
 
