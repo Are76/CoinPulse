@@ -71,6 +71,7 @@
 
 import { fileURLToPath } from "url";
 import { execFile, spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { promisify } from "node:util";
 
 import {
@@ -1434,19 +1435,53 @@ async function defaultIsWorkingTreeClean(): Promise<boolean> {
   return stdout.trim().length === 0;
 }
 
-/** Real child-process runner: spawns `npx tsx --conditions react-server
- * <runner-script> <args>` and collects its exit code / stdout / stderr /
- * termination signal. This is the ONLY place the supervisor's real
- * implementation touches the child runner — it never imports its
- * orchestration function directly. `timeoutMs` is passed straight to
- * `spawn`'s own `timeout` option, which sends `killSignal` if the child has
- * not exited by then — the resulting `close` event's `signal` is what lets
- * `verifyChildCleanResult` distinguish a genuine clean/unclean exit from an
- * ambiguous, supervisor-initiated termination. */
+const require = createRequire(import.meta.url);
+
+/**
+ * Resolves the real, on-disk JS entrypoint of the already-installed `tsx`
+ * devDependency (its published `"./cli"` export, `tsx/dist/cli.mjs`) via
+ * Node's own module resolution — never a hardcoded relative path, so a
+ * future `tsx` upgrade or lockfile-driven `node_modules` layout change is
+ * still resolved correctly.
+ *
+ * This is the fix for `spawn npx ENOENT` on Windows, and it is deliberately
+ * NOT "spawn npx.cmd instead of npx" — that alternative was tried first and
+ * still fails, with a different, more confusing error (`spawn EINVAL`):
+ * Node's `child_process.spawn`/`execFile`, even naming the `.cmd` shim
+ * explicitly, refuse to launch a `.bat`/`.cmd` file directly on Windows
+ * unless `shell: true` is set (Windows batch files are not standalone
+ * executables — `CreateProcess` cannot run them without a command
+ * interpreter). `npx` itself is shipped as exactly such a `.cmd` shim on
+ * Windows, so there is no bare-executable spawn of "npx" that works on
+ * Windows without `shell: true`.
+ *
+ * Resolving straight to `tsx`'s own `.mjs` CLI script and spawning it with
+ * `process.execPath` (the real `node`/`node.exe` binary, always a genuine
+ * executable on every platform, never a shell shim) sidesteps the
+ * batch-file restriction entirely — `npx` is not invoked at all, so its
+ * platform-specific shim shape is no longer this file's problem. Arguments
+ * remain a plain array passed straight to the child process; nothing is
+ * concatenated into a command string, and `shell` is never set.
+ */
+export function resolveTsxCliPath(): string {
+  return require.resolve("tsx/cli");
+}
+
+/** Real child-process runner: spawns `<node> <tsx-cli.mjs> --conditions
+ * react-server <runner-script> <args>` (see `resolveTsxCliPath`'s doc
+ * comment for why this replaces `npx tsx ...`) and collects its exit code /
+ * stdout / stderr / termination signal. This is the ONLY place the
+ * supervisor's real implementation touches the child runner — it never
+ * imports its orchestration function directly. `timeoutMs` is passed
+ * straight to `spawn`'s own `timeout` option, which sends `killSignal` if
+ * the child has not exited by then — the resulting `close` event's `signal`
+ * is what lets `verifyChildCleanResult` distinguish a genuine clean/unclean
+ * exit from an ambiguous, supervisor-initiated termination. */
 function defaultRunChildCampaign(args: string[], timeoutMs: number): Promise<ChildProcessResult> {
   return new Promise((resolve, reject) => {
     const [scriptPath, ...rest] = args;
-    const child = spawn("npx", ["tsx", "--conditions", "react-server", scriptPath, ...rest], {
+    const tsxCliPath = resolveTsxCliPath();
+    const child = spawn(process.execPath, [tsxCliPath, "--conditions", "react-server", scriptPath, ...rest], {
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
       timeout: timeoutMs,
