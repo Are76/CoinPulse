@@ -171,8 +171,16 @@ verify there, and nothing to falsify.
 `spawn` is given a bounded timeout derived from the child's own window
 budget and poll timeout (`computeChildProcessTimeoutMs`), so a child hung
 before it even reaches its own `--poll-timeout-ms` loop — for example while
-`npx` resolves `tsx`, while `tsx` compiles, or while the child connects to
-PostgreSQL — cannot make the supervisor wait forever. A killed child is
+`tsx` compiles, or while the child connects to PostgreSQL — cannot make the
+supervisor wait forever. The child is spawned as `<node> <tsx's own resolved
+CLI script> --conditions react-server <runner-script> <args>`
+(`resolveTsxCliPath` in `scripts/wallet-forward-supervisor.ts`) rather than
+via `npx`: on Windows, `npx` is itself a `.cmd` shim, and Node's
+`child_process.spawn`/`execFile` cannot launch a `.bat`/`.cmd` file directly
+without `shell: true`, which this file deliberately avoids. Resolving `tsx`'s
+real `.mjs` entrypoint and spawning it with `process.execPath` (always a
+genuine executable on every platform) keeps child invocation shell-free and
+identical on Windows and non-Windows. A killed child is
 **never** treated as an ordinary clean/unclean exit: because the supervisor
 cannot know whether the child had already submitted its manual-sync request
 before being killed, a signal-terminated process is reported as the distinct

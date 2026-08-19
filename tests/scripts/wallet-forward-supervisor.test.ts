@@ -18,6 +18,7 @@ import {
   evaluateEnvironmentDrift,
   evaluateRepositoryDrift,
   parseSupervisorCliArgs,
+  resolveTsxCliPath,
   runWalletForwardSupervisor,
   SUPERVISOR_CLEAN_STOP_REASONS,
   validateCampaignIdPrefix,
@@ -1355,6 +1356,142 @@ describe("runWalletForwardSupervisor", () => {
     expect(summary.detail).toMatch(/git binary not found/);
     expect(deps.evidence.some((r) => r.kind === "stop" && r.reason === "unexpected_error")).toBe(true);
     expect(runChildCampaign).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveTsxCliPath (Windows spawn ENOENT/EINVAL fix)", () => {
+  it("resolves to tsx's real on-disk .mjs CLI entrypoint, not a bin/ shim", () => {
+    // This is the executable-resolution strategy that replaced "spawn npx"
+    // (ENOENT on Windows) and "spawn npx.cmd" (EINVAL on Windows — Node
+    // refuses to launch .bat/.cmd files without shell:true). Resolving
+    // straight to tsx's published "./cli" export and spawning it via
+    // process.execPath (always a real, non-shell executable on every
+    // platform) never touches npx, npx.cmd, tsx.cmd, or tsx.ps1 at all.
+    const resolved = resolveTsxCliPath();
+    expect(resolved).toMatch(/tsx[\\/]dist[\\/]cli\.mjs$/);
+    expect(resolved).not.toMatch(/\.(cmd|bat|ps1)$/i);
+  });
+
+  it("returns an absolute, directly spawnable path (no further PATH lookup needed)", () => {
+    const resolved = resolveTsxCliPath();
+    const isAbsolute = /^([A-Za-z]:[\\/]|\/)/.test(resolved);
+    expect(isAbsolute).toBe(true);
+  });
+
+  it("is stable across repeated calls (pure resolution, no process/env mutation)", () => {
+    expect(resolveTsxCliPath()).toBe(resolveTsxCliPath());
+  });
+});
+
+describe("child invocation: executable selection, argument array, and --execute propagation", () => {
+  it("dry-run (the default) never appends --execute to the child argument array", async () => {
+    const options = baseOptions({
+      execute: false,
+      authorizedFinalBlock: 25_078_548n + 3n * FIXTURE_WINDOW_SIZE,
+      campaignMaxWindows: 5,
+    });
+    const db = makeFakeDb({ cursor: { fromBlock: FIXTURE_ANCHOR_FROM, toBlock: 25_078_548n } });
+    let capturedArgs: string[] = [];
+    const runChildCampaign = vi.fn(async (args: string[]): Promise<ChildProcessResult> => {
+      capturedArgs = args;
+      return cleanDryRunResult({ windows: 3, reachedTarget: true });
+    });
+    const deps = makeDeps({ db, runChildCampaign });
+
+    await runWalletForwardSupervisor(options, deps);
+
+    expect(capturedArgs).not.toContain("--execute");
+  });
+
+  it("execute mode appends --execute exactly once to the child argument array", async () => {
+    const options = baseOptions({
+      execute: true,
+      authorizedFinalBlock: 25_078_548n + 3n * FIXTURE_WINDOW_SIZE,
+      campaignMaxWindows: 5,
+    });
+    const db = makeFakeDb({ cursor: { fromBlock: FIXTURE_ANCHOR_FROM, toBlock: 25_078_548n } });
+    let capturedArgs: string[] = [];
+    const runChildCampaign = vi.fn(async (args: string[]): Promise<ChildProcessResult> => {
+      capturedArgs = args;
+      db.setCursor({ fromBlock: FIXTURE_ANCHOR_FROM, toBlock: options.authorizedFinalBlock });
+      return cleanExecuteResult({ windows: 3, reachedTarget: true });
+    });
+    const deps = makeDeps({ db, runChildCampaign });
+
+    await runWalletForwardSupervisor(options, deps);
+
+    expect(capturedArgs.filter((a) => a === "--execute")).toHaveLength(1);
+  });
+
+  it("arguments are passed to the injected runner as a plain string array — never concatenated into a shell command string", async () => {
+    // The injectable runChildCampaign signature itself is (args: string[],
+    // timeoutMs: number) — this test pins that a value containing whitespace
+    // (a valid runnerScriptPath, e.g. a path under a directory with a space
+    // in it) survives as ONE array entry rather than being split or
+    // otherwise mangled, which is what array-based spawn (never shell-based)
+    // guarantees and a string-concatenated/shell invocation would not.
+    const options = baseOptions({
+      execute: false,
+      authorizedFinalBlock: 25_078_548n + 3n * FIXTURE_WINDOW_SIZE,
+      campaignMaxWindows: 5,
+      runnerScriptPath: "scripts/wallet forward campaign runner.ts",
+    });
+    const db = makeFakeDb({ cursor: { fromBlock: FIXTURE_ANCHOR_FROM, toBlock: 25_078_548n } });
+    let capturedArgs: string[] = [];
+    const runChildCampaign = vi.fn(async (args: string[]): Promise<ChildProcessResult> => {
+      capturedArgs = args;
+      return cleanDryRunResult({ windows: 3, reachedTarget: true });
+    });
+    const deps = makeDeps({ db, runChildCampaign });
+
+    await runWalletForwardSupervisor(options, deps);
+
+    expect(Array.isArray(capturedArgs)).toBe(true);
+    expect(capturedArgs).toContain(options.runnerScriptPath);
+    expect(capturedArgs).toContain("--wallet-address");
+    expect(capturedArgs).toContain(FIXTURE_WALLET);
+  });
+
+  it("a spawn ENOENT failure (child process could not be started at all) still fails closed, with no retry and no recovery invocation", async () => {
+    const options = baseOptions({
+      execute: false,
+      authorizedFinalBlock: 25_078_548n + 3n * FIXTURE_WINDOW_SIZE,
+      campaignMaxWindows: 5,
+    });
+    const db = makeFakeDb({ cursor: { fromBlock: FIXTURE_ANCHOR_FROM, toBlock: 25_078_548n } });
+    const runChildCampaign = vi.fn(async (): Promise<ChildProcessResult> => {
+      throw new Error("spawn npx ENOENT");
+    });
+    const deps = makeDeps({ db, runChildCampaign });
+
+    const summary = await runWalletForwardSupervisor(options, deps);
+
+    expect(summary.stoppedReason).not.toBe("authorized_final_block_reached");
+    expect(computeSupervisorExitCode(summary.stoppedReason)).toBe(1);
+    expect(runChildCampaign).toHaveBeenCalledTimes(1);
+    expect(deps.evidence.some((r) => r.kind === "stop")).toBe(true);
+  });
+
+  it("an ambiguous (signal-terminated) child termination still fails closed and never triggers a second invocation", async () => {
+    const options = baseOptions({
+      execute: true,
+      authorizedFinalBlock: 25_078_548n + 3n * FIXTURE_WINDOW_SIZE,
+      campaignMaxWindows: 5,
+    });
+    const db = makeFakeDb({ cursor: { fromBlock: FIXTURE_ANCHOR_FROM, toBlock: 25_078_548n } });
+    const runChildCampaign = vi.fn(async (): Promise<ChildProcessResult> => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "",
+      signal: "SIGTERM",
+    }));
+    const deps = makeDeps({ db, runChildCampaign });
+
+    const summary = await runWalletForwardSupervisor(options, deps);
+
+    expect(summary.stoppedReason).toBe("child_process_ambiguous_termination");
+    expect(computeSupervisorExitCode(summary.stoppedReason)).toBe(1);
+    expect(runChildCampaign).toHaveBeenCalledTimes(1);
   });
 });
 
