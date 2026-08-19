@@ -929,7 +929,7 @@ describe("calculateAverageCostPnl", () => {
     ).toBe(false);
   });
 
-  it("[B] does not mark a recognized SWAP's own TRANSFER shadow SEND/RECEIVE groups as unresolved coupling", async () => {
+  it("[B] fails closed on a recognized SWAP's own TRANSFER shadow SEND/RECEIVE groups instead of silently suppressing them (no shadow-identity heuristic)", async () => {
     // Models the real production shape Codex flagged: TRANSFERS-family
     // normalization unconditionally emits a generic TRANSFER SEND/RECEIVE
     // "shadow" group for every raw transfer in a transaction
@@ -938,9 +938,17 @@ describe("calculateAverageCostPnl", () => {
     // group). So a single correctly recognized swap can be represented by
     // THREE actionGroupIds sharing one txHash: the canonical SWAP group,
     // a TRANSFER shadow SEND (mirroring the SWAP_OUT leg), and a TRANSFER
-    // shadow RECEIVE (mirroring the SWAP_IN leg). None of the shadow groups
-    // may be marked UNRESOLVED_ECONOMIC_COUPLING just because they see each
-    // other as an opposite-direction, different-asset, non-fee sibling.
+    // shadow RECEIVE (mirroring the SWAP_IN leg).
+    //
+    // A read-only provenance audit proved that no currently-persisted field
+    // (assetId, direction, or exact quantity) can distinguish "this TRANSFER
+    // group is a shadow of the SWAP's own leg" from "this TRANSFER group is
+    // a genuinely independent movement that happens to match." Quantity
+    // matching was therefore removed as an unsafe heuristic. The guard now
+    // fails closed for both shadow groups (UNRESOLVED_ECONOMIC_COUPLING)
+    // instead of guessing they are safe to skip — the canonical SWAP group
+    // itself is unaffected and still resolves normally from its own
+    // co-grouped legs.
     const TX_HASH = "0xtx-swap-with-transfer-shadows";
 
     const result = await calculateAverageCostPnl({
@@ -1024,29 +1032,33 @@ describe("calculateAverageCostPnl", () => {
       ]),
     });
 
+    // The TRANSFER shadow SEND (this engine call is scoped to TARGET_ASSET,
+    // so the PLS-denominated shadow-receive group is out of scope here and
+    // would be evaluated on its own terms by a PLS-scoped PnL run) fails
+    // closed rather than being silently suppressed or finalized at zero.
     expect(
-      result.warnings.some((warning) => warning.code === "UNRESOLVED_ECONOMIC_COUPLING"),
-    ).toBe(false);
-    // The canonical SWAP group resolves the disposal normally.
+      result.warnings.filter((warning) => warning.code === "UNRESOLVED_ECONOMIC_COUPLING"),
+    ).toEqual([expect.objectContaining({ actionGroupId: "group-shadow-send", txHash: TX_HASH })]);
+    // The canonical SWAP group resolves the disposal normally — the shadow
+    // group contributes nothing (neither finalized nor double-counted).
     expect(result.totalDisposedQuantity).toBe("4");
     expect(result.realizedPnl).toBe("20");
   });
 
-  it("[B2] does not silently drop an independent TRANSFER that only coincidentally shares asset+direction with a complete higher-order sibling at a different quantity", async () => {
-    // CodeRabbit follow-up: (assetId, direction) alone is not a safe shadow
-    // key, because normalizeTransfer's sourceLogKey embeds the raw ERC-20
-    // Transfer log index while normalizeSwap's embeds the raw DEX Swap
-    // event's own log index (`swap:<protocol>:<logIndex>` in dex-sync.ts) —
-    // there is no shared raw-event identifier between the two families to
-    // prove "same underlying movement" without a normalizer change. The
-    // shadow check additionally requires an EXACT quantity match. Here the
-    // TRANSFER SEND is for a different quantity (7) than the SWAP's own
-    // SEND-direction leg (4), so it must NOT be treated as a shadow — it
-    // must fall through to ordinary processing (and, since no other
-    // evidence resolves its proceeds, to the unresolved-coupling guard,
-    // which still finds no *opposite-direction* candidate here and lets it
-    // finalize with zero proceeds — it is never silently discarded without
-    // being counted).
+  it("[B2] fails closed for an independent TRANSFER that only coincidentally shares asset+direction with a complete higher-order sibling at a different quantity", async () => {
+    // A read-only provenance audit proved that (assetId, direction) — and
+    // even (assetId, direction, quantity) — is not a safe shadow-identity
+    // key: normalizeTransfer's sourceLogKey embeds the raw ERC-20 Transfer
+    // log index while normalizeSwap's embeds the raw DEX Swap event's own
+    // log index (`swap:<protocol>:<logIndex>` in dex-sync.ts) — there is no
+    // shared raw-event identifier between the two families to prove "same
+    // underlying movement" without a normalizer change. Quantity matching
+    // has therefore been removed entirely. Here the TRANSFER SEND is for a
+    // different quantity (7) than the SWAP's own SEND-direction leg (4) —
+    // genuinely independent — but the guard cannot tell that from "this is
+    // the SWAP's own leg" using only persisted data, so both cases now fail
+    // closed identically: it is never silently discarded, and it is never
+    // silently finalized at a fabricated zero.
     const TX_HASH = "0xtx-coincidental-asset-direction-collision";
 
     const result = await calculateAverageCostPnl({
@@ -1117,21 +1129,36 @@ describe("calculateAverageCostPnl", () => {
       ]),
     });
 
-    // Not silently dropped: it is counted as a disposal (quantity 7), on top
-    // of the canonical SWAP's own disposal (quantity 4) — total 11.
-    expect(result.totalDisposedQuantity).toBe("11");
-    expect(result.holdingsQuantity).toBe("9");
+    // Not silently dropped, and not silently finalized at a fabricated zero
+    // either: the SWAP's own SWAP_IN leg is now a valid coupling candidate
+    // (no shadow-identity heuristic excludes it), so the independent
+    // TRANSFER fails closed instead. Only the canonical SWAP's own disposal
+    // (quantity 4) is finalized.
+    expect(result.totalDisposedQuantity).toBe("4");
+    expect(result.holdingsQuantity).toBe("16");
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "UNRESOLVED_ECONOMIC_COUPLING",
+          actionGroupId: "group-independent-transfer",
+          txHash: TX_HASH,
+        }),
+      ]),
+    );
   });
 
-  it("[C] does not trigger the guard for a plain TRANSFER group sharing a tx with a separate, unrelated, complete higher-order SWAP", async () => {
+  it("[C] fails closed for a plain TRANSFER group sharing a tx with a separate, unrelated, complete higher-order SWAP", async () => {
     // A TRANSFER SEND-only group has no counter-value evidence at all inside
     // its own actionGroupId. The only same-tx sibling entries come from a
     // separate, correctly co-grouped SWAP (both legs present, unrelated
-    // asset pair). Because that SWAP group is complete, the transaction's
-    // coupled economic action is already established — the coupling guard
-    // must stay silent rather than firing off the SWAP's inbound leg, and
-    // the TRANSFER disposal must complete normally (not be skipped as
-    // unresolved).
+    // asset pair). The guard cannot prove from persisted data alone that
+    // this SWAP is truly unrelated to the TRANSFER rather than the
+    // TRANSFER's own coupled leg split across groups — that is exactly the
+    // ambiguity a provenance extension would resolve, and it does not exist
+    // today. So the guard must fail closed here too (matching the
+    // "synthetic false-positive guard" case below, just with a SWAP-typed
+    // sibling instead of a TRANSFER-typed one) rather than assume the SWAP
+    // is unrelated and silently finalize the TRANSFER at zero proceeds.
     const TX_HASH = "0xtx-transfer-plus-unrelated-swap";
 
     const result = await calculateAverageCostPnl({
@@ -1197,18 +1224,21 @@ describe("calculateAverageCostPnl", () => {
       ]),
     });
 
-    expect(
-      result.warnings.some((warning) => warning.code === "UNRESOLVED_ECONOMIC_COUPLING"),
-    ).toBe(false);
-    // Not skipped: the disposal is finalized (proceeds unresolvable
-    // in-group resolve to 0, since there is genuinely no coupling evidence
-    // for this TRANSFER group once the unrelated SWAP is excluded).
-    expect(result.totalDisposedQuantity).toBe("4");
-    expect(result.holdingsQuantity).toBe("6");
-    // Locks the documented "proceeds resolve to 0" behavior directly — a
-    // regression that fabricated non-zero proceeds for this group would
-    // still pass the two assertions above but would fail this one.
-    expect(result.realizedPnl).toBe("-40");
+    // Skipped, not finalized: the disposal must not resolve to a fabricated
+    // zero-proceeds figure, and holdings/realizedPnl stay untouched by this
+    // group.
+    expect(result.totalDisposedQuantity).toBe("0");
+    expect(result.holdingsQuantity).toBe("10");
+    expect(result.realizedPnl).toBe("0");
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "UNRESOLVED_ECONOMIC_COUPLING",
+          actionGroupId: "group-transfer",
+          txHash: TX_HASH,
+        }),
+      ]),
+    );
   });
 
   it("[D] does not treat a zero-quantity opposite-direction sibling as coupling evidence", async () => {
@@ -1260,9 +1290,9 @@ describe("calculateAverageCostPnl", () => {
     // that correctness holds when relevantEntries contains many unrelated
     // transactions, each contributing its own acquisition group, plus one
     // F3-shaped unresolved transaction mixed in. hasUnresolvedSiblingCoupling
-    // is index-backed (entriesByTxHash / completeHigherOrderTxHashes built
-    // once in buildSiblingCouplingIndex), so this scales with the size of
-    // each individual transaction, not the size of the full wallet ledger.
+    // is index-backed (entriesByTxHash built once in
+    // buildEntriesByTxHashIndex), so this scales with the size of each
+    // individual transaction, not the size of the full wallet ledger.
     const UNRESOLVED_TX_HASH = "0xtx-unresolved-among-many";
     const unrelatedEntries = Array.from({ length: 500 }, (_, index) =>
       createEntry({

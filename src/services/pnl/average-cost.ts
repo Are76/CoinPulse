@@ -18,9 +18,9 @@ const TARGET_DISPOSITION_TYPES = new Set(["SEND", "SWAP_OUT"]);
 const LP_ACTION_TYPES = new Set(["LP_ADD", "LP_REMOVE"]);
 const STAKE_ACTION_TYPES = new Set(["HEX_STAKE_START", "HEX_STAKE_END", "HEX_STAKE_LOCK"]);
 // Action types where the existing normalizer already guarantees economically
-// coupled legs are grouped into one actionGroupId. The unresolved-coupling
-// guard must not second-guess those groups (LP/STAKE are already skipped
-// earlier; SWAP is excluded defensively per the same principle).
+// coupled legs are grouped into one actionGroupId. A group of one of these
+// types must never itself be treated as "unresolved" — its own in-group
+// entries already carry both sides of the movement.
 const HIGHER_ORDER_ACTION_TYPES = new Set<PnLActionType>([
   "SWAP",
   "LP_ADD",
@@ -30,51 +30,17 @@ const HIGHER_ORDER_ACTION_TYPES = new Set<PnLActionType>([
   "HEX_STAKE_LOCK",
 ]);
 
-type SiblingCouplingIndex = {
-  /** All relevant entries for a txHash, keyed for O(1) per-group lookup instead of a full-ledger scan per group. */
-  entriesByTxHash: ReadonlyMap<string, readonly PnLEntry[]>;
-  /**
-   * For each txHash, the set of "assetId|direction|quantity" legs already
-   * recorded by a *complete* higher-order action group (SWAP/LP/STAKE — both
-   * a non-fee IN leg and a non-fee OUT leg present in that group).
-   * TRANSFERS-family normalization runs independently of DEX/LP/STAKE-family
-   * normalization and unconditionally emits a generic TRANSFER SEND/RECEIVE
-   * "shadow" action group for every raw transfer in a transaction (see
-   * normalizeTransfers/buildTransferNormalizationSnapshots — it does not
-   * exclude transfers that another family already turned into a canonical
-   * higher-order group). So a correctly recognized swap can coexist with
-   * plain TRANSFER shadow groups mirroring its own legs for the very same
-   * transaction.
-   *
-   * The leg key intentionally includes the exact canonical quantity, not
-   * just (assetId, direction). `normalizeTransfer`'s sourceLogKey embeds the
-   * raw ERC-20 Transfer event's own log index, while `normalizeSwap`'s
-   * embeds the raw DEX Swap event's log index (`swap:<protocol>:<logIndex>`,
-   * via dex-sync.ts) — these two families never share a common raw-event
-   * identifier, so a shared "same underlying event" provenance key cannot be
-   * derived without a normalizer change (out of scope here). Requiring an
-   * exact quantity match on top of (assetId, direction) is the strongest
-   * signal available purely from already-persisted ledger data: a
-   * coincidental, truly independent transfer sharing the same asset,
-   * direction, *and* exact quantity as a complete higher-order group's own
-   * leg within the same transaction is not a realistic false-positive
-   * surface, whereas (assetId, direction) alone can collide with a genuinely
-   * unrelated transfer. If quantities don't match exactly, this group is
-   * treated as independent (not shadowed) and falls through to the ordinary
-   * unresolved-coupling check below.
-   */
-  shadowedLegsByTxHash: ReadonlyMap<string, ReadonlySet<string>>;
-};
-
 function isZeroQuantity(quantity: string): boolean {
   return new Decimal(quantity).isZero();
 }
 
-function legKey(assetId: string, direction: PnLDirection, quantity: Decimal): string {
-  return `${assetId}|${direction}|${quantity.toFixed()}`;
-}
-
-function buildSiblingCouplingIndex(relevantEntries: readonly PnLEntry[]): SiblingCouplingIndex {
+/**
+ * All relevant entries for a txHash, keyed for O(1) per-group lookup instead
+ * of a full-ledger scan per group (see hasUnresolvedSiblingCoupling).
+ */
+function buildEntriesByTxHashIndex(
+  relevantEntries: readonly PnLEntry[],
+): ReadonlyMap<string, readonly PnLEntry[]> {
   const entriesByTxHash = new Map<string, PnLEntry[]>();
   for (const entry of relevantEntries) {
     const bucket = entriesByTxHash.get(entry.txHash);
@@ -84,81 +50,7 @@ function buildSiblingCouplingIndex(relevantEntries: readonly PnLEntry[]): Siblin
       entriesByTxHash.set(entry.txHash, [entry]);
     }
   }
-
-  type HigherOrderGroupState = {
-    hasIn: boolean;
-    hasOut: boolean;
-    txHash: string;
-    legs: Set<string>;
-  };
-  const higherOrderGroups = new Map<string, HigherOrderGroupState>();
-  for (const entry of relevantEntries) {
-    if (entry.entryType === "FEE" || isZeroQuantity(entry.quantity)) {
-      continue;
-    }
-    if (!HIGHER_ORDER_ACTION_TYPES.has(entry.actionType)) {
-      continue;
-    }
-
-    const state = higherOrderGroups.get(entry.actionGroupId) ?? {
-      hasIn: false,
-      hasOut: false,
-      txHash: entry.txHash,
-      legs: new Set<string>(),
-    };
-    if (entry.direction === "IN") {
-      state.hasIn = true;
-    } else if (entry.direction === "OUT") {
-      state.hasOut = true;
-    }
-    state.legs.add(legKey(entry.assetId, entry.direction, new Decimal(entry.quantity)));
-    higherOrderGroups.set(entry.actionGroupId, state);
-  }
-
-  const shadowedLegsByTxHash = new Map<string, Set<string>>();
-  for (const state of higherOrderGroups.values()) {
-    if (!state.hasIn || !state.hasOut) {
-      continue;
-    }
-    const bucket = shadowedLegsByTxHash.get(state.txHash);
-    if (bucket) {
-      for (const leg of state.legs) {
-        bucket.add(leg);
-      }
-    } else {
-      shadowedLegsByTxHash.set(state.txHash, new Set(state.legs));
-    }
-  }
-
-  return { entriesByTxHash, shadowedLegsByTxHash };
-}
-
-/**
- * True when this action group's target-asset movement (in the given
- * direction, for the exact quantity of the entries being evaluated) is
- * already recorded by a complete higher-order action group for the same
- * transaction — i.e. this group is a generic TRANSFER "shadow" of a leg the
- * canonical SWAP/LP/STAKE group already accounts for. Matching is by exact
- * (assetId, direction, quantity) leg identity taken directly from the
- * existing higher-order group's own recorded entries — see
- * SiblingCouplingIndex for why quantity is required and why exact raw-event
- * provenance cannot be used instead. This never infers protocol identity or
- * reconstructs economic meaning.
- */
-function isShadowedByCompleteHigherOrderAction(args: {
-  index: SiblingCouplingIndex;
-  triggerActionType: PnLActionType;
-  txHash: string;
-  targetAssetId: string;
-  direction: PnLDirection;
-  quantity: Decimal;
-}): boolean {
-  if (HIGHER_ORDER_ACTION_TYPES.has(args.triggerActionType)) {
-    return false;
-  }
-
-  const shadowedLegs = args.index.shadowedLegsByTxHash.get(args.txHash);
-  return shadowedLegs?.has(legKey(args.targetAssetId, args.direction, args.quantity)) ?? false;
+  return entriesByTxHash;
 }
 
 /**
@@ -166,11 +58,33 @@ function isShadowedByCompleteHigherOrderAction(args: {
  * resolve to zero proceeds/cost only because the economically coupled leg
  * was normalized into a different actionGroupId for the same on-chain
  * transaction (e.g. an unrecognized swap split into separate SEND/RECEIVE
- * groups). This is a structural signal only — it never infers protocol
- * identity, it only prevents a fabricated zero.
+ * groups, or a generic TRANSFER shadow group duplicating a canonical
+ * SWAP/LP/STAKE leg — see docs/pnl-accounting-guardrails.md and the
+ * provenance audit referenced in this PR).
+ *
+ * This is intentionally a pure existence check, never an identity check: no
+ * currently-persisted ledger field (assetId, direction, quantity, or
+ * sourceLogKey) can prove that a candidate sibling entry represents the
+ * *same* underlying wallet movement as the group being evaluated, because
+ * TRANSFER-family and SWAP/LP/STAKE-family normalization draw their
+ * sourceLogKey/logIndex identifiers from disjoint raw-event namespaces (a
+ * Transfer log's own index vs. a Swap event's own index vs. an aggregated
+ * transfer index) — see the read-only provenance audit for this PR. Because
+ * that identity cannot be proven from persisted data today, this guard does
+ * not attempt to distinguish "this sibling is the same movement" from "this
+ * sibling is a different, coincidentally-adjacent movement": ANY non-fee,
+ * non-zero, opposite-direction, different-asset sibling in the same
+ * transaction — including a complete SWAP/LP/STAKE group's own leg — is
+ * sufficient to fail closed. This deliberately trades a higher
+ * incomplete-basis rate (a correctly recognized swap's own TRANSFER shadow
+ * groups will now also report UNRESOLVED_ECONOMIC_COUPLING) for the
+ * guarantee that no independent movement is ever silently suppressed and no
+ * zero-cost/zero-proceeds figure is ever fabricated from ambiguous evidence.
+ * Exact shadow-transfer suppression requires a backend provenance extension
+ * and is deferred to a separate, bounded PR.
  */
 function hasUnresolvedSiblingCoupling(args: {
-  index: SiblingCouplingIndex;
+  entriesByTxHash: ReadonlyMap<string, readonly PnLEntry[]>;
   triggerGroupId: string;
   triggerActionType: PnLActionType;
   txHash: string;
@@ -181,12 +95,11 @@ function hasUnresolvedSiblingCoupling(args: {
     return false;
   }
 
-  const candidates = args.index.entriesByTxHash.get(args.txHash) ?? [];
+  const candidates = args.entriesByTxHash.get(args.txHash) ?? [];
   return candidates.some(
     (entry) =>
       entry.actionGroupId !== args.triggerGroupId &&
       entry.entryType !== "FEE" &&
-      !HIGHER_ORDER_ACTION_TYPES.has(entry.actionType) &&
       entry.direction === args.requiredDirection &&
       entry.assetId !== args.targetAssetId &&
       !isZeroQuantity(entry.quantity),
@@ -220,7 +133,7 @@ export async function calculateAverageCostPnl(
       return left.id.localeCompare(right.id);
     });
 
-  const siblingCouplingIndex = buildSiblingCouplingIndex(relevantEntries);
+  const entriesByTxHash = buildEntriesByTxHashIndex(relevantEntries);
 
   const groups = new Map<string, PnLEntry[]>();
   for (const entry of relevantEntries) {
@@ -271,39 +184,6 @@ export async function calculateAverageCostPnl(
     );
     const targetFeeEntries = targetEntries.filter((entry) => entry.entryType === "FEE");
 
-    // A complete higher-order group (SWAP/LP/STAKE) elsewhere in this same
-    // transaction already recorded this exact (assetId, direction, quantity)
-    // leg — this group is a generic TRANSFER shadow of that
-    // already-accounted-for movement, not an independent economic event.
-    // Skip it silently (like INTERNAL_TRANSFER) rather than double-counting
-    // it or flagging it. Requiring an exact quantity match (see
-    // SiblingCouplingIndex) means a coincidentally same-asset/same-direction
-    // but differently-sized independent transfer is NOT treated as a
-    // shadow — it falls through to the ordinary disposal/acquisition and
-    // unresolved-coupling handling below.
-    if (
-      (targetInEntries.length > 0 &&
-        isShadowedByCompleteHigherOrderAction({
-          index: siblingCouplingIndex,
-          triggerActionType: groupEntries[0].actionType,
-          txHash: groupEntries[0].txHash,
-          targetAssetId: args.assetId,
-          direction: "IN",
-          quantity: sumQuantities(targetInEntries),
-        })) ||
-      (targetOutEntries.length > 0 &&
-        isShadowedByCompleteHigherOrderAction({
-          index: siblingCouplingIndex,
-          triggerActionType: groupEntries[0].actionType,
-          txHash: groupEntries[0].txHash,
-          targetAssetId: args.assetId,
-          direction: "OUT",
-          quantity: sumQuantities(targetOutEntries),
-        }))
-    ) {
-      continue;
-    }
-
     if (targetInEntries.length > 0 && targetOutEntries.length === 0 && targetFeeEntries.length === 0) {
       const costSourceEntries = groupEntries.filter(
         (entry) =>
@@ -316,7 +196,7 @@ export async function calculateAverageCostPnl(
       if (
         costSourceEntries.length === 0 &&
         hasUnresolvedSiblingCoupling({
-          index: siblingCouplingIndex,
+          entriesByTxHash,
           triggerGroupId: groupEntries[0].actionGroupId,
           triggerActionType: groupEntries[0].actionType,
           txHash: groupEntries[0].txHash,
@@ -409,7 +289,7 @@ export async function calculateAverageCostPnl(
       if (
         proceedsSourceEntries.length === 0 &&
         hasUnresolvedSiblingCoupling({
-          index: siblingCouplingIndex,
+          entriesByTxHash,
           triggerGroupId: groupEntries[0].actionGroupId,
           triggerActionType: groupEntries[0].actionType,
           txHash: groupEntries[0].txHash,
