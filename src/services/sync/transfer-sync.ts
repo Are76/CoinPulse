@@ -9,7 +9,10 @@ import {
   normalizeTransfer,
   type CanonicalLedgerEntryDraft,
 } from "@/services/normalization";
-import { readWalletRawTransactions } from "@/services/ingestion/raw-store";
+import {
+  readCanonicallyConsumedRawTokenTransferIds,
+  readWalletRawTransactions,
+} from "@/services/ingestion/raw-store";
 import { persistNormalizedLedger } from "@/services/sync/ledger-store";
 import {
   createPrismaSyncCursorStore,
@@ -61,7 +64,10 @@ export type PersistedTransferRawTransaction = Awaited<
 };
 
 export type PersistedTransferNormalizationSnapshot =
-  | ({ snapshotType: "token_transfer" } & PersistedTransferRawLog)
+  | ({
+      snapshotType: "token_transfer";
+      isCanonicallySuppressedTransferShadow?: boolean;
+    } & PersistedTransferRawLog)
   | ({
       snapshotType: "raw_transaction";
       hasTrackedTokenTransfersInTransaction: boolean;
@@ -194,6 +200,12 @@ async function ingestTransfers(args: {
   toBlock: bigint;
 }) {
   const artifacts = await ingestWalletTransferArtifacts(args);
+  const consumedRawTokenTransferIds = await readCanonicallyConsumedRawTokenTransferIds(
+    {
+      rawTokenTransferIds: artifacts.rawTransfers.map((transfer) => transfer.id),
+    },
+    args.db as never,
+  );
 
   return {
     rawLogCount: artifacts.rawLogCount,
@@ -203,6 +215,7 @@ async function ingestTransfers(args: {
       rawTransactions: artifacts.rawTransactions,
       protocolOperationTxHashes: artifacts.protocolOperationTxHashes,
       timestampByBlockKey: artifacts.timestampByBlockKey,
+      consumedRawTokenTransferIds,
     }),
     fromBlock: artifacts.fromBlock,
     toBlock: artifacts.toBlock,
@@ -222,6 +235,13 @@ export function normalizeTransfers(args: {
 
   for (const rawLog of args.rawLogs) {
     if (!("snapshotType" in rawLog) || rawLog.snapshotType === "token_transfer") {
+      if (
+        "isCanonicallySuppressedTransferShadow" in rawLog &&
+        rawLog.isCanonicallySuppressedTransferShadow
+      ) {
+        continue;
+      }
+
       drafts.push(
         ...normalizeTransfer({
           chainId: args.wallet.chainId,
@@ -273,6 +293,7 @@ export function buildTransferNormalizationSnapshots(args: {
   rawTransactions: readonly Awaited<ReturnType<typeof readWalletRawTransactions>>[number][];
   protocolOperationTxHashes: readonly string[];
   timestampByBlockKey: Map<string, Date>;
+  consumedRawTokenTransferIds?: ReadonlySet<string>;
 }) {
   const transferCountByTxHash = new Map<string, number>();
 
@@ -290,6 +311,8 @@ export function buildTransferNormalizationSnapshots(args: {
   const snapshots: PersistedTransferNormalizationSnapshot[] = args.rawTransfers.map(
     (transfer) => ({
       snapshotType: "token_transfer",
+      isCanonicallySuppressedTransferShadow:
+        args.consumedRawTokenTransferIds?.has(transfer.id) ?? false,
       ...transfer,
     }),
   );

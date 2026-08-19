@@ -5,6 +5,7 @@ import type { SourceFamily } from "@prisma/client";
 import { getDb } from "@/lib/db";
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 import {
+  readCanonicallyConsumedRawTokenTransferIds,
   readWalletDexSwapSnapshots,
   readWalletRawLpActions,
   readWalletRawTransactions,
@@ -80,6 +81,15 @@ type RebuildDbClient = {
   };
   rawStakeAction: {
     findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
+  };
+  rawDexSwapTransferEvidence: {
+    findMany(args: unknown): Promise<Array<{ rawTokenTransferId: string }>>;
+  };
+  rawLpActionTransferEvidence: {
+    findMany(args: unknown): Promise<Array<{ rawTokenTransferId: string }>>;
+  };
+  rawStakeActionTransferEvidence: {
+    findMany(args: unknown): Promise<Array<{ rawTokenTransferId: string }>>;
   };
   ledgerActionGroup: {
     createMany: typeof getDb extends () => infer T
@@ -333,6 +343,12 @@ async function readRawSnapshots(args: {
             args.db,
           ),
         ]);
+      const consumedRawTokenTransferIds = await readCanonicallyConsumedRawTokenTransferIds(
+        {
+          rawTokenTransferIds: rawTransfers.map((transfer) => transfer.id),
+        },
+        args.db as never,
+      );
 
       return buildTransferNormalizationSnapshots({
         rawTransfers: rawTransfers.map((transfer) => ({
@@ -342,6 +358,7 @@ async function readRawSnapshots(args: {
         rawTransactions,
         protocolOperationTxHashes,
         timestampByBlockKey: args.timestampByBlockKey,
+        consumedRawTokenTransferIds,
       });
     }
     case "DEX":
