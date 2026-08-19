@@ -30,6 +30,118 @@ const HIGHER_ORDER_ACTION_TYPES = new Set<PnLActionType>([
   "HEX_STAKE_LOCK",
 ]);
 
+type SiblingCouplingIndex = {
+  /** All relevant entries for a txHash, keyed for O(1) per-group lookup instead of a full-ledger scan per group. */
+  entriesByTxHash: ReadonlyMap<string, readonly PnLEntry[]>;
+  /**
+   * For each txHash, the set of "assetId|direction" legs already recorded by
+   * a *complete* higher-order action group (SWAP/LP/STAKE — both a non-fee
+   * IN leg and a non-fee OUT leg present in that group). TRANSFERS-family
+   * normalization runs independently of DEX/LP/STAKE-family normalization
+   * and unconditionally emits a generic TRANSFER SEND/RECEIVE "shadow"
+   * action group for every raw transfer in a transaction (see
+   * normalizeTransfers/buildTransferNormalizationSnapshots — it does not
+   * exclude transfers that another family already turned into a canonical
+   * higher-order group). So a correctly recognized swap can coexist with
+   * plain TRANSFER shadow groups mirroring its own legs for the very same
+   * transaction. This index lets those specific shadow legs be recognized
+   * as already-accounted-for evidence, without inferring anything about
+   * *which* protocol produced them.
+   */
+  shadowedLegsByTxHash: ReadonlyMap<string, ReadonlySet<string>>;
+};
+
+function isZeroQuantity(quantity: string): boolean {
+  return new Decimal(quantity).isZero();
+}
+
+function legKey(assetId: string, direction: PnLDirection): string {
+  return `${assetId}|${direction}`;
+}
+
+function buildSiblingCouplingIndex(relevantEntries: readonly PnLEntry[]): SiblingCouplingIndex {
+  const entriesByTxHash = new Map<string, PnLEntry[]>();
+  for (const entry of relevantEntries) {
+    const bucket = entriesByTxHash.get(entry.txHash);
+    if (bucket) {
+      bucket.push(entry);
+    } else {
+      entriesByTxHash.set(entry.txHash, [entry]);
+    }
+  }
+
+  type HigherOrderGroupState = {
+    hasIn: boolean;
+    hasOut: boolean;
+    txHash: string;
+    legs: Set<string>;
+  };
+  const higherOrderGroups = new Map<string, HigherOrderGroupState>();
+  for (const entry of relevantEntries) {
+    if (entry.entryType === "FEE" || isZeroQuantity(entry.quantity)) {
+      continue;
+    }
+    if (!HIGHER_ORDER_ACTION_TYPES.has(entry.actionType)) {
+      continue;
+    }
+
+    const state = higherOrderGroups.get(entry.actionGroupId) ?? {
+      hasIn: false,
+      hasOut: false,
+      txHash: entry.txHash,
+      legs: new Set<string>(),
+    };
+    if (entry.direction === "IN") {
+      state.hasIn = true;
+    } else if (entry.direction === "OUT") {
+      state.hasOut = true;
+    }
+    state.legs.add(legKey(entry.assetId, entry.direction));
+    higherOrderGroups.set(entry.actionGroupId, state);
+  }
+
+  const shadowedLegsByTxHash = new Map<string, Set<string>>();
+  for (const state of higherOrderGroups.values()) {
+    if (!state.hasIn || !state.hasOut) {
+      continue;
+    }
+    const bucket = shadowedLegsByTxHash.get(state.txHash);
+    if (bucket) {
+      for (const leg of state.legs) {
+        bucket.add(leg);
+      }
+    } else {
+      shadowedLegsByTxHash.set(state.txHash, new Set(state.legs));
+    }
+  }
+
+  return { entriesByTxHash, shadowedLegsByTxHash };
+}
+
+/**
+ * True when this action group's target-asset movement (in the given
+ * direction) is already recorded by a complete higher-order action group
+ * for the same transaction — i.e. this group is a generic TRANSFER "shadow"
+ * of a leg the canonical SWAP/LP/STAKE group already accounts for. Matching
+ * is by exact (assetId, direction) leg identity taken directly from the
+ * existing higher-order group's own recorded entries — it never infers
+ * protocol identity or reconstructs economic meaning.
+ */
+function isShadowedByCompleteHigherOrderAction(args: {
+  index: SiblingCouplingIndex;
+  triggerActionType: PnLActionType;
+  txHash: string;
+  targetAssetId: string;
+  direction: PnLDirection;
+}): boolean {
+  if (HIGHER_ORDER_ACTION_TYPES.has(args.triggerActionType)) {
+    return false;
+  }
+
+  const shadowedLegs = args.index.shadowedLegsByTxHash.get(args.txHash);
+  return shadowedLegs?.has(legKey(args.targetAssetId, args.direction)) ?? false;
+}
+
 /**
  * Detects the case where a group's disposal/acquisition would otherwise
  * resolve to zero proceeds/cost only because the economically coupled leg
@@ -39,7 +151,7 @@ const HIGHER_ORDER_ACTION_TYPES = new Set<PnLActionType>([
  * identity, it only prevents a fabricated zero.
  */
 function hasUnresolvedSiblingCoupling(args: {
-  relevantEntries: readonly PnLEntry[];
+  index: SiblingCouplingIndex;
   triggerGroupId: string;
   triggerActionType: PnLActionType;
   txHash: string;
@@ -50,13 +162,15 @@ function hasUnresolvedSiblingCoupling(args: {
     return false;
   }
 
-  return args.relevantEntries.some(
+  const candidates = args.index.entriesByTxHash.get(args.txHash) ?? [];
+  return candidates.some(
     (entry) =>
-      entry.txHash === args.txHash &&
       entry.actionGroupId !== args.triggerGroupId &&
       entry.entryType !== "FEE" &&
+      !HIGHER_ORDER_ACTION_TYPES.has(entry.actionType) &&
       entry.direction === args.requiredDirection &&
-      entry.assetId !== args.targetAssetId,
+      entry.assetId !== args.targetAssetId &&
+      !isZeroQuantity(entry.quantity),
   );
 }
 
@@ -86,6 +200,8 @@ export async function calculateAverageCostPnl(
 
       return left.id.localeCompare(right.id);
     });
+
+  const siblingCouplingIndex = buildSiblingCouplingIndex(relevantEntries);
 
   const groups = new Map<string, PnLEntry[]>();
   for (const entry of relevantEntries) {
@@ -136,6 +252,32 @@ export async function calculateAverageCostPnl(
     );
     const targetFeeEntries = targetEntries.filter((entry) => entry.entryType === "FEE");
 
+    // A complete higher-order group (SWAP/LP/STAKE) elsewhere in this same
+    // transaction already recorded this exact (assetId, direction) leg —
+    // this group is a generic TRANSFER shadow of that already-accounted-for
+    // movement, not an independent economic event. Skip it silently (like
+    // INTERNAL_TRANSFER) rather than double-counting it or flagging it.
+    if (
+      (targetInEntries.length > 0 &&
+        isShadowedByCompleteHigherOrderAction({
+          index: siblingCouplingIndex,
+          triggerActionType: groupEntries[0].actionType,
+          txHash: groupEntries[0].txHash,
+          targetAssetId: args.assetId,
+          direction: "IN",
+        })) ||
+      (targetOutEntries.length > 0 &&
+        isShadowedByCompleteHigherOrderAction({
+          index: siblingCouplingIndex,
+          triggerActionType: groupEntries[0].actionType,
+          txHash: groupEntries[0].txHash,
+          targetAssetId: args.assetId,
+          direction: "OUT",
+        }))
+    ) {
+      continue;
+    }
+
     if (targetInEntries.length > 0 && targetOutEntries.length === 0 && targetFeeEntries.length === 0) {
       const costSourceEntries = groupEntries.filter(
         (entry) =>
@@ -148,7 +290,7 @@ export async function calculateAverageCostPnl(
       if (
         costSourceEntries.length === 0 &&
         hasUnresolvedSiblingCoupling({
-          relevantEntries,
+          index: siblingCouplingIndex,
           triggerGroupId: groupEntries[0].actionGroupId,
           triggerActionType: groupEntries[0].actionType,
           txHash: groupEntries[0].txHash,
@@ -241,7 +383,7 @@ export async function calculateAverageCostPnl(
       if (
         proceedsSourceEntries.length === 0 &&
         hasUnresolvedSiblingCoupling({
-          relevantEntries,
+          index: siblingCouplingIndex,
           triggerGroupId: groupEntries[0].actionGroupId,
           triggerActionType: groupEntries[0].actionType,
           txHash: groupEntries[0].txHash,
