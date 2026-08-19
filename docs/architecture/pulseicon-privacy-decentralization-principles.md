@@ -4,6 +4,14 @@
 
 **Canonical decision record:** D-037 in `docs/project-decisions.md`.
 
+**Naming:** CoinPulse is the current repository, engineering project, and backend
+architecture. PulseIcon is the intended customer-facing product/brand built on and served
+by that architecture. References to PulseIcon in this document describe product-level
+principles and future customer-facing behavior — they do not rename the CoinPulse
+repository, packages, APIs, services, schemas, environment variables, or existing
+engineering architecture. Existing repository and engineering identifiers remain CoinPulse
+unless a future, separately approved rename decision changes them.
+
 ---
 
 ## Purpose
@@ -11,7 +19,7 @@
 This document establishes privacy-by-architecture, minimal identity coupling, and
 non-custodial/read-only product guardrails **before** accounts, subscriptions, billing,
 multi-device sync, analytics, or any user↔wallet ownership model is implemented for
-PulseIcon (the product identity CoinPulse's canonical backend serves).
+PulseIcon, the customer-facing product built on the CoinPulse canonical backend.
 
 It is written now, ahead of that work, so that conventional SaaS patterns — a
 `User.hasMany(Wallet)` table, a plaintext account↔wallet join, ad-supported monetization —
@@ -337,13 +345,13 @@ Architecture intent is not evidence of implementation. PulseIcon must not claim:
 - **"We collect nothing"** — if backend infrastructure processes wallet addresses or
   portfolio data (it does, and will continue to).
 - **"Your wallet address never leaves your device"** — if the address is sent to the
-  PulseIcon backend (it is, for backend-truth-first analytics to work at all).
+  CoinPulse canonical backend (it is, for backend-truth-first analytics to work at all).
 - **"Anonymous"** — unless the complete implementation actually supports it.
-- **"Decentralized"** — merely because PulseChain itself is decentralized. PulseIcon's
-  backend is a centralized analytics service over decentralized chain data; those are not
-  the same claim.
+- **"Decentralized"** — merely because PulseChain itself is decentralized. The CoinPulse
+  backend serving PulseIcon is a centralized analytics service over decentralized chain
+  data; those are not the same claim.
 
-Future claims such as *"saved wallet lists are encrypted before reaching PulseIcon
+Future claims such as *"saved wallet lists are encrypted before reaching PulseIcon's
 servers"* or *"our account system does not store the wallets you follow"* may only be made
 **after** implementation and technical verification actually prove them. This document is
 an architecture guardrail, not marketing evidence, and must not be cited as if it were.
