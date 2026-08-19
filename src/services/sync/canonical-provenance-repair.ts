@@ -1,6 +1,7 @@
 import "server-only";
 
 import { PHEX_ADDRESS } from "@/config/assets";
+import { PULSECHAIN_REFERENCE } from "@/config/chains";
 import { getDb } from "@/lib/db";
 import {
   persistRawDexSwapTransferEvidence,
@@ -132,6 +133,16 @@ function validateArgs(args: RepairCanonicalRawTransferProvenanceArgs) {
   if (!["SWAP", "LP", "STAKE"].includes(args.family)) {
     throw new Error(
       "canonical-provenance-repair: family must be one of SWAP, LP, STAKE.",
+    );
+  }
+
+  // STAKE evidence selection is native pHEX-specific (CORE_PROTOCOLS.hex,
+  // PHEX_ADDRESS) — those are PulseChain-only identities. Reject any other
+  // chainId up front, before any candidate scan, rather than silently
+  // scanning a chain the STAKE producer never runs on.
+  if (args.family === "STAKE" && args.chainId !== PULSECHAIN_REFERENCE.id) {
+    throw new Error(
+      `canonical-provenance-repair: STAKE repair is PulseChain-only (chainId ${PULSECHAIN_REFERENCE.id}); got chainId ${args.chainId}.`,
     );
   }
 

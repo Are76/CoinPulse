@@ -680,6 +680,151 @@ describe("repairCanonicalRawTransferProvenance — SWAP", () => {
     expect(report.candidatesScanned).toBe(1);
     expect(store.swaps.find((s) => s.id === "swap_other")?.rawTransferEvidenceStatus).toBeNull();
   });
+
+  it("allows a non-PulseChain chainId for SWAP — current architecture does not restrict this family to 369", async () => {
+    const nonPulsechainId = 1; // e.g. Ethereum mainnet chainId, purely as a probe value
+    const store = createRepairMockDb({
+      transfers: baseSwapTransfers().map((t) => ({ ...t, chainId: nonPulsechainId })),
+      swaps: [baseSwapAction({ chainId: nonPulsechainId })],
+    });
+
+    const report = await repairCanonicalRawTransferProvenance(
+      { chainId: nonPulsechainId, family: "SWAP", apply: true },
+      store.client as never,
+    );
+
+    // Whatever the deterministic outcome is for a non-369 chain today, it
+    // must not be an up-front rejection — SWAP has no chain restriction.
+    expect(report.candidatesScanned).toBe(1);
+    expect(report.deterministicallyRepairable).toBe(1);
+    expect(store.swaps[0].rawTransferEvidenceStatus).toBe("RECORDED");
+  });
+
+  it("allows a non-PulseChain chainId for LP — current architecture does not restrict this family to 369", async () => {
+    const nonPulsechainId = 1;
+    const transfers = [
+      transfer({ id: "t0", chainId: nonPulsechainId, txHash: "0xlpnonchain", logIndex: 0, tokenAddress: TOKEN_A, assetIdSnapshot: `chain:${nonPulsechainId}:erc20:${TOKEN_A}`, fromAddress: WALLET, toAddress: "0xrouter", amountRaw: "1000" }),
+      transfer({ id: "t1", chainId: nonPulsechainId, txHash: "0xlpnonchain", logIndex: 1, tokenAddress: TOKEN_B, assetIdSnapshot: `chain:${nonPulsechainId}:erc20:${TOKEN_B}`, fromAddress: WALLET, toAddress: "0xrouter", amountRaw: "500" }),
+      transfer({ id: "lp_in", chainId: nonPulsechainId, txHash: "0xlpnonchain", logIndex: 2, tokenAddress: LP_TOKEN, assetIdSnapshot: `chain:${nonPulsechainId}:erc20:${LP_TOKEN}`, fromAddress: "0xrouter", toAddress: WALLET, amountRaw: "300" }),
+    ];
+    const lpAction: MockLpAction = {
+      id: "lp_nonchain",
+      chainId: nonPulsechainId,
+      actionKind: "ADD",
+      txHash: "0xlpnonchain",
+      blockNumber: 100n,
+      blockHash: "0xblock",
+      logIndex: 2,
+      initiatorAddress: WALLET,
+      token0AssetIdSnapshot: `chain:${nonPulsechainId}:erc20:${TOKEN_A}`,
+      token0AmountRaw: "1000",
+      token1AssetIdSnapshot: `chain:${nonPulsechainId}:erc20:${TOKEN_B}`,
+      token1AmountRaw: "500",
+      lpAssetIdSnapshot: `chain:${nonPulsechainId}:erc20:${LP_TOKEN}`,
+      lpAmountRaw: "300",
+      status: "ACTIVE",
+      rawTransferEvidenceStatus: null,
+    };
+    const store = createRepairMockDb({ transfers, lpActions: [lpAction] });
+
+    const report = await repairCanonicalRawTransferProvenance(
+      { chainId: nonPulsechainId, family: "LP", apply: true },
+      store.client as never,
+    );
+
+    expect(report.candidatesScanned).toBe(1);
+    expect(report.deterministicallyRepairable).toBe(1);
+    expect(store.lpActions[0].rawTransferEvidenceStatus).toBe("RECORDED");
+  });
+});
+
+describe("repairCanonicalRawTransferProvenance — chain scoping", () => {
+  it("allows STAKE repair for PulseChain (chainId 369)", async () => {
+    const stakeAction = {
+      id: "stake_chain369",
+      chainId: 369,
+      protocolSlug: "hex",
+      actionKind: "START" as const,
+      txHash: "0xstakechain369",
+      blockNumber: 100n,
+      blockHash: "0xblock",
+      actionIndex: 0,
+      initiatorAddress: WALLET,
+      tokenAddress: PHEX,
+      principalLockedRaw: "500000000",
+      totalReturnedRaw: null,
+      status: "ACTIVE",
+      rawTransferEvidenceStatus: null,
+    };
+    const transfers = [
+      transfer({ id: "principal_out_369", txHash: "0xstakechain369", logIndex: 0, tokenAddress: PHEX, assetIdSnapshot: `chain:369:erc20:${PHEX}`, fromAddress: WALLET, toAddress: PHEX, amountRaw: "500000000" }),
+    ];
+    const store = createRepairMockDb({ transfers, stakeActions: [stakeAction] });
+
+    const report = await repairCanonicalRawTransferProvenance(
+      { chainId: 369, family: "STAKE", apply: true },
+      store.client as never,
+    );
+
+    expect(report.deterministicallyRepairable).toBe(1);
+    expect(store.stakeActions[0].rawTransferEvidenceStatus).toBe("RECORDED");
+  });
+
+  it("rejects STAKE repair for any non-PulseChain chainId before scanning or mutating anything", async () => {
+    const store = createRepairMockDb({
+      transfers: [
+        transfer({ id: "principal_out_1", chainId: 1, txHash: "0xstakechain1", logIndex: 0, tokenAddress: PHEX, assetIdSnapshot: `chain:1:erc20:${PHEX}`, fromAddress: WALLET, toAddress: PHEX, amountRaw: "500000000" }),
+      ],
+      stakeActions: [
+        {
+          id: "stake_chain1",
+          chainId: 1,
+          protocolSlug: "hex",
+          actionKind: "START" as const,
+          txHash: "0xstakechain1",
+          blockNumber: 100n,
+          blockHash: "0xblock",
+          actionIndex: 0,
+          initiatorAddress: WALLET,
+          tokenAddress: PHEX,
+          principalLockedRaw: "500000000",
+          totalReturnedRaw: null,
+          status: "ACTIVE",
+          rawTransferEvidenceStatus: null,
+        },
+      ],
+    });
+
+    // Spy on the candidate scan to prove rejection happens before any scan.
+    const findManySpy = store.client.rawStakeAction.findMany;
+    let scanWasAttempted = false;
+    store.client.rawStakeAction.findMany = (async (queryArgs: unknown) => {
+      scanWasAttempted = true;
+      return findManySpy(queryArgs as never);
+    }) as typeof findManySpy;
+
+    await expect(
+      repairCanonicalRawTransferProvenance(
+        { chainId: 1, family: "STAKE", apply: true },
+        store.client as never,
+      ),
+    ).rejects.toThrow(/STAKE repair is PulseChain-only \(chainId 369\); got chainId 1/);
+
+    expect(scanWasAttempted).toBe(false);
+    expect(store.stakeActions[0].rawTransferEvidenceStatus).toBeNull();
+    expect(store.stakeEvidence).toEqual([]);
+  });
+
+  it("rejects STAKE repair for a non-PulseChain chainId even in dry-run mode", async () => {
+    const store = createRepairMockDb({});
+
+    await expect(
+      repairCanonicalRawTransferProvenance(
+        { chainId: 1, family: "STAKE" }, // dry-run, no apply
+        store.client as never,
+      ),
+    ).rejects.toThrow(/STAKE repair is PulseChain-only/);
+  });
 });
 
 describe("repairCanonicalRawTransferProvenance — LP", () => {

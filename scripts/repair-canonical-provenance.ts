@@ -90,6 +90,7 @@ export const PROVENANCE_REPAIR_CLI_USAGE = [
     `${REPAIR_MAX_ACTIONS_HARD_CAP}.`,
   "  Only ACTIVE actions with rawTransferEvidenceStatus === null are ever",
   "  scanned; RECORDED and VERIFIED_EMPTY rows are never touched.",
+  "  --family STAKE is PulseChain-only: --chain-id must be 369.",
 ].join("\n");
 
 export function parseProvenanceRepairCliArgs(
