@@ -383,6 +383,9 @@ type RawDexSwapTransferEvidenceStoreClient = RawDexSwapReadClient & {
       skipDuplicates: boolean;
     }): Promise<{ count: number }>;
   };
+  $transaction?<T>(
+    fn: (tx: RawDexSwapTransferEvidenceStoreClient) => Promise<T>,
+  ): Promise<T>;
 };
 
 type RawLpActionTransferEvidenceStoreClient = RawLpActionReadClient & {
@@ -399,6 +402,9 @@ type RawLpActionTransferEvidenceStoreClient = RawLpActionReadClient & {
       skipDuplicates: boolean;
     }): Promise<{ count: number }>;
   };
+  $transaction?<T>(
+    fn: (tx: RawLpActionTransferEvidenceStoreClient) => Promise<T>,
+  ): Promise<T>;
 };
 
 type RawStakeActionTransferEvidenceStoreClient = RawStakeActionReadClient & {
@@ -415,6 +421,9 @@ type RawStakeActionTransferEvidenceStoreClient = RawStakeActionReadClient & {
       skipDuplicates: boolean;
     }): Promise<{ count: number }>;
   };
+  $transaction?<T>(
+    fn: (tx: RawStakeActionTransferEvidenceStoreClient) => Promise<T>,
+  ): Promise<T>;
 };
 
 export async function persistRawLogs(
@@ -677,20 +686,23 @@ export async function persistRawDexSwapTransferEvidence(
     }));
   });
 
-  await updateRawActionEvidenceStatuses({
-    model: client.rawDexSwap,
-    actionIdByIdentity,
-    plans,
-    identity: rawLogActionIdentity,
-  });
+  return runRawTransferEvidenceTransaction(client, async (tx) => {
+    const result =
+      rows.length === 0
+        ? { count: 0 }
+        : await tx.rawDexSwapTransferEvidence.createMany({
+            data: rows,
+            skipDuplicates: true,
+          });
 
-  if (rows.length === 0) {
-    return { count: 0 };
-  }
+    await updateRawActionEvidenceStatuses({
+      model: tx.rawDexSwap,
+      actionIdByIdentity,
+      plans,
+      identity: rawLogActionIdentity,
+    });
 
-  return client.rawDexSwapTransferEvidence.createMany({
-    data: rows,
-    skipDuplicates: true,
+    return result;
   });
 }
 
@@ -740,20 +752,23 @@ export async function persistRawLpActionTransferEvidence(
     }));
   });
 
-  await updateRawActionEvidenceStatuses({
-    model: client.rawLpAction,
-    actionIdByIdentity,
-    plans,
-    identity: rawLogActionIdentity,
-  });
+  return runRawTransferEvidenceTransaction(client, async (tx) => {
+    const result =
+      rows.length === 0
+        ? { count: 0 }
+        : await tx.rawLpActionTransferEvidence.createMany({
+            data: rows,
+            skipDuplicates: true,
+          });
 
-  if (rows.length === 0) {
-    return { count: 0 };
-  }
+    await updateRawActionEvidenceStatuses({
+      model: tx.rawLpAction,
+      actionIdByIdentity,
+      plans,
+      identity: rawLogActionIdentity,
+    });
 
-  return client.rawLpActionTransferEvidence.createMany({
-    data: rows,
-    skipDuplicates: true,
+    return result;
   });
 }
 
@@ -805,20 +820,23 @@ export async function persistRawStakeActionTransferEvidence(
     }));
   });
 
-  await updateRawActionEvidenceStatuses({
-    model: client.rawStakeAction,
-    actionIdByIdentity,
-    plans,
-    identity: rawStakeActionIdentity,
-  });
+  return runRawTransferEvidenceTransaction(client, async (tx) => {
+    const result =
+      rows.length === 0
+        ? { count: 0 }
+        : await tx.rawStakeActionTransferEvidence.createMany({
+            data: rows,
+            skipDuplicates: true,
+          });
 
-  if (rows.length === 0) {
-    return { count: 0 };
-  }
+    await updateRawActionEvidenceStatuses({
+      model: tx.rawStakeAction,
+      actionIdByIdentity,
+      plans,
+      identity: rawStakeActionIdentity,
+    });
 
-  return client.rawStakeActionTransferEvidence.createMany({
-    data: rows,
-    skipDuplicates: true,
+    return result;
   });
 }
 
@@ -1408,6 +1426,7 @@ async function updateRawActionEvidenceStatuses<TPlan extends { rawTokenTransferI
 }) {
   const recordedIds: string[] = [];
   const verifiedEmptyIds: string[] = [];
+  const hasEvidenceByActionId = new Map<string, boolean>();
 
   for (const plan of args.plans) {
     const id = args.actionIdByIdentity.get(args.identity(plan));
@@ -1415,7 +1434,15 @@ async function updateRawActionEvidenceStatuses<TPlan extends { rawTokenTransferI
       continue;
     }
 
-    if (plan.rawTokenTransferIds.length > 0) {
+    hasEvidenceByActionId.set(
+      id,
+      (hasEvidenceByActionId.get(id) ?? false) ||
+        plan.rawTokenTransferIds.length > 0,
+    );
+  }
+
+  for (const [id, hasEvidence] of hasEvidenceByActionId) {
+    if (hasEvidence) {
       recordedIds.push(id);
     } else {
       verifiedEmptyIds.push(id);
@@ -1428,6 +1455,19 @@ async function updateRawActionEvidenceStatuses<TPlan extends { rawTokenTransferI
     uniqueStrings(verifiedEmptyIds),
     "VERIFIED_EMPTY",
   );
+}
+
+async function runRawTransferEvidenceTransaction<TClient, TResult>(
+  client: TClient & {
+    $transaction?: <T>(fn: (tx: TClient) => Promise<T>) => Promise<T>;
+  },
+  operation: (tx: TClient) => Promise<TResult>,
+) {
+  if (typeof client.$transaction === "function") {
+    return client.$transaction((tx) => operation(tx));
+  }
+
+  return operation(client);
 }
 
 async function updateRawActionEvidenceStatus(

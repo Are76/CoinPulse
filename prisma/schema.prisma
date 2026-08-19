@@ -488,7 +488,7 @@ model RawDexSwapTransferEvidence {
   rawDexSwap         RawDexSwap       @relation(fields: [rawDexSwapId], references: [id], onDelete: Cascade)
   rawTokenTransfer   RawTokenTransfer @relation(fields: [rawTokenTransferId], references: [id], onDelete: Restrict)
 
-  @@unique([rawDexSwapId, legRole, rawTokenTransferId])
+  @@unique([rawDexSwapId, legRole, rawTokenTransferId], map: "RawDexSwapTransferEvidence_action_role_transfer_key")
   @@index([rawTokenTransferId])
 }
 
@@ -501,7 +501,7 @@ model RawLpActionTransferEvidence {
   rawLpAction        RawLpAction      @relation(fields: [rawLpActionId], references: [id], onDelete: Cascade)
   rawTokenTransfer   RawTokenTransfer @relation(fields: [rawTokenTransferId], references: [id], onDelete: Restrict)
 
-  @@unique([rawLpActionId, legRole, rawTokenTransferId])
+  @@unique([rawLpActionId, legRole, rawTokenTransferId], map: "RawLpActionTransferEvidence_action_role_transfer_key")
   @@index([rawTokenTransferId])
 }
 
@@ -514,7 +514,7 @@ model RawStakeActionTransferEvidence {
   rawStakeAction     RawStakeAction   @relation(fields: [rawStakeActionId], references: [id], onDelete: Cascade)
   rawTokenTransfer   RawTokenTransfer @relation(fields: [rawTokenTransferId], references: [id], onDelete: Restrict)
 
-  @@unique([rawStakeActionId, legRole, rawTokenTransferId])
+  @@unique([rawStakeActionId, legRole, rawTokenTransferId], map: "RawStakeActionTransferEvidence_action_role_transfer_key")
   @@index([rawTokenTransferId])
 }
 
