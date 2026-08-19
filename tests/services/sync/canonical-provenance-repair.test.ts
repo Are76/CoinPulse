@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
 import { repairCanonicalRawTransferProvenance } from "@/services/sync/canonical-provenance-repair";
@@ -131,6 +132,10 @@ function createRepairMockDb(seed: {
   lpActions?: MockLpAction[];
   stakeActions?: MockStakeAction[];
   failEvidenceInsert?: boolean;
+  /** Number of leading $transaction attempts that should throw a
+   * Prisma-shaped { code: "P2034" } serialization-conflict error before the
+   * (attempt + 1)th attempt is allowed to proceed normally. */
+  forcedSerializationConflicts?: number;
 }) {
   const transfers = (seed.transfers ?? []).map((t) => ({ ...t }));
   const swaps = (seed.swaps ?? []).map((s) => ({ ...s }));
@@ -139,6 +144,8 @@ function createRepairMockDb(seed: {
   const dexEvidence: Array<{ rawDexSwapId: string; rawTokenTransferId: string; legRole: string }> = [];
   const lpEvidence: Array<{ rawLpActionId: string; rawTokenTransferId: string; legRole: string }> = [];
   const stakeEvidence: Array<{ rawStakeActionId: string; rawTokenTransferId: string; legRole: string }> = [];
+  const transactionCalls: Array<{ options: unknown }> = [];
+  let remainingForcedConflicts = seed.forcedSerializationConflicts ?? 0;
 
   const client = {
     rawTokenTransfer: {
@@ -259,7 +266,16 @@ function createRepairMockDb(seed: {
         return { count };
       },
     },
-    $transaction: async <T>(fn: (tx: unknown) => Promise<T>) => {
+    $transaction: async <T>(fn: (tx: unknown) => Promise<T>, options?: unknown) => {
+      transactionCalls.push({ options });
+
+      if (remainingForcedConflicts > 0) {
+        remainingForcedConflicts -= 1;
+        const conflict = new Error("Transaction failed due to a write conflict or a deadlock.");
+        (conflict as unknown as { code: string }).code = "P2034";
+        throw conflict;
+      }
+
       const snapshot = {
         swaps: swaps.map((s) => ({ ...s })),
         lpActions: lpActions.map((l) => ({ ...l })),
@@ -269,7 +285,15 @@ function createRepairMockDb(seed: {
         stakeEvidence: [...stakeEvidence],
       };
       try {
-        return await fn(client);
+        // Real Prisma's interactive-transaction client (`tx`) does NOT
+        // itself expose `$transaction` — nested transactions aren't a
+        // thing. Faithfully drop it here too, otherwise
+        // persistRaw*TransferEvidence's own internal transaction-detection
+        // would (wrongly, only in this mock) see a `$transaction` on `tx`
+        // and open a second, redundant nested transaction.
+        const txWithoutTransaction: Record<string, unknown> = { ...client };
+        delete txWithoutTransaction.$transaction;
+        return await fn(txWithoutTransaction);
       } catch (error) {
         swaps.splice(0, swaps.length, ...snapshot.swaps);
         lpActions.splice(0, lpActions.length, ...snapshot.lpActions);
@@ -282,7 +306,31 @@ function createRepairMockDb(seed: {
     },
   };
 
-  return { client, transfers, swaps, lpActions, stakeActions, dexEvidence, lpEvidence, stakeEvidence };
+  return {
+    client,
+    transfers,
+    swaps,
+    lpActions,
+    stakeActions,
+    dexEvidence,
+    lpEvidence,
+    stakeEvidence,
+    transactionCalls,
+  };
+}
+
+/** A mock client with no $transaction method at all — simulates a Prisma
+ * client (or transaction-scoped sub-client) that cannot open its own
+ * Serializable interactive transaction, to prove apply mode fails closed
+ * instead of silently running unprotected. */
+function createRepairMockDbWithoutTransactionCapability(seed: {
+  transfers?: MockTransfer[];
+  swaps?: MockSwap[];
+}) {
+  const store = createRepairMockDb(seed);
+  const clientWithoutTransaction: Record<string, unknown> = { ...store.client };
+  delete clientWithoutTransaction.$transaction;
+  return { ...store, client: clientWithoutTransaction };
 }
 
 function transfer(overrides: Partial<MockTransfer> & { id: string }): MockTransfer {
@@ -673,6 +721,108 @@ describe("repairCanonicalRawTransferProvenance — SWAP", () => {
 
     expect(store.swaps[0].rawTransferEvidenceStatus).toBeNull();
     expect(store.dexEvidence).toEqual([]);
+  });
+
+  it("opens the apply-mode transaction with explicit Serializable isolation", async () => {
+    const store = createRepairMockDb({
+      transfers: baseSwapTransfers(),
+      swaps: [baseSwapAction()],
+    });
+
+    await repairCanonicalRawTransferProvenance(
+      { chainId: CHAIN_ID, family: "SWAP", apply: true },
+      store.client as never,
+    );
+
+    // This proves the JS-level call passes the isolation-level option this
+    // module claims to use; it does not by itself prove PostgreSQL enforces
+    // SSI (that guarantee comes from the real database engine and cannot be
+    // exercised by an in-memory mock), but it does prove the code cannot
+    // silently regress to running the transaction at default isolation.
+    expect(store.transactionCalls).toHaveLength(1);
+    expect(store.transactionCalls[0].options).toEqual({
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    });
+  });
+
+  it("fails closed in apply mode when the client has no $transaction capability, instead of running unprotected", async () => {
+    const store = createRepairMockDbWithoutTransactionCapability({
+      transfers: baseSwapTransfers(),
+      swaps: [baseSwapAction()],
+    });
+    expect("$transaction" in store.client).toBe(false);
+
+    await expect(
+      repairCanonicalRawTransferProvenance(
+        { chainId: CHAIN_ID, family: "SWAP", apply: true },
+        store.client as never,
+      ),
+    ).rejects.toThrow(
+      /apply mode requires a Prisma client capable of an interactive \$transaction with an explicit isolationLevel/,
+    );
+
+    // Nothing was written — the refusal happens before any evidence/status
+    // mutation is attempted, not as a rollback after a partial write.
+    expect(store.swaps[0].rawTransferEvidenceStatus).toBeNull();
+    expect(store.dexEvidence).toEqual([]);
+  });
+
+  it("retries a serialization conflict (Prisma P2034) up to the bounded attempt cap, then succeeds", async () => {
+    const store = createRepairMockDb({
+      transfers: baseSwapTransfers(),
+      swaps: [baseSwapAction()],
+      forcedSerializationConflicts: 2, // fails on attempts 1 and 2, succeeds on 3
+    });
+
+    const report = await repairCanonicalRawTransferProvenance(
+      { chainId: CHAIN_ID, family: "SWAP", apply: true },
+      store.client as never,
+    );
+
+    expect(store.transactionCalls).toHaveLength(3);
+    expect(store.transactionCalls.map((call) => Boolean(call.options))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(report.deterministicallyRepairable).toBe(1);
+    expect(store.swaps[0].rawTransferEvidenceStatus).toBe("RECORDED");
+  });
+
+  it("propagates a serialization conflict once the bounded retry cap is exhausted, without persisting anything", async () => {
+    const store = createRepairMockDb({
+      transfers: baseSwapTransfers(),
+      swaps: [baseSwapAction()],
+      forcedSerializationConflicts: 3, // fails on every attempt within the cap
+    });
+
+    await expect(
+      repairCanonicalRawTransferProvenance(
+        { chainId: CHAIN_ID, family: "SWAP", apply: true },
+        store.client as never,
+      ),
+    ).rejects.toThrow(/write conflict or a deadlock/);
+
+    expect(store.transactionCalls).toHaveLength(3);
+    expect(store.swaps[0].rawTransferEvidenceStatus).toBeNull();
+    expect(store.dexEvidence).toEqual([]);
+  });
+
+  it("does not retry a non-conflict error — it propagates immediately", async () => {
+    const store = createRepairMockDb({
+      transfers: baseSwapTransfers(),
+      swaps: [baseSwapAction()],
+      failEvidenceInsert: true,
+    });
+
+    await expect(
+      repairCanonicalRawTransferProvenance(
+        { chainId: CHAIN_ID, family: "SWAP", apply: true },
+        store.client as never,
+      ),
+    ).rejects.toThrow("forced evidence insert failure");
+
+    expect(store.transactionCalls).toHaveLength(1);
   });
 
   it("dry-run never re-validates or queries revalidation state (matches scan-time report)", async () => {

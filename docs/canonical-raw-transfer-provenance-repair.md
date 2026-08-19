@@ -98,25 +98,39 @@ stays `null`), never guessed.
   `tokenAddress === PHEX_ADDRESS` at the query level, matching the exact
   producer that writes them — a legacy or future non-HEX stake row is never
   a candidate even if its actionKind/actionIndex happen to match.
-- **Scan/write race closure:** the initial scan (candidate read + transfer
-  read + shape reconstruction) is not itself transactional, so it cannot by
-  itself prove nothing changes before the write. Revalidation and
-  persistence are therefore not two separate database operations. In apply
-  mode, `applyPendingRepairsAtomically` opens exactly one database
-  transaction that (1) re-checks every pending action's status/
-  `rawTransferEvidenceStatus` and every referenced transfer's status,
-  (2) writes evidence + status via the exact PR #376 persister executed
-  against the transaction client (so its writes join this same transaction,
-  never a second one), and (3) re-counts the same ACTIVE conditions one more
-  time as the last statement before commit. If that final guard finds fewer
-  ACTIVE rows than expected — a concurrent sync, rebuild, or reorg-marking
-  pass changed canonical state anywhere between step 1 and step 3 — the
-  whole transaction throws and rolls back: no evidence row and no status
-  change from that apply call survives. This is a structural closure of the
-  race, not a documentation-only mitigation — it does not depend on an
-  operator promising not to run sync/rebuild concurrently, though avoiding
-  that overlap is still recommended for throughput, since a detected race
-  aborts the whole bounded batch rather than only the affected action.
+- **Scan/write race closure — the actual database guarantee:** the initial
+  scan (candidate read + transfer read + shape reconstruction) is not itself
+  transactional, so it cannot by itself prove nothing changes before the
+  write. Revalidation, the evidence insert, and the status update therefore
+  all happen inside **one interactive transaction opened at explicit
+  PostgreSQL `SERIALIZABLE` isolation**
+  (`Prisma.TransactionIsolationLevel.Serializable`) — the strongest
+  isolation level PostgreSQL offers, implemented via Serializable Snapshot
+  Isolation (SSI). This is a real, engine-enforced guarantee: PostgreSQL
+  tracks the rows this transaction actually reads and writes, and if *any*
+  concurrent transaction — at any isolation level, including a plain
+  `READ COMMITTED` sync or reorg-marking write — commits a change that would
+  make this transaction's result inconsistent with some serial (one-at-a-
+  time) execution order, PostgreSQL aborts *this* transaction with a
+  serialization failure (SQLSTATE `40001`, surfaced by Prisma as error code
+  `P2034`) rather than let it commit against stale data. On that failure,
+  the whole transaction body is retried up to 3 times — matching the
+  existing repo-native pattern in `sync-state-store.ts`'s
+  `runCursorTransactionWithRetry` — after which the error propagates and
+  apply mode fails outright rather than silently giving up on the batch.
+  A final count-based recheck (re-verifying the same ACTIVE conditions as
+  the last statement before the transaction body returns) is also present
+  as a defensive, testable belt-and-suspenders check, but it is **not**
+  itself what provides the concurrency guarantee — the guarantee comes from
+  PostgreSQL SERIALIZABLE isolation covering the whole transaction.
+  **Fail-closed on missing capability:** if the client apply mode is given
+  does not expose an interactive `$transaction(fn, { isolationLevel })`,
+  the repair throws immediately, before any candidate scan or write —
+  it never falls back to running unprotected at default isolation.
+  This does not depend on an operator promising not to run sync/rebuild
+  concurrently, though avoiding that overlap is still recommended for
+  throughput: a detected conflict retries (bounded) or aborts the whole
+  bounded batch, not just the affected action.
 
 ## Idempotency and atomicity
 

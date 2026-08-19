@@ -1,5 +1,7 @@
 import "server-only";
 
+import { Prisma } from "@prisma/client";
+
 import { PHEX_ADDRESS } from "@/config/assets";
 import { PULSECHAIN_REFERENCE } from "@/config/chains";
 import { getDb } from "@/lib/db";
@@ -53,27 +55,41 @@ import type { SyncDbClient } from "@/services/sync/sync-common";
  * Never mutates RECORDED or VERIFIED_EMPTY actions: the candidate readers
  * only ever select rows with rawTransferEvidenceStatus === null.
  *
- * Concurrency safety: the initial scan (candidate read + transfer read +
- * shape reconstruction) is not itself transactional, so a concurrent sync or
- * reorg could invalidate a candidate action or one of its evidence transfers
- * between the scan and the final write. Revalidation and persistence are
- * NOT two separate database operations: in apply mode, `applyPendingRepairs
- * Atomically` opens exactly one database transaction that (1) re-checks
- * every pending action's status/rawTransferEvidenceStatus and every
- * referenced transfer's status, (2) writes evidence + status via the exact
- * PR #376 persister (`persistRaw*TransferEvidence`), executed against the
- * transaction client so its writes join this same transaction rather than
- * opening a second one, and (3) re-counts the same ACTIVE conditions one
- * more time as the last statement before commit. If that final count-based
- * guard finds fewer ACTIVE rows than expected — meaning some concurrent
- * writer (a sync run, a rebuild, a reorg-marking pass) changed canonical
- * state anywhere between step 1 and step 3 — the whole transaction throws
- * and rolls back: no evidence row and no status change from this apply call
- * survives. This closes the gap structurally rather than only shrinking it;
- * it does not depend on operators promising not to run sync/rebuild
- * concurrently, though avoiding that overlap is still recommended for
- * throughput (a detected race aborts the whole bounded batch, not just the
- * affected action).
+ * Concurrency safety — the actual database guarantee, precisely stated:
+ *
+ * The initial scan (candidate read + transfer read + shape reconstruction)
+ * is not itself transactional, so it cannot by itself prove nothing changes
+ * before the write. Revalidation, the evidence insert, and the status
+ * update therefore all happen inside ONE interactive transaction opened by
+ * `applyPendingRepairsAtomically`, explicitly at PostgreSQL SERIALIZABLE
+ * isolation (`Prisma.TransactionIsolationLevel.Serializable`) — the
+ * strongest isolation level Postgres offers, using Serializable Snapshot
+ * Isolation (SSI). This is a real, engine-enforced guarantee, not an
+ * application-level approximation: PostgreSQL tracks the actual rows this
+ * transaction reads and writes, and if ANY concurrent transaction (at any
+ * isolation level — sync, rebuild, or a reorg-marking pass included)
+ * commits a change that would make this transaction's result inconsistent
+ * with *some* serial (one-at-a-time) execution order, PostgreSQL aborts
+ * THIS transaction with a serialization failure (SQLSTATE 40001, surfaced
+ * by Prisma as error code P2034) rather than let it commit against stale
+ * data. That failure can occur at any statement, including implicitly at
+ * COMMIT. On a serialization failure, this module retries the whole
+ * transaction body up to 3 times (matching the existing repo-native retry
+ * pattern in `sync-state-store.ts`'s `runCursorTransactionWithRetry`); if
+ * every attempt fails, the error propagates and NOTHING commits.
+ *
+ * The final count-based recheck (re-counting the same ACTIVE conditions
+ * checked at the start of the transaction, as the last statement before the
+ * transaction body returns) is kept as an explicit, readable belt-and-
+ * suspenders check that produces a clear domain error and is exercised by
+ * targeted tests — it is not itself what provides the concurrency
+ * guarantee. The guarantee comes from PostgreSQL's SERIALIZABLE isolation
+ * covering the whole transaction, not from any single query inside it.
+ *
+ * Apply mode fails closed if the client passed in does not expose Prisma's
+ * `$transaction(fn, { isolationLevel })` capability: it throws before doing
+ * any work rather than silently running unprotected. Dry-run mode never
+ * opens a transaction because it performs no writes.
  */
 
 export type ProvenanceRepairFamily = "SWAP" | "LP" | "STAKE";
@@ -229,18 +245,105 @@ type EligibilityModel = {
 
 type ActionModelKey = "rawDexSwap" | "rawLpAction" | "rawStakeAction";
 
-type TransactionCapableClient = SyncDbClient & {
-  $transaction?<T>(fn: (tx: SyncDbClient) => Promise<T>): Promise<T>;
+/**
+ * The Prisma capability this module requires for apply mode: an interactive
+ * transaction that accepts an explicit isolation level. A client lacking
+ * this (for example a bare `Prisma.TransactionClient` already inside
+ * another transaction, which cannot itself open a nested transaction with
+ * its own isolation level) cannot provide the concurrency guarantee this
+ * module depends on, and apply mode must refuse to run rather than execute
+ * unprotected.
+ */
+type SerializableTransactionCapableClient = SyncDbClient & {
+  $transaction<T>(
+    fn: (tx: SyncDbClient) => Promise<T>,
+    options: { isolationLevel: Prisma.TransactionIsolationLevel },
+  ): Promise<T>;
 };
+
+function hasSerializableTransactionCapability(
+  client: SyncDbClient,
+): client is SerializableTransactionCapableClient {
+  return typeof (client as { $transaction?: unknown }).$transaction === "function";
+}
+
+const MAX_SERIALIZABLE_TRANSACTION_ATTEMPTS = 3;
+
+/**
+ * Prisma surfaces a PostgreSQL serialization failure (SQLSTATE 40001) or a
+ * detected deadlock (40P01) as error code P2034: "Transaction failed due to
+ * a write conflict or a deadlock. Please retry your transaction." Retrying
+ * a bounded number of times on exactly this code matches the existing
+ * repo-native pattern in `sync-state-store.ts`'s
+ * `runCursorTransactionWithRetry` / `isRetryableCursorConflict`. Unlike that
+ * cursor-merge path, this module's writes are not also unique-constrained
+ * (evidence inserts use `skipDuplicates`, and the status update carries no
+ * unique constraint), so P2002 is not included here — it would never
+ * legitimately fire from this write shape.
+ */
+function isRetryableSerializationConflict(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "P2034"
+  );
+}
+
+/**
+ * Opens the ONE Serializable-isolation transaction apply mode writes
+ * through, retrying up to `MAX_SERIALIZABLE_TRANSACTION_ATTEMPTS` times on a
+ * PostgreSQL serialization failure / deadlock (Prisma P2034) before letting
+ * the error propagate. Fails closed — throws immediately, before any DB
+ * call — if the client does not expose `$transaction` with isolation-level
+ * support; it never falls back to running the operation non-transactionally.
+ */
+async function runSerializableTransactionWithRetry<T>(
+  client: SyncDbClient,
+  operation: (tx: SyncDbClient) => Promise<T>,
+): Promise<T> {
+  if (!hasSerializableTransactionCapability(client)) {
+    throw new Error(
+      "canonical-provenance-repair: apply mode requires a Prisma client capable of " +
+        "an interactive $transaction with an explicit isolationLevel (Serializable). " +
+        "The provided client does not expose this capability; refusing to run apply " +
+        "mode unprotected against concurrent canonical-state changes rather than " +
+        "silently falling back to a non-transactional write.",
+    );
+  }
+
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= MAX_SERIALIZABLE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    try {
+      return await client.$transaction(operation, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      });
+    } catch (error) {
+      lastError = error;
+      if (
+        attempt === MAX_SERIALIZABLE_TRANSACTION_ATTEMPTS ||
+        !isRetryableSerializationConflict(error)
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  // Unreachable (the loop above always returns or throws), but keeps
+  // TypeScript's control-flow analysis satisfied without an unsafe `!`.
+  throw lastError;
+}
 
 /**
  * Apply-mode-only write path. Unlike a "revalidate, then separately persist"
  * two-step (two separate database operations with an unguarded gap between
- * them), this opens exactly ONE transaction that performs the eligibility
- * recheck, the evidence/status write (via the existing PR #376 persister,
- * executed against the transaction client so it never opens a second,
- * separate transaction), and a final count-based guard — all as part of the
- * same atomic unit. See the module doc for the full mechanism.
+ * them), this opens exactly ONE Serializable-isolation transaction that
+ * performs the eligibility recheck, the evidence/status write (via the
+ * existing PR #376 persister, executed against the transaction client so it
+ * never opens a second, separate transaction), and a final count-based
+ * guard — all as part of the same atomic unit. See the module doc for the
+ * precise database guarantee this provides.
  *
  * Dry-run mode never opens a transaction, never re-queries, and never
  * mutates the report — it already reflects scan-time state, which is what a
@@ -260,16 +363,7 @@ async function applyPendingRepairsAtomically<TPlan>(args: {
     return { count: 0 };
   }
 
-  const transactionalClient = client as TransactionCapableClient;
-
-  const runInTransaction = (
-    operation: (tx: SyncDbClient) => Promise<{ count: number }>,
-  ): Promise<{ count: number }> =>
-    typeof transactionalClient.$transaction === "function"
-      ? transactionalClient.$transaction(operation)
-      : operation(client);
-
-  return runInTransaction(async (tx) => {
+  return runSerializableTransactionWithRetry(client, async (tx) => {
     const actionModel = tx[actionModelKey] as unknown as EligibilityModel;
     const transferModel = tx.rawTokenTransfer as unknown as EligibilityModel;
 
@@ -334,14 +428,20 @@ async function applyPendingRepairsAtomically<TPlan>(args: {
     // transaction, not a second one.
     const persistResult = await persist(finalPlans, tx);
 
-    // Step 3: final atomic guard, the last read before this transaction
-    // commits. Re-counts the exact same ACTIVE conditions checked in step 1
-    // for every surviving id. Any concurrent writer that changed canonical
-    // state anywhere between step 1 and this point — including the narrow
-    // window between step 1 and step 2 that a plain re-check could not
-    // close — makes these counts come up short, and the mismatch throws to
-    // roll back the whole transaction: the evidence rows written in step 2
-    // and any status changes never commit.
+    // Step 3: final belt-and-suspenders recheck, the last read before this
+    // transaction body returns. Re-counts the exact same ACTIVE conditions
+    // checked in step 1 for every surviving id. This is NOT what provides
+    // the concurrency guarantee — that comes from PostgreSQL SERIALIZABLE
+    // isolation covering this entire transaction (see module doc): if any
+    // concurrent transaction committed a change this transaction's result
+    // depends on, PostgreSQL aborts this transaction with a serialization
+    // failure regardless of what this guard finds. This guard exists so a
+    // still-committed-successfully transaction that nonetheless observed a
+    // stale count (a case the database guarantee is not expected to leave
+    // open, but this is cheap insurance against a mistaken assumption about
+    // that guarantee) produces a clear, testable domain error instead of
+    // silently persisting evidence built from a snapshot the code itself no
+    // longer trusts.
     const survivorActionIds = [...new Set(survivors.map((item) => item.actionId))];
     const survivorTransferIds = [...new Set(survivors.flatMap((item) => item.transferIds))];
 
