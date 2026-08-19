@@ -1,6 +1,6 @@
 # CoinPulse AI Handoff
 
-**Last updated:** 2026-08-04 (D-036: PulseChain fork-state and inherited-history policy proposed — docs only, not yet accepted)
+**Last updated:** 2026-08-19 (D-037: PulseIcon privacy and decentralization principles accepted — docs only, architecture guardrail)
 
 ---
 
@@ -66,6 +66,7 @@ These rules apply to every PR. [E1]
 - **PulseChain (chain ID 369) is the current V1 execution target.** [E1]
 - **Ethereum/Base/cross-chain execution is future scope only.** Not current V1 scope unless docs explicitly say otherwise. [E1]
 - **Raw audit records are immutable.** Mark reorgs as REORGED — never delete or overwrite. [E1]
+- **Privacy by architecture, minimal identity coupling.** See D-037 (`docs/project-decisions.md`) and `docs/architecture/pulseicon-privacy-decentralization-principles.md` — required review before implementing any accounts, subscriptions, billing, permanent user↔wallet associations, cross-device sync, wallet signatures, analytics, or advertising. No such feature exists in the repository today. [E1]
 
 ---
 
