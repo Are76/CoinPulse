@@ -51,6 +51,17 @@ import type { SyncDbClient } from "@/services/sync/sync-common";
  *
  * Never mutates RECORDED or VERIFIED_EMPTY actions: the candidate readers
  * only ever select rows with rawTransferEvidenceStatus === null.
+ *
+ * Concurrency safety: the initial scan (candidate read + transfer read +
+ * shape reconstruction) is not itself transactional, so a concurrent sync or
+ * reorg could invalidate a candidate action or one of its evidence transfers
+ * between the scan and the final write. In apply mode, immediately before
+ * persisting, every candidate's action status and every referenced transfer
+ * status are re-checked in one pass; anything that is no longer ACTIVE (or,
+ * for the action, no longer has rawTransferEvidenceStatus === null) is moved
+ * from repaired to unresolved instead of being persisted. This does not
+ * replace serializing repair runs against sync/rebuild operations — it is a
+ * fail-closed backstop, not a substitute for operational scheduling.
  */
 
 export type ProvenanceRepairFamily = "SWAP" | "LP" | "STAKE";
@@ -97,7 +108,7 @@ export type CanonicalProvenanceRepairReport = {
   evidenceRowsPlanned: number;
   /** Actual DB-changed evidence row count in apply mode; 0 in dry-run. */
   evidenceRowsCreated: number;
-  /** Planned in dry-run, actual in apply mode. */
+  /** Planned in dry-run, actual (post-revalidation) in apply mode. */
   actionsBecameRecorded: number;
   /** Always 0 for these families under current producer semantics — see
    * module doc: SWAP/LP/STAKE producers never call the evidence persister
@@ -180,6 +191,91 @@ async function readTransactionTransfers(
   });
 }
 
+type PendingRepair<TPlan> = {
+  actionId: string;
+  txHash: string;
+  blockHash: string;
+  evidenceRowsPlanned: number;
+  transferIds: string[];
+  planEntries: TPlan[];
+};
+
+type EligibilityModel = {
+  findMany(args: unknown): Promise<Array<{ id: string }>>;
+};
+
+/**
+ * Apply-mode-only backstop against the scan/write race described in the
+ * module doc: re-checks that every pending action is still ACTIVE with
+ * rawTransferEvidenceStatus still null, and that every transfer it plans to
+ * cite as evidence is still ACTIVE, in one pass immediately before writing.
+ * Anything that no longer qualifies is moved from repaired to unresolved
+ * (reason "revalidation-failed-possible-reorg") and excluded from the
+ * returned plan list. Dry-run mode never mutates the report or re-queries —
+ * it already reflects the scan-time state, which is exactly what a dry-run
+ * report is supposed to show.
+ */
+async function revalidateAndFinalize<TPlan>(args: {
+  apply: boolean;
+  pending: readonly PendingRepair<TPlan>[];
+  actionModel: EligibilityModel;
+  transferModel: EligibilityModel;
+  report: CanonicalProvenanceRepairReport;
+}): Promise<TPlan[]> {
+  const { apply, pending, actionModel, transferModel, report } = args;
+
+  if (!apply || pending.length === 0) {
+    return pending.flatMap((item) => item.planEntries);
+  }
+
+  const actionIds = [...new Set(pending.map((item) => item.actionId))];
+  const transferIds = [...new Set(pending.flatMap((item) => item.transferIds))];
+
+  const [eligibleActionRows, activeTransferRows] = await Promise.all([
+    actionModel.findMany({
+      where: {
+        id: { in: actionIds },
+        status: "ACTIVE",
+        rawTransferEvidenceStatus: null,
+      },
+      select: { id: true },
+    }),
+    transferIds.length === 0
+      ? Promise.resolve([])
+      : transferModel.findMany({
+          where: { id: { in: transferIds }, status: "ACTIVE" },
+          select: { id: true },
+        }),
+  ]);
+
+  const eligibleActionIds = new Set(eligibleActionRows.map((row) => row.id));
+  const activeTransferIds = new Set(activeTransferRows.map((row) => row.id));
+
+  const finalPlans: TPlan[] = [];
+
+  for (const item of pending) {
+    const actionStillEligible = eligibleActionIds.has(item.actionId);
+    const transfersStillActive = item.transferIds.every((id) => activeTransferIds.has(id));
+
+    if (actionStillEligible && transfersStillActive) {
+      finalPlans.push(...item.planEntries);
+      continue;
+    }
+
+    report.deterministicallyRepairable -= 1;
+    report.evidenceRowsPlanned -= item.evidenceRowsPlanned;
+    report.repaired = report.repaired.filter((row) => row.actionId !== item.actionId);
+    report.unresolved.push({
+      actionId: item.actionId,
+      txHash: item.txHash,
+      blockHash: item.blockHash,
+      reason: "revalidation-failed-possible-reorg",
+    });
+  }
+
+  return finalPlans;
+}
+
 export async function repairCanonicalRawTransferProvenance(
   args: RepairCanonicalRawTransferProvenanceArgs,
   client: SyncDbClient = getDb() as unknown as SyncDbClient,
@@ -214,14 +310,15 @@ export async function repairCanonicalRawTransferProvenance(
     );
     report.candidatesScanned = candidates.length;
 
-    const plans: Array<{
+    type SwapPlan = {
       chainId: number;
       txHash: string;
       blockHash: string;
       logIndex: number;
       legRole: "SOLD" | "BOUGHT";
       rawTokenTransferIds: readonly string[];
-    }> = [];
+    };
+    const pending: PendingRepair<SwapPlan>[] = [];
 
     for (const action of candidates) {
       const transfers = await readTransactionTransfers(
@@ -265,21 +362,33 @@ export async function repairCanonicalRawTransferProvenance(
         continue;
       }
 
-      plans.push({
-        chainId: args.chainId,
+      const evidenceRowsPlanned =
+        shape.sold.rawTokenTransferIds.length + shape.bought.rawTokenTransferIds.length;
+
+      pending.push({
+        actionId: action.id,
         txHash: action.txHash,
         blockHash: action.blockHash,
-        logIndex: action.logIndex,
-        legRole: "SOLD",
-        rawTokenTransferIds: shape.sold.rawTokenTransferIds,
-      });
-      plans.push({
-        chainId: args.chainId,
-        txHash: action.txHash,
-        blockHash: action.blockHash,
-        logIndex: action.logIndex,
-        legRole: "BOUGHT",
-        rawTokenTransferIds: shape.bought.rawTokenTransferIds,
+        evidenceRowsPlanned,
+        transferIds: [...shape.sold.rawTokenTransferIds, ...shape.bought.rawTokenTransferIds],
+        planEntries: [
+          {
+            chainId: args.chainId,
+            txHash: action.txHash,
+            blockHash: action.blockHash,
+            logIndex: action.logIndex,
+            legRole: "SOLD",
+            rawTokenTransferIds: shape.sold.rawTokenTransferIds,
+          },
+          {
+            chainId: args.chainId,
+            txHash: action.txHash,
+            blockHash: action.blockHash,
+            logIndex: action.logIndex,
+            legRole: "BOUGHT",
+            rawTokenTransferIds: shape.bought.rawTokenTransferIds,
+          },
+        ],
       });
 
       report.deterministicallyRepairable += 1;
@@ -287,17 +396,22 @@ export async function repairCanonicalRawTransferProvenance(
         actionId: action.id,
         txHash: action.txHash,
         blockHash: action.blockHash,
-        evidenceRowsPlanned:
-          shape.sold.rawTokenTransferIds.length + shape.bought.rawTokenTransferIds.length,
+        evidenceRowsPlanned,
       });
-      report.evidenceRowsPlanned +=
-        shape.sold.rawTokenTransferIds.length + shape.bought.rawTokenTransferIds.length;
+      report.evidenceRowsPlanned += evidenceRowsPlanned;
     }
 
+    const finalPlans = await revalidateAndFinalize({
+      apply,
+      pending,
+      actionModel: client.rawDexSwap as never,
+      transferModel: client.rawTokenTransfer as never,
+      report,
+    });
     report.actionsBecameRecorded = report.deterministicallyRepairable;
 
-    if (apply && plans.length > 0) {
-      const result = await persistRawDexSwapTransferEvidence(plans, client as never);
+    if (apply && finalPlans.length > 0) {
+      const result = await persistRawDexSwapTransferEvidence(finalPlans, client as never);
       report.evidenceRowsCreated = result.count;
     }
 
@@ -314,14 +428,15 @@ export async function repairCanonicalRawTransferProvenance(
     );
     report.candidatesScanned = candidates.length;
 
-    const plans: Array<{
+    type LpPlan = {
       chainId: number;
       txHash: string;
       blockHash: string;
       logIndex: number;
       legRole: string;
       rawTokenTransferIds: readonly string[];
-    }> = [];
+    };
+    const pending: PendingRepair<LpPlan>[] = [];
 
     for (const action of candidates) {
       const transfers = await readTransactionTransfers(
@@ -384,12 +499,20 @@ export async function repairCanonicalRawTransferProvenance(
         logIndex: action.logIndex,
         lpShape: shape,
       });
-      plans.push(...legPlans);
 
       const evidenceRowsPlanned = legPlans.reduce(
         (sum, plan) => sum + plan.rawTokenTransferIds.length,
         0,
       );
+
+      pending.push({
+        actionId: action.id,
+        txHash: action.txHash,
+        blockHash: action.blockHash,
+        evidenceRowsPlanned,
+        transferIds: legPlans.flatMap((plan) => [...plan.rawTokenTransferIds]),
+        planEntries: legPlans,
+      });
 
       report.deterministicallyRepairable += 1;
       report.repaired.push({
@@ -401,10 +524,17 @@ export async function repairCanonicalRawTransferProvenance(
       report.evidenceRowsPlanned += evidenceRowsPlanned;
     }
 
+    const finalPlans = await revalidateAndFinalize({
+      apply,
+      pending,
+      actionModel: client.rawLpAction as never,
+      transferModel: client.rawTokenTransfer as never,
+      report,
+    });
     report.actionsBecameRecorded = report.deterministicallyRepairable;
 
-    if (apply && plans.length > 0) {
-      const result = await persistRawLpActionTransferEvidence(plans, client as never);
+    if (apply && finalPlans.length > 0) {
+      const result = await persistRawLpActionTransferEvidence(finalPlans, client as never);
       report.evidenceRowsCreated = result.count;
     }
 
@@ -421,7 +551,7 @@ export async function repairCanonicalRawTransferProvenance(
   );
   report.candidatesScanned = candidates.length;
 
-  const plans: Array<{
+  type StakePlan = {
     chainId: number;
     txHash: string;
     blockHash: string;
@@ -429,7 +559,8 @@ export async function repairCanonicalRawTransferProvenance(
     actionIndex: number;
     legRole: string;
     rawTokenTransferIds: readonly string[];
-  }> = [];
+  };
+  const pending: PendingRepair<StakePlan>[] = [];
 
   for (const action of candidates) {
     const transfers = await readTransactionTransfers(
@@ -484,14 +615,23 @@ export async function repairCanonicalRawTransferProvenance(
         continue;
       }
 
-      plans.push({
-        chainId: args.chainId,
+      pending.push({
+        actionId: action.id,
         txHash: action.txHash,
         blockHash: action.blockHash,
-        actionKind: "START",
-        actionIndex: 0,
-        legRole: "PRINCIPAL_LOCKED_OUT",
-        rawTokenTransferIds: shape.rawTokenTransferIds,
+        evidenceRowsPlanned: shape.rawTokenTransferIds.length,
+        transferIds: [...shape.rawTokenTransferIds],
+        planEntries: [
+          {
+            chainId: args.chainId,
+            txHash: action.txHash,
+            blockHash: action.blockHash,
+            actionKind: "START",
+            actionIndex: 0,
+            legRole: "PRINCIPAL_LOCKED_OUT",
+            rawTokenTransferIds: shape.rawTokenTransferIds,
+          },
+        ],
       });
 
       report.deterministicallyRepairable += 1;
@@ -541,14 +681,23 @@ export async function repairCanonicalRawTransferProvenance(
       continue;
     }
 
-    plans.push({
-      chainId: args.chainId,
+    pending.push({
+      actionId: action.id,
       txHash: action.txHash,
       blockHash: action.blockHash,
-      actionKind: "END",
-      actionIndex: 0,
-      legRole: "RETURN_IN",
-      rawTokenTransferIds: shape.rawTokenTransferIds,
+      evidenceRowsPlanned: shape.rawTokenTransferIds.length,
+      transferIds: [...shape.rawTokenTransferIds],
+      planEntries: [
+        {
+          chainId: args.chainId,
+          txHash: action.txHash,
+          blockHash: action.blockHash,
+          actionKind: "END",
+          actionIndex: 0,
+          legRole: "RETURN_IN",
+          rawTokenTransferIds: shape.rawTokenTransferIds,
+        },
+      ],
     });
 
     report.deterministicallyRepairable += 1;
@@ -561,10 +710,17 @@ export async function repairCanonicalRawTransferProvenance(
     report.evidenceRowsPlanned += shape.rawTokenTransferIds.length;
   }
 
+  const finalPlans = await revalidateAndFinalize({
+    apply,
+    pending,
+    actionModel: client.rawStakeAction as never,
+    transferModel: client.rawTokenTransfer as never,
+    report,
+  });
   report.actionsBecameRecorded = report.deterministicallyRepairable;
 
-  if (apply && plans.length > 0) {
-    const result = await persistRawStakeActionTransferEvidence(plans, client as never);
+  if (apply && finalPlans.length > 0) {
+    const result = await persistRawStakeActionTransferEvidence(finalPlans, client as never);
     report.evidenceRowsCreated = result.count;
   }
 

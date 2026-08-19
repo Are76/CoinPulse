@@ -250,29 +250,38 @@ async function main(): Promise<void> {
   const { repairCanonicalRawTransferProvenance } = await import(
     "@/services/sync/canonical-provenance-repair"
   );
+  const { getDb } = await import("@/lib/db");
 
   const { chainId, family, walletAddress, maxActions, cursorId, apply } = parsed.options;
-  const report = await repairCanonicalRawTransferProvenance({
-    chainId,
-    family,
-    apply,
-    ...(walletAddress === undefined ? {} : { walletAddress }),
-    ...(maxActions === undefined ? {} : { maxActions }),
-    ...(cursorId === undefined ? {} : { cursorId }),
-  });
 
-  console.log(safeStringify(report));
+  try {
+    const report = await repairCanonicalRawTransferProvenance({
+      chainId,
+      family,
+      apply,
+      ...(walletAddress === undefined ? {} : { walletAddress }),
+      ...(maxActions === undefined ? {} : { maxActions }),
+      ...(cursorId === undefined ? {} : { cursorId }),
+    });
 
-  if (!report.apply && report.deterministicallyRepairable > 0) {
-    console.error(
-      `dry-run: ${report.deterministicallyRepairable} deterministically repairable action(s) found; re-run with --apply to persist evidence.`,
-    );
-  }
+    console.log(safeStringify(report));
 
-  if (report.nextCursorId !== null) {
-    console.error(
-      `bounded batch exhausted its ${maxActions ?? REPAIR_DEFAULT_MAX_ACTIONS}-action cap; re-run with --cursor ${report.nextCursorId} to continue.`,
-    );
+    if (!report.apply && report.deterministicallyRepairable > 0) {
+      console.error(
+        `dry-run: ${report.deterministicallyRepairable} deterministically repairable action(s) found; re-run with --apply to persist evidence.`,
+      );
+    }
+
+    if (report.nextCursorId !== null) {
+      console.error(
+        `bounded batch exhausted its ${maxActions ?? REPAIR_DEFAULT_MAX_ACTIONS}-action cap; re-run with --cursor ${report.nextCursorId} to continue.`,
+      );
+    }
+  } finally {
+    // getDb() creates the shared PrismaPg connection pool; release it on
+    // both success and failure so a one-shot CLI invocation doesn't hang
+    // the process or leak the pool.
+    await getDb().$disconnect();
   }
 }
 

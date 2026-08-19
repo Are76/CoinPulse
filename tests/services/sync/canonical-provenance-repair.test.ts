@@ -73,6 +73,7 @@ type MockLpAction = {
 type MockStakeAction = {
   id: string;
   chainId: number;
+  protocolSlug: string;
   actionKind: "START" | "END";
   txHash: string;
   blockNumber: bigint;
@@ -555,6 +556,68 @@ describe("repairCanonicalRawTransferProvenance — SWAP", () => {
     expect(store.dexEvidence).toEqual([]);
   });
 
+  it("revalidation backstop: a transfer reorged between scan and write is never persisted as evidence", async () => {
+    const store = createRepairMockDb({
+      transfers: baseSwapTransfers(),
+      swaps: [baseSwapAction()],
+    });
+
+    // Simulate a concurrent reorg landing after the transaction-scoped scan
+    // read (readTransactionTransfers, which filters by blockNumber range)
+    // but before the final apply-mode revalidation read (which filters by
+    // an explicit id list). The sold-leg transfer becomes REORGED in
+    // between — the action must be moved to unresolved, not persisted.
+    const realFindMany = store.client.rawTokenTransfer.findMany;
+    store.client.rawTokenTransfer.findMany = (async (queryArgs: {
+      where: Record<string, unknown>;
+    }) => {
+      const isRevalidationQuery =
+        queryArgs.where.id !== undefined && queryArgs.where.blockNumber === undefined;
+      if (isRevalidationQuery) {
+        const soldTransfer = store.transfers.find((t) => t.id === "t_sold");
+        if (soldTransfer) soldTransfer.status = "REORGED";
+      }
+      return realFindMany(queryArgs);
+    }) as typeof realFindMany;
+
+    const report = await repairCanonicalRawTransferProvenance(
+      { chainId: CHAIN_ID, family: "SWAP", apply: true },
+      store.client as never,
+    );
+
+    expect(report.deterministicallyRepairable).toBe(0);
+    expect(report.unresolved).toEqual([
+      expect.objectContaining({ actionId: "swap_1", reason: "revalidation-failed-possible-reorg" }),
+    ]);
+    expect(store.swaps[0].rawTransferEvidenceStatus).toBeNull();
+    expect(store.dexEvidence).toEqual([]);
+  });
+
+  it("dry-run never re-validates or queries revalidation state (matches scan-time report)", async () => {
+    const store = createRepairMockDb({
+      transfers: baseSwapTransfers(),
+      swaps: [baseSwapAction()],
+    });
+    const findManySpy = store.client.rawTokenTransfer.findMany;
+    let revalidationCallSeen = false;
+    store.client.rawTokenTransfer.findMany = (async (queryArgs: {
+      where: Record<string, unknown>;
+    }) => {
+      if (queryArgs.where.id !== undefined && queryArgs.where.blockNumber === undefined) {
+        revalidationCallSeen = true;
+      }
+      return findManySpy(queryArgs);
+    }) as typeof findManySpy;
+
+    const report = await repairCanonicalRawTransferProvenance(
+      { chainId: CHAIN_ID, family: "SWAP" }, // dry-run
+      store.client as never,
+    );
+
+    expect(report.deterministicallyRepairable).toBe(1);
+    expect(revalidationCallSeen).toBe(false);
+  });
+
   it("Test O: bounded execution — maxActions caps the batch and returns a resume cursor", async () => {
     const swaps: MockSwap[] = [];
     const transfers: MockTransfer[] = [];
@@ -704,6 +767,7 @@ describe("repairCanonicalRawTransferProvenance — STAKE", () => {
     return {
       id: "stake_1",
       chainId: CHAIN_ID,
+      protocolSlug: "hex",
       actionKind: "START",
       txHash: "0xstake1",
       blockNumber: 100n,

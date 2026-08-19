@@ -94,6 +94,21 @@ stays `null`), never guessed.
 - Identity is always the full canonical tuple (`chainId + txHash + blockHash`
   [+ `logIndex` for SWAP/LP, + `actionKind` + `actionIndex` for STAKE]),
   never `txHash` alone.
+- STAKE candidates are additionally scoped to `protocolSlug === "hex"` and
+  `tokenAddress === PHEX_ADDRESS` at the query level, matching the exact
+  producer that writes them — a legacy or future non-HEX stake row is never
+  a candidate even if its actionKind/actionIndex happen to match.
+- **Scan/write race backstop:** the initial scan (candidate read + transfer
+  read + shape reconstruction) is not itself transactional. In apply mode,
+  immediately before persisting, every candidate action's status and every
+  referenced transfer's status are re-checked in one pass; anything no
+  longer `ACTIVE` (or, for the action, no longer `rawTransferEvidenceStatus
+  === null`) — for example because a concurrent sync detected a reorg mid-scan
+  — is moved from repaired to unresolved (`revalidation-failed-possible-reorg`)
+  instead of being persisted. This is a fail-closed backstop, not a
+  substitute for serializing repair runs against sync/rebuild operations —
+  avoid running apply-mode repair concurrently with sync/rebuild for the same
+  wallet/chain.
 
 ## Idempotency and atomicity
 

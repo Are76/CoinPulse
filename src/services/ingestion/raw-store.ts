@@ -2,7 +2,11 @@ import "server-only";
 
 import type { Prisma, PrismaClient } from "@prisma/client";
 
+import { PHEX_ADDRESS } from "@/config/assets";
+import { CORE_PROTOCOLS } from "@/config/protocols";
 import { getDb } from "@/lib/db";
+
+const PHEX_ADDRESS_LOWER = PHEX_ADDRESS.toLowerCase();
 
 type RawStoreClient = PrismaClient | Prisma.TransactionClient;
 
@@ -1120,9 +1124,12 @@ export async function readRawLpActionProvenanceRepairCandidates(
 /**
  * Bounded, cursor-paginated scan for ACTIVE RawStakeAction rows whose
  * canonical raw-transfer provenance has never been evaluated. Scoped to
- * actionKind START/END and actionIndex 0 because those are the only shapes
- * the live producer (stake-sync.ts) ever writes; anything else is legacy or
- * out of current producer scope and must not be repaired here.
+ * protocolSlug "hex" (native pHEX), tokenAddress PHEX_ADDRESS, actionKind
+ * START/END, and actionIndex 0 because that exact combination is the only
+ * shape the live producer (stake-sync.ts) ever writes; anything else
+ * (a different protocol, a non-pHEX token, a different actionKind/index —
+ * e.g. a future HSI path) is out of current producer scope and must not be
+ * repaired here.
  */
 export async function readRawStakeActionProvenanceRepairCandidates(
   args: {
@@ -1138,6 +1145,8 @@ export async function readRawStakeActionProvenanceRepairCandidates(
       chainId: args.chainId,
       status: "ACTIVE",
       rawTransferEvidenceStatus: null,
+      protocolSlug: CORE_PROTOCOLS.hex.slug,
+      tokenAddress: PHEX_ADDRESS_LOWER,
       actionKind: { in: ["START", "END"] },
       actionIndex: 0,
       ...(args.walletAddress
