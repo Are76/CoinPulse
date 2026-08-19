@@ -1425,14 +1425,16 @@ describe("child invocation: executable selection, argument array, and --execute 
 
   it("arguments are passed to the injected runner as a plain string array — never concatenated into a shell command string", async () => {
     // The injectable runChildCampaign signature itself is (args: string[],
-    // timeoutMs: number) — this test pins that every element the supervisor
-    // builds stays a distinct array entry (no embedded spaces joining two
-    // logical arguments, which would be the first symptom of an accidental
-    // switch to string-based/shell invocation).
+    // timeoutMs: number) — this test pins that a value containing whitespace
+    // (a valid runnerScriptPath, e.g. a path under a directory with a space
+    // in it) survives as ONE array entry rather than being split or
+    // otherwise mangled, which is what array-based spawn (never shell-based)
+    // guarantees and a string-concatenated/shell invocation would not.
     const options = baseOptions({
       execute: false,
       authorizedFinalBlock: 25_078_548n + 3n * FIXTURE_WINDOW_SIZE,
       campaignMaxWindows: 5,
+      runnerScriptPath: "scripts/wallet forward campaign runner.ts",
     });
     const db = makeFakeDb({ cursor: { fromBlock: FIXTURE_ANCHOR_FROM, toBlock: 25_078_548n } });
     let capturedArgs: string[] = [];
@@ -1445,10 +1447,7 @@ describe("child invocation: executable selection, argument array, and --execute 
     await runWalletForwardSupervisor(options, deps);
 
     expect(Array.isArray(capturedArgs)).toBe(true);
-    for (const entry of capturedArgs) {
-      expect(typeof entry).toBe("string");
-      expect(entry).not.toMatch(/\s/);
-    }
+    expect(capturedArgs).toContain(options.runnerScriptPath);
     expect(capturedArgs).toContain("--wallet-address");
     expect(capturedArgs).toContain(FIXTURE_WALLET);
   });
