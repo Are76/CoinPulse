@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   persistRawDexSwapTransferEvidence,
@@ -7,6 +7,7 @@ import {
   persistRawDexSwaps,
   persistRawTokenTransfers,
   persistRawTransactions,
+  readCanonicallyConsumedRawTokenTransferIds,
   readWalletRawLpActions,
   readWalletRawStakeActions,
   readWalletDexSwapSnapshots,
@@ -115,6 +116,121 @@ describe("readWalletTransferRawLogs", () => {
 });
 
 describe("raw token transfer audit helpers", () => {
+  it("reads only exact active RECORDED higher-order raw-transfer evidence memberships", async () => {
+    const findDexEvidence = vi.fn(async () => [
+      { rawTokenTransferId: "transfer_swap_a" },
+      { rawTokenTransferId: "transfer_swap_b" },
+    ]);
+    const findLpEvidence = vi.fn(async () => [
+      { rawTokenTransferId: "transfer_lp_a" },
+    ]);
+    const findStakeEvidence = vi.fn(async () => [
+      { rawTokenTransferId: "transfer_stake_a" },
+    ]);
+
+    const result = await readCanonicallyConsumedRawTokenTransferIds(
+      {
+        rawTokenTransferIds: [
+          "transfer_swap_a",
+          "transfer_swap_b",
+          "transfer_lp_a",
+          "transfer_stake_a",
+          "transfer_unrelated_same_tx",
+          "transfer_same_amount",
+          "transfer_legacy_null",
+          "transfer_verified_empty",
+          "transfer_reorged_action",
+        ],
+      },
+      {
+        rawDexSwapTransferEvidence: { findMany: findDexEvidence },
+        rawLpActionTransferEvidence: { findMany: findLpEvidence },
+        rawStakeActionTransferEvidence: { findMany: findStakeEvidence },
+      },
+    );
+
+    expect(result).toEqual(
+      new Set([
+        "transfer_swap_a",
+        "transfer_swap_b",
+        "transfer_lp_a",
+        "transfer_stake_a",
+      ]),
+    );
+    expect(findDexEvidence).toHaveBeenCalledWith({
+      where: {
+        rawTokenTransferId: {
+          in: [
+            "transfer_swap_a",
+            "transfer_swap_b",
+            "transfer_lp_a",
+            "transfer_stake_a",
+            "transfer_unrelated_same_tx",
+            "transfer_same_amount",
+            "transfer_legacy_null",
+            "transfer_verified_empty",
+            "transfer_reorged_action",
+          ],
+        },
+        rawTokenTransfer: { status: "ACTIVE" },
+        rawDexSwap: {
+          status: "ACTIVE",
+          rawTransferEvidenceStatus: "RECORDED",
+        },
+      },
+      select: { rawTokenTransferId: true },
+    });
+    expect(findLpEvidence).toHaveBeenCalledWith({
+      where: {
+        rawTokenTransferId: {
+          in: expect.arrayContaining(["transfer_lp_a", "transfer_unrelated_same_tx"]),
+        },
+        rawTokenTransfer: { status: "ACTIVE" },
+        rawLpAction: {
+          status: "ACTIVE",
+          rawTransferEvidenceStatus: "RECORDED",
+        },
+      },
+      select: { rawTokenTransferId: true },
+    });
+    expect(findStakeEvidence).toHaveBeenCalledWith({
+      where: {
+        rawTokenTransferId: {
+          in: expect.arrayContaining(["transfer_stake_a", "transfer_reorged_action"]),
+        },
+        rawTokenTransfer: { status: "ACTIVE" },
+        rawStakeAction: {
+          status: "ACTIVE",
+          rawTransferEvidenceStatus: "RECORDED",
+        },
+      },
+      select: { rawTokenTransferId: true },
+    });
+  });
+
+  it("fails closed to no suppression when the higher-order evidence query fails", async () => {
+    const result = await readCanonicallyConsumedRawTokenTransferIds(
+      {
+        rawTokenTransferIds: ["transfer_a"],
+      },
+      {
+        rawDexSwapTransferEvidence: {
+          findMany: async () => {
+            throw new Error("database unavailable");
+          },
+        },
+        rawLpActionTransferEvidence: {
+          findMany: async () => [{ rawTokenTransferId: "transfer_a" }],
+        },
+        rawStakeActionTransferEvidence: {
+          findMany: async () => [],
+        },
+      },
+    );
+
+    expect(result).toEqual(new Set());
+  });
+
   it("persists and reads wallet-scoped raw token transfers deterministically", async () => {
     const creates: Array<unknown> = [];
 

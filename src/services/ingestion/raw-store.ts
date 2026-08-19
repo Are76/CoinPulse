@@ -344,6 +344,18 @@ type RawTokenTransferReadClient = {
   };
 };
 
+type RawTransferShadowSuppressionReadClient = {
+  rawDexSwapTransferEvidence: {
+    findMany(args: unknown): Promise<Array<{ rawTokenTransferId: string }>>;
+  };
+  rawLpActionTransferEvidence: {
+    findMany(args: unknown): Promise<Array<{ rawTokenTransferId: string }>>;
+  };
+  rawStakeActionTransferEvidence: {
+    findMany(args: unknown): Promise<Array<{ rawTokenTransferId: string }>>;
+  };
+};
+
 type RawTransactionReadClient = {
   rawTransaction: {
     findMany(args: unknown): Promise<Array<Record<string, unknown>>>;
@@ -915,6 +927,67 @@ export async function readWalletTransferRawTokenTransfers(
         ? record.amountRaw
         : (record.amountRaw as { toFixed(): string }).toFixed(),
   }));
+}
+
+export async function readCanonicallyConsumedRawTokenTransferIds(
+  args: {
+    rawTokenTransferIds: readonly string[];
+  },
+  client: RawTransferShadowSuppressionReadClient = getDb() as never,
+) {
+  const rawTokenTransferIds = uniqueStrings(args.rawTokenTransferIds).filter(
+    (id) => id.length > 0,
+  );
+
+  if (rawTokenTransferIds.length === 0) {
+    return new Set<string>();
+  }
+
+  try {
+    const [dexEvidence, lpEvidence, stakeEvidence] = await Promise.all([
+      client.rawDexSwapTransferEvidence.findMany({
+        where: {
+          rawTokenTransferId: { in: rawTokenTransferIds },
+          rawTokenTransfer: { status: "ACTIVE" },
+          rawDexSwap: {
+            status: "ACTIVE",
+            rawTransferEvidenceStatus: "RECORDED",
+          },
+        },
+        select: { rawTokenTransferId: true },
+      }),
+      client.rawLpActionTransferEvidence.findMany({
+        where: {
+          rawTokenTransferId: { in: rawTokenTransferIds },
+          rawTokenTransfer: { status: "ACTIVE" },
+          rawLpAction: {
+            status: "ACTIVE",
+            rawTransferEvidenceStatus: "RECORDED",
+          },
+        },
+        select: { rawTokenTransferId: true },
+      }),
+      client.rawStakeActionTransferEvidence.findMany({
+        where: {
+          rawTokenTransferId: { in: rawTokenTransferIds },
+          rawTokenTransfer: { status: "ACTIVE" },
+          rawStakeAction: {
+            status: "ACTIVE",
+            rawTransferEvidenceStatus: "RECORDED",
+          },
+        },
+        select: { rawTokenTransferId: true },
+      }),
+    ]);
+
+    return new Set(
+      [...dexEvidence, ...lpEvidence, ...stakeEvidence].map(
+        (row) => row.rawTokenTransferId,
+      ),
+    );
+  } catch {
+    return new Set<string>();
+  }
 }
 
 export async function readWalletRawTransactions(

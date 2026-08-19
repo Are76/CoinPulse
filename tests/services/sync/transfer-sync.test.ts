@@ -3,9 +3,161 @@
 import { readWalletTransferRawTokenTransfers } from "@/services/ingestion/raw-store";
 import { runWalletSync } from "@/services/sync/sync-orchestrator";
 import {
+  buildTransferNormalizationSnapshots,
   createSyncDependencies,
+  normalizeTransfers,
   TRANSFER_EVENT_TOPIC0,
 } from "@/services/sync/transfer-sync";
+import type { PersistedTransferRawLog } from "@/services/sync/sync-common";
+
+const WALLET = {
+  id: "wallet_1",
+  chainId: 369,
+  address: "0x1111111111111111111111111111111111111111",
+};
+
+function createPersistedTransfer(
+  overrides: Partial<PersistedTransferRawLog> & { id: string; logIndex: number },
+): PersistedTransferRawLog {
+  const { id, logIndex, ...rest } = overrides;
+
+  return {
+    chainId: 369,
+    id,
+    tokenId: "token_1",
+    tokenAddress: "0x2222222222222222222222222222222222222222",
+    assetIdSnapshot: "chain:369:erc20:0x2222222222222222222222222222222222222222",
+    decimalsSnapshot: 0,
+    txHash: "0xsame-tx",
+    blockNumber: 100n,
+    blockHash: "0xblock",
+    logIndex,
+    fromAddress: "0x1111111111111111111111111111111111111111",
+    toAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    amountRaw: "100",
+    occurredAt: new Date("2026-08-19T00:00:00.000Z"),
+    ...rest,
+  };
+}
+
+function normalizeFromConsumedSet(args: {
+  rawTransfers: readonly PersistedTransferRawLog[];
+  consumedRawTokenTransferIds: ReadonlySet<string>;
+}) {
+  const snapshots = buildTransferNormalizationSnapshots({
+    rawTransfers: args.rawTransfers,
+    rawTransactions: [],
+    protocolOperationTxHashes: [],
+    timestampByBlockKey: new Map(),
+    consumedRawTokenTransferIds: args.consumedRawTokenTransferIds,
+  });
+
+  return normalizeTransfers({
+    normalizerVersion: "v1",
+    wallet: WALLET,
+    rawLogs: snapshots,
+  });
+}
+
+describe("canonical transfer-shadow suppression", () => {
+  it("suppresses an exact SWAP transfer shadow while preserving unrelated same-tx transfers", () => {
+    const swapEvidence = createPersistedTransfer({ id: "transfer_swap_a", logIndex: 1 });
+    const unrelatedSameTx = createPersistedTransfer({
+      id: "transfer_unrelated_same_tx",
+      logIndex: 2,
+    });
+
+    const drafts = normalizeFromConsumedSet({
+      rawTransfers: [swapEvidence, unrelatedSameTx],
+      consumedRawTokenTransferIds: new Set([swapEvidence.id]),
+    });
+
+    expect(drafts.map((draft) => draft.sourceLogIndex)).toEqual([2]);
+  });
+
+  it("retains same asset, direction, amount, tx, source-like ordering, and quantity when raw identity is not evidenced", () => {
+    const evidenced = createPersistedTransfer({ id: "transfer_swap_a", logIndex: 1 });
+    const sameEverythingButIdentity = createPersistedTransfer({
+      id: "transfer_same_amount_different_identity",
+      logIndex: 2,
+    });
+
+    const drafts = normalizeFromConsumedSet({
+      rawTransfers: [evidenced, sameEverythingButIdentity],
+      consumedRawTokenTransferIds: new Set([evidenced.id]),
+    });
+
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      sourceLogIndex: 2,
+      assetId: evidenced.assetIdSnapshot,
+      direction: "OUT",
+      quantity: "100",
+      txHash: evidenced.txHash,
+    });
+  });
+
+  it("suppresses many-to-one LP evidence memberships independently and keeps unrelated transfers", () => {
+    const lpEvidenceA = createPersistedTransfer({ id: "transfer_lp_a", logIndex: 1 });
+    const lpEvidenceB = createPersistedTransfer({ id: "transfer_lp_b", logIndex: 2 });
+    const unrelated = createPersistedTransfer({ id: "transfer_lp_unrelated", logIndex: 3 });
+
+    const drafts = normalizeFromConsumedSet({
+      rawTransfers: [lpEvidenceA, lpEvidenceB, unrelated],
+      consumedRawTokenTransferIds: new Set([lpEvidenceA.id, lpEvidenceB.id]),
+    });
+
+    expect(drafts.map((draft) => draft.sourceLogIndex)).toEqual([3]);
+  });
+
+  it("suppresses transfer-derived STAKE evidence memberships", () => {
+    const stakeEvidence = createPersistedTransfer({
+      id: "transfer_stake_a",
+      logIndex: 1,
+      tokenAddress: "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+      assetIdSnapshot: "chain:369:erc20:0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
+    });
+
+    const drafts = normalizeFromConsumedSet({
+      rawTransfers: [stakeEvidence],
+      consumedRawTokenTransferIds: new Set([stakeEvidence.id]),
+    });
+
+    expect(drafts).toEqual([]);
+  });
+
+  it("does not suppress legacy null, VERIFIED_EMPTY, or reorged higher-order cases absent exact consumed membership", () => {
+    const legacyNull = createPersistedTransfer({ id: "transfer_legacy_null", logIndex: 1 });
+    const verifiedEmpty = createPersistedTransfer({
+      id: "transfer_verified_empty",
+      logIndex: 2,
+    });
+    const reorgedParent = createPersistedTransfer({
+      id: "transfer_reorged_parent",
+      logIndex: 3,
+    });
+
+    const drafts = normalizeFromConsumedSet({
+      rawTransfers: [legacyNull, verifiedEmpty, reorgedParent],
+      consumedRawTokenTransferIds: new Set(),
+    });
+
+    expect(drafts.map((draft) => draft.sourceLogIndex)).toEqual([1, 2, 3]);
+  });
+
+  it("is idempotent for repeated normalization over the same persisted consumed set", () => {
+    const consumed = createPersistedTransfer({ id: "transfer_consumed", logIndex: 1 });
+    const retained = createPersistedTransfer({ id: "transfer_retained", logIndex: 2 });
+    const rawTransfers = [consumed, retained];
+    const consumedRawTokenTransferIds = new Set([consumed.id]);
+
+    const first = normalizeFromConsumedSet({ rawTransfers, consumedRawTokenTransferIds });
+    const second = normalizeFromConsumedSet({ rawTransfers, consumedRawTokenTransferIds });
+
+    expect(second).toEqual(first);
+    expect(first.map((draft) => draft.sourceLogIndex)).toEqual([2]);
+  });
+});
 
 function createMemoryStores() {
   const rawLogs = new Map<string, {
