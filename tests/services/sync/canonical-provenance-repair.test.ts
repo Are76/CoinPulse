@@ -148,6 +148,8 @@ function createRepairMockDb(seed: {
           .sort((a, b) =>
             a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : Number(a.blockNumber - b.blockNumber),
           ),
+      count: async (args: { where: Record<string, unknown> }) =>
+        transfers.filter((t) => matchesWhere(t, args.where)).length,
     },
     rawDexSwap: {
       findMany: async (args: { where: Record<string, unknown>; orderBy?: unknown; take?: number }) => {
@@ -156,6 +158,8 @@ function createRepairMockDb(seed: {
         if (args.take !== undefined) rows = rows.slice(0, args.take);
         return rows;
       },
+      count: async (args: { where: Record<string, unknown> }) =>
+        swaps.filter((s) => matchesWhere(s, args.where)).length,
       updateMany: async (args: { where: { id: { in: string[] } }; data: { rawTransferEvidenceStatus: string } }) => {
         let count = 0;
         for (const s of swaps) {
@@ -174,6 +178,8 @@ function createRepairMockDb(seed: {
         if (args.take !== undefined) rows = rows.slice(0, args.take);
         return rows;
       },
+      count: async (args: { where: Record<string, unknown> }) =>
+        lpActions.filter((l) => matchesWhere(l, args.where)).length,
       updateMany: async (args: { where: { id: { in: string[] } }; data: { rawTransferEvidenceStatus: string } }) => {
         let count = 0;
         for (const l of lpActions) {
@@ -192,6 +198,8 @@ function createRepairMockDb(seed: {
         if (args.take !== undefined) rows = rows.slice(0, args.take);
         return rows;
       },
+      count: async (args: { where: Record<string, unknown> }) =>
+        stakeActions.filter((s) => matchesWhere(s, args.where)).length,
       updateMany: async (args: { where: { id: { in: string[] } }; data: { rawTransferEvidenceStatus: string } }) => {
         let count = 0;
         for (const s of stakeActions) {
@@ -589,6 +597,80 @@ describe("repairCanonicalRawTransferProvenance — SWAP", () => {
     expect(report.unresolved).toEqual([
       expect.objectContaining({ actionId: "swap_1", reason: "revalidation-failed-possible-reorg" }),
     ]);
+    expect(store.swaps[0].rawTransferEvidenceStatus).toBeNull();
+    expect(store.dexEvidence).toEqual([]);
+  });
+
+  it("atomic guard: a transfer reorged strictly inside the write phase — after the pre-check passes, before the persister's write — still commits nothing", async () => {
+    const store = createRepairMockDb({
+      transfers: baseSwapTransfers(),
+      swaps: [baseSwapAction()],
+    });
+
+    // The pre-check (step 1 of applyPendingRepairsAtomically) queries
+    // rawTokenTransfer by an explicit id list and passes normally here — it
+    // must NOT be what catches this race, because the state change is
+    // injected only once the persister's OWN internal identity lookup
+    // (rawDexSwap.findMany with an OR clause, no top-level id filter) runs,
+    // which happens strictly AFTER the pre-check already succeeded. This
+    // specifically exercises the final atomic guard (step 3), not the
+    // earlier pre-check — a "revalidate once, then separately persist"
+    // design would have already committed evidence for this action by the
+    // time this mutation lands.
+    const realDexSwapFindMany = store.client.rawDexSwap.findMany;
+    store.client.rawDexSwap.findMany = (async (queryArgs: {
+      where: Record<string, unknown>;
+    }) => {
+      const isPersisterIdentityLookup = queryArgs.where.OR !== undefined;
+      if (isPersisterIdentityLookup) {
+        const soldTransfer = store.transfers.find((t) => t.id === "t_sold");
+        if (soldTransfer) soldTransfer.status = "REORGED";
+      }
+      return realDexSwapFindMany(queryArgs);
+    }) as typeof realDexSwapFindMany;
+
+    await expect(
+      repairCanonicalRawTransferProvenance(
+        { chainId: CHAIN_ID, family: "SWAP", apply: true },
+        store.client as never,
+      ),
+    ).rejects.toThrow(/concurrent canonical state change detected immediately before commit/);
+
+    // The whole transaction rolled back: no evidence row and no status
+    // change survive, even though evidence was written by the persister
+    // moments before the final guard caught the mid-write reorg.
+    expect(store.swaps[0].rawTransferEvidenceStatus).toBeNull();
+    expect(store.dexEvidence).toEqual([]);
+  });
+
+  it("atomic guard: an action reorged strictly inside the write phase is rolled back with zero persisted evidence", async () => {
+    const store = createRepairMockDb({
+      transfers: baseSwapTransfers(),
+      swaps: [baseSwapAction()],
+    });
+
+    // Same race, but targeting the ACTION's own status field (not a
+    // referenced transfer) — flips status to REORGED during the persister's
+    // internal identity lookup, strictly after the pre-check already
+    // confirmed the action ACTIVE + null.
+    const realDexSwapFindMany = store.client.rawDexSwap.findMany;
+    store.client.rawDexSwap.findMany = (async (queryArgs: {
+      where: Record<string, unknown>;
+    }) => {
+      const isPersisterIdentityLookup = queryArgs.where.OR !== undefined;
+      if (isPersisterIdentityLookup) {
+        store.swaps[0].status = "REORGED";
+      }
+      return realDexSwapFindMany(queryArgs);
+    }) as typeof realDexSwapFindMany;
+
+    await expect(
+      repairCanonicalRawTransferProvenance(
+        { chainId: CHAIN_ID, family: "SWAP", apply: true },
+        store.client as never,
+      ),
+    ).rejects.toThrow(/concurrent canonical state change detected immediately before commit/);
+
     expect(store.swaps[0].rawTransferEvidenceStatus).toBeNull();
     expect(store.dexEvidence).toEqual([]);
   });

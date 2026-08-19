@@ -56,13 +56,24 @@ import type { SyncDbClient } from "@/services/sync/sync-common";
  * Concurrency safety: the initial scan (candidate read + transfer read +
  * shape reconstruction) is not itself transactional, so a concurrent sync or
  * reorg could invalidate a candidate action or one of its evidence transfers
- * between the scan and the final write. In apply mode, immediately before
- * persisting, every candidate's action status and every referenced transfer
- * status are re-checked in one pass; anything that is no longer ACTIVE (or,
- * for the action, no longer has rawTransferEvidenceStatus === null) is moved
- * from repaired to unresolved instead of being persisted. This does not
- * replace serializing repair runs against sync/rebuild operations — it is a
- * fail-closed backstop, not a substitute for operational scheduling.
+ * between the scan and the final write. Revalidation and persistence are
+ * NOT two separate database operations: in apply mode, `applyPendingRepairs
+ * Atomically` opens exactly one database transaction that (1) re-checks
+ * every pending action's status/rawTransferEvidenceStatus and every
+ * referenced transfer's status, (2) writes evidence + status via the exact
+ * PR #376 persister (`persistRaw*TransferEvidence`), executed against the
+ * transaction client so its writes join this same transaction rather than
+ * opening a second one, and (3) re-counts the same ACTIVE conditions one
+ * more time as the last statement before commit. If that final count-based
+ * guard finds fewer ACTIVE rows than expected — meaning some concurrent
+ * writer (a sync run, a rebuild, a reorg-marking pass) changed canonical
+ * state anywhere between step 1 and step 3 — the whole transaction throws
+ * and rolls back: no evidence row and no status change from this apply call
+ * survives. This closes the gap structurally rather than only shrinking it;
+ * it does not depend on operators promising not to run sync/rebuild
+ * concurrently, though avoiding that overlap is still recommended for
+ * throughput (a detected race aborts the whole bounded batch, not just the
+ * affected action).
  */
 
 export type ProvenanceRepairFamily = "SWAP" | "LP" | "STAKE";
@@ -213,78 +224,147 @@ type PendingRepair<TPlan> = {
 
 type EligibilityModel = {
   findMany(args: unknown): Promise<Array<{ id: string }>>;
+  count(args: unknown): Promise<number>;
+};
+
+type ActionModelKey = "rawDexSwap" | "rawLpAction" | "rawStakeAction";
+
+type TransactionCapableClient = SyncDbClient & {
+  $transaction?<T>(fn: (tx: SyncDbClient) => Promise<T>): Promise<T>;
 };
 
 /**
- * Apply-mode-only backstop against the scan/write race described in the
- * module doc: re-checks that every pending action is still ACTIVE with
- * rawTransferEvidenceStatus still null, and that every transfer it plans to
- * cite as evidence is still ACTIVE, in one pass immediately before writing.
- * Anything that no longer qualifies is moved from repaired to unresolved
- * (reason "revalidation-failed-possible-reorg") and excluded from the
- * returned plan list. Dry-run mode never mutates the report or re-queries —
- * it already reflects the scan-time state, which is exactly what a dry-run
- * report is supposed to show.
+ * Apply-mode-only write path. Unlike a "revalidate, then separately persist"
+ * two-step (two separate database operations with an unguarded gap between
+ * them), this opens exactly ONE transaction that performs the eligibility
+ * recheck, the evidence/status write (via the existing PR #376 persister,
+ * executed against the transaction client so it never opens a second,
+ * separate transaction), and a final count-based guard — all as part of the
+ * same atomic unit. See the module doc for the full mechanism.
+ *
+ * Dry-run mode never opens a transaction, never re-queries, and never
+ * mutates the report — it already reflects scan-time state, which is what a
+ * dry-run report is supposed to show.
  */
-async function revalidateAndFinalize<TPlan>(args: {
+async function applyPendingRepairsAtomically<TPlan>(args: {
   apply: boolean;
+  client: SyncDbClient;
   pending: readonly PendingRepair<TPlan>[];
-  actionModel: EligibilityModel;
-  transferModel: EligibilityModel;
   report: CanonicalProvenanceRepairReport;
-}): Promise<TPlan[]> {
-  const { apply, pending, actionModel, transferModel, report } = args;
+  actionModelKey: ActionModelKey;
+  persist: (plans: TPlan[], tx: SyncDbClient) => Promise<{ count: number }>;
+}): Promise<{ count: number }> {
+  const { apply, client, pending, report, actionModelKey, persist } = args;
 
   if (!apply || pending.length === 0) {
-    return pending.flatMap((item) => item.planEntries);
+    return { count: 0 };
   }
 
-  const actionIds = [...new Set(pending.map((item) => item.actionId))];
-  const transferIds = [...new Set(pending.flatMap((item) => item.transferIds))];
+  const transactionalClient = client as TransactionCapableClient;
 
-  const [eligibleActionRows, activeTransferRows] = await Promise.all([
-    actionModel.findMany({
-      where: {
-        id: { in: actionIds },
-        status: "ACTIVE",
-        rawTransferEvidenceStatus: null,
-      },
-      select: { id: true },
-    }),
-    transferIds.length === 0
-      ? Promise.resolve([])
-      : transferModel.findMany({
-          where: { id: { in: transferIds }, status: "ACTIVE" },
-          select: { id: true },
-        }),
-  ]);
+  const runInTransaction = (
+    operation: (tx: SyncDbClient) => Promise<{ count: number }>,
+  ): Promise<{ count: number }> =>
+    typeof transactionalClient.$transaction === "function"
+      ? transactionalClient.$transaction(operation)
+      : operation(client);
 
-  const eligibleActionIds = new Set(eligibleActionRows.map((row) => row.id));
-  const activeTransferIds = new Set(activeTransferRows.map((row) => row.id));
+  return runInTransaction(async (tx) => {
+    const actionModel = tx[actionModelKey] as unknown as EligibilityModel;
+    const transferModel = tx.rawTokenTransfer as unknown as EligibilityModel;
 
-  const finalPlans: TPlan[] = [];
+    const actionIds = [...new Set(pending.map((item) => item.actionId))];
+    const transferIds = [...new Set(pending.flatMap((item) => item.transferIds))];
 
-  for (const item of pending) {
-    const actionStillEligible = eligibleActionIds.has(item.actionId);
-    const transfersStillActive = item.transferIds.every((id) => activeTransferIds.has(id));
+    // Step 1: re-check eligibility inside this transaction, as close to the
+    // write as this codebase's Prisma model API allows.
+    const [eligibleActionRows, activeTransferRows] = await Promise.all([
+      actionModel.findMany({
+        where: {
+          id: { in: actionIds },
+          status: "ACTIVE",
+          rawTransferEvidenceStatus: null,
+        },
+        select: { id: true },
+      }),
+      transferIds.length === 0
+        ? Promise.resolve([])
+        : transferModel.findMany({
+            where: { id: { in: transferIds }, status: "ACTIVE" },
+            select: { id: true },
+          }),
+    ]);
 
-    if (actionStillEligible && transfersStillActive) {
-      finalPlans.push(...item.planEntries);
-      continue;
+    const eligibleActionIds = new Set(eligibleActionRows.map((row) => row.id));
+    const activeTransferIds = new Set(activeTransferRows.map((row) => row.id));
+
+    const survivors: PendingRepair<TPlan>[] = [];
+
+    for (const item of pending) {
+      const actionStillEligible = eligibleActionIds.has(item.actionId);
+      const transfersStillActive = item.transferIds.every((id) => activeTransferIds.has(id));
+
+      if (actionStillEligible && transfersStillActive) {
+        survivors.push(item);
+        continue;
+      }
+
+      report.deterministicallyRepairable -= 1;
+      report.evidenceRowsPlanned -= item.evidenceRowsPlanned;
+      report.repaired = report.repaired.filter((row) => row.actionId !== item.actionId);
+      report.unresolved.push({
+        actionId: item.actionId,
+        txHash: item.txHash,
+        blockHash: item.blockHash,
+        reason: "revalidation-failed-possible-reorg",
+      });
     }
 
-    report.deterministicallyRepairable -= 1;
-    report.evidenceRowsPlanned -= item.evidenceRowsPlanned;
-    report.repaired = report.repaired.filter((row) => row.actionId !== item.actionId);
-    report.unresolved.push({
-      actionId: item.actionId,
-      txHash: item.txHash,
-      blockHash: item.blockHash,
-      reason: "revalidation-failed-possible-reorg",
-    });
-  }
+    if (survivors.length === 0) {
+      return { count: 0 };
+    }
 
-  return finalPlans;
+    const finalPlans = survivors.flatMap((item) => item.planEntries);
+
+    // Step 2: the actual write, via the exact PR #376 persister, executed
+    // against `tx`. `tx` is an interactive-transaction client and does not
+    // itself expose `$transaction`, so persistRaw*TransferEvidence's own
+    // internal transaction-detection falls through to running directly
+    // against `tx` — its createMany + updateMany become part of THIS
+    // transaction, not a second one.
+    const persistResult = await persist(finalPlans, tx);
+
+    // Step 3: final atomic guard, the last read before this transaction
+    // commits. Re-counts the exact same ACTIVE conditions checked in step 1
+    // for every surviving id. Any concurrent writer that changed canonical
+    // state anywhere between step 1 and this point — including the narrow
+    // window between step 1 and step 2 that a plain re-check could not
+    // close — makes these counts come up short, and the mismatch throws to
+    // roll back the whole transaction: the evidence rows written in step 2
+    // and any status changes never commit.
+    const survivorActionIds = [...new Set(survivors.map((item) => item.actionId))];
+    const survivorTransferIds = [...new Set(survivors.flatMap((item) => item.transferIds))];
+
+    const [finalActiveActionCount, finalActiveTransferCount] = await Promise.all([
+      actionModel.count({ where: { id: { in: survivorActionIds }, status: "ACTIVE" } }),
+      survivorTransferIds.length === 0
+        ? Promise.resolve(0)
+        : transferModel.count({
+            where: { id: { in: survivorTransferIds }, status: "ACTIVE" },
+          }),
+    ]);
+
+    if (
+      finalActiveActionCount !== survivorActionIds.length ||
+      finalActiveTransferCount !== survivorTransferIds.length
+    ) {
+      throw new Error(
+        "canonical-provenance-repair: concurrent canonical state change detected immediately before commit; rolled back to avoid persisting stale evidence.",
+      );
+    }
+
+    return persistResult;
+  });
 }
 
 export async function repairCanonicalRawTransferProvenance(
@@ -412,19 +492,16 @@ export async function repairCanonicalRawTransferProvenance(
       report.evidenceRowsPlanned += evidenceRowsPlanned;
     }
 
-    const finalPlans = await revalidateAndFinalize({
+    const applyResult = await applyPendingRepairsAtomically({
       apply,
+      client,
       pending,
-      actionModel: client.rawDexSwap as never,
-      transferModel: client.rawTokenTransfer as never,
       report,
+      actionModelKey: "rawDexSwap",
+      persist: (plans, tx) => persistRawDexSwapTransferEvidence(plans, tx as never),
     });
     report.actionsBecameRecorded = report.deterministicallyRepairable;
-
-    if (apply && finalPlans.length > 0) {
-      const result = await persistRawDexSwapTransferEvidence(finalPlans, client as never);
-      report.evidenceRowsCreated = result.count;
-    }
+    report.evidenceRowsCreated = applyResult.count;
 
     report.nextCursorId =
       candidates.length === maxActions ? candidates[candidates.length - 1].id : null;
@@ -535,19 +612,16 @@ export async function repairCanonicalRawTransferProvenance(
       report.evidenceRowsPlanned += evidenceRowsPlanned;
     }
 
-    const finalPlans = await revalidateAndFinalize({
+    const applyResult = await applyPendingRepairsAtomically({
       apply,
+      client,
       pending,
-      actionModel: client.rawLpAction as never,
-      transferModel: client.rawTokenTransfer as never,
       report,
+      actionModelKey: "rawLpAction",
+      persist: (plans, tx) => persistRawLpActionTransferEvidence(plans, tx as never),
     });
     report.actionsBecameRecorded = report.deterministicallyRepairable;
-
-    if (apply && finalPlans.length > 0) {
-      const result = await persistRawLpActionTransferEvidence(finalPlans, client as never);
-      report.evidenceRowsCreated = result.count;
-    }
+    report.evidenceRowsCreated = applyResult.count;
 
     report.nextCursorId =
       candidates.length === maxActions ? candidates[candidates.length - 1].id : null;
@@ -721,19 +795,16 @@ export async function repairCanonicalRawTransferProvenance(
     report.evidenceRowsPlanned += shape.rawTokenTransferIds.length;
   }
 
-  const finalPlans = await revalidateAndFinalize({
+  const applyResult = await applyPendingRepairsAtomically({
     apply,
+    client,
     pending,
-    actionModel: client.rawStakeAction as never,
-    transferModel: client.rawTokenTransfer as never,
     report,
+    actionModelKey: "rawStakeAction",
+    persist: (plans, tx) => persistRawStakeActionTransferEvidence(plans, tx as never),
   });
   report.actionsBecameRecorded = report.deterministicallyRepairable;
-
-  if (apply && finalPlans.length > 0) {
-    const result = await persistRawStakeActionTransferEvidence(finalPlans, client as never);
-    report.evidenceRowsCreated = result.count;
-  }
+  report.evidenceRowsCreated = applyResult.count;
 
   report.nextCursorId =
     candidates.length === maxActions ? candidates[candidates.length - 1].id : null;

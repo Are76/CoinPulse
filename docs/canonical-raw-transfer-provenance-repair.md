@@ -98,17 +98,25 @@ stays `null`), never guessed.
   `tokenAddress === PHEX_ADDRESS` at the query level, matching the exact
   producer that writes them — a legacy or future non-HEX stake row is never
   a candidate even if its actionKind/actionIndex happen to match.
-- **Scan/write race backstop:** the initial scan (candidate read + transfer
-  read + shape reconstruction) is not itself transactional. In apply mode,
-  immediately before persisting, every candidate action's status and every
-  referenced transfer's status are re-checked in one pass; anything no
-  longer `ACTIVE` (or, for the action, no longer `rawTransferEvidenceStatus
-  === null`) — for example because a concurrent sync detected a reorg mid-scan
-  — is moved from repaired to unresolved (`revalidation-failed-possible-reorg`)
-  instead of being persisted. This is a fail-closed backstop, not a
-  substitute for serializing repair runs against sync/rebuild operations —
-  avoid running apply-mode repair concurrently with sync/rebuild for the same
-  wallet/chain.
+- **Scan/write race closure:** the initial scan (candidate read + transfer
+  read + shape reconstruction) is not itself transactional, so it cannot by
+  itself prove nothing changes before the write. Revalidation and
+  persistence are therefore not two separate database operations. In apply
+  mode, `applyPendingRepairsAtomically` opens exactly one database
+  transaction that (1) re-checks every pending action's status/
+  `rawTransferEvidenceStatus` and every referenced transfer's status,
+  (2) writes evidence + status via the exact PR #376 persister executed
+  against the transaction client (so its writes join this same transaction,
+  never a second one), and (3) re-counts the same ACTIVE conditions one more
+  time as the last statement before commit. If that final guard finds fewer
+  ACTIVE rows than expected — a concurrent sync, rebuild, or reorg-marking
+  pass changed canonical state anywhere between step 1 and step 3 — the
+  whole transaction throws and rolls back: no evidence row and no status
+  change from that apply call survives. This is a structural closure of the
+  race, not a documentation-only mitigation — it does not depend on an
+  operator promising not to run sync/rebuild concurrently, though avoiding
+  that overlap is still recommended for throughput, since a detected race
+  aborts the whole bounded batch rather than only the affected action.
 
 ## Idempotency and atomicity
 
@@ -125,9 +133,13 @@ exactly as they were before the attempt.
 
 - One family (`SWAP` | `LP` | `STAKE`), one chain, optionally one wallet, per
   invocation.
-- `maxActions` bounds the batch: default 100, hard cap 500
-  (`PROVENANCE_REPAIR_MAX_ACTIONS_HARD_CAP`) — mirrors the existing
-  `repair-fabricated-token-transfers` batch-size convention.
+- `maxActions` bounds the batch: default 100, hard cap 500. The service
+  enforces this via `PROVENANCE_REPAIR_MAX_ACTIONS_HARD_CAP`
+  (`src/services/sync/canonical-provenance-repair.ts`); the CLI validates the
+  same cap up front via its own `REPAIR_MAX_ACTIONS_HARD_CAP`
+  (`scripts/repair-canonical-provenance.ts`) before ever calling the
+  service — mirrors the existing `repair-fabricated-token-transfers`
+  batch-size convention.
 - Deterministic `id`-ascending cursor pagination. A batch that hits the cap
   returns `nextCursorId`; pass it as `--cursor` to resume.
 
