@@ -101,6 +101,7 @@ function createMemoryStores() {
   const rawTokenTransfers = new Map<string, RawTokenTransferRecord>();
   const rawTransactions = new Map<string, RawTransactionRecord>();
   const rawStakeActions = new Map<string, RawStakeActionRecord>();
+  const rawStakeActionTransferEvidence = new Map<string, Record<string, unknown>>();
   const tokens = new Map<string, Record<string, unknown>>();
   const ledgerActionGroups = new Map<string, Record<string, unknown>>();
   const ledgerEntries = new Map<string, Record<string, unknown>>();
@@ -276,6 +277,28 @@ function createMemoryStores() {
         return { count };
       },
       async findMany(args: { where: { chainId: number; status: "ACTIVE"; blockNumber: { gte: bigint; lte: bigint }; initiatorAddress: string } }) {
+        if ("OR" in args.where && Array.isArray((args.where as { OR?: unknown }).OR)) {
+          const identities = (args.where as {
+            OR: Array<{
+              chainId: number;
+              txHash: string;
+              blockHash: string;
+              actionKind: string;
+              actionIndex: number;
+            }>;
+          }).OR;
+          return Array.from(rawStakeActions.values()).filter((item) =>
+            identities.some(
+              (identity) =>
+                item.chainId === identity.chainId &&
+                item.txHash === identity.txHash &&
+                item.blockHash === identity.blockHash &&
+                item.actionKind === identity.actionKind &&
+                item.actionIndex === identity.actionIndex,
+            ),
+          );
+        }
+
         return Array.from(rawStakeActions.values())
           .filter(
             (item) =>
@@ -310,6 +333,25 @@ function createMemoryStores() {
         return matches[0] ?? null;
       },
       updateMany: vi.fn(async () => ({ count: 0 })),
+    },
+    rawStakeActionTransferEvidence: {
+      async createMany(args: {
+        data: Array<{
+          rawStakeActionId: string;
+          rawTokenTransferId: string;
+          legRole: string;
+        }>;
+      }) {
+        let count = 0;
+        for (const item of args.data) {
+          const key = `${item.rawStakeActionId}:${item.legRole}:${item.rawTokenTransferId}`;
+          if (!rawStakeActionTransferEvidence.has(key)) {
+            rawStakeActionTransferEvidence.set(key, item);
+            count += 1;
+          }
+        }
+        return { count };
+      },
     },
     token: {
       async findUnique(args: { where: { chainId_addressLower: { chainId: number; addressLower: string } } }) {
@@ -455,6 +497,7 @@ function createMemoryStores() {
     db,
     rawLogs,
     rawStakeActions,
+    rawStakeActionTransferEvidence,
     rawTransactions,
     rawTokenTransfers,
     ledgerEntries,
@@ -875,6 +918,11 @@ describe("stake sync flow", () => {
     });
     expect(stores.rawTransactions.size).toBe(1);
     expect(stores.rawStakeActions.size).toBe(1);
+    expect(
+      Array.from(stores.rawStakeActionTransferEvidence.values()).map(
+        (row) => row.legRole,
+      ),
+    ).toEqual(["PRINCIPAL_LOCKED_OUT"]);
   });
 
   it("persists a genuine stake start even when the provider returns non-Transfer logs", async () => {
@@ -1050,6 +1098,11 @@ describe("stake sync flow", () => {
       assetId: `chain:369:erc20:${PHEX_ADDRESS_LOWER}`,
       quantity: "0.05",
     });
+    expect(
+      Array.from(stores.rawStakeActionTransferEvidence.values()).map(
+        (row) => row.legRole,
+      ),
+    ).toEqual(["RETURN_IN"]);
   });
 
   it("warns deterministically and skips ambiguous stake candidates", async () => {
@@ -1356,6 +1409,7 @@ describe("stake sync flow", () => {
       expect(result.warningCount).toBeGreaterThanOrEqual(1);
       expect(stores.rawStakeActions.size).toBe(0);
       expect(stores.ledgerEntries.size).toBe(0);
+      expect(stores.rawStakeActionTransferEvidence.size).toBe(0);
     },
   );
 });

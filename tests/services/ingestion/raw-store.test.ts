@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  persistRawDexSwapTransferEvidence,
   persistRawLpActions,
   persistRawStakeActions,
   persistRawDexSwaps,
@@ -331,6 +332,177 @@ describe("raw dex swap audit helpers", () => {
         feeAmountRaw: "200000000000000",
       }),
     ]);
+  });
+});
+
+describe("raw transfer evidence persistence", () => {
+  function createDexEvidenceClient(args?: { failEvidenceInsert?: boolean }) {
+    const action = {
+      id: "raw_dex_swap_1",
+      chainId: 369,
+      txHash: "0xswap",
+      blockHash: "0xblock100",
+      logIndex: 5,
+    };
+    const statuses = new Map<string, string | null>([[action.id, null]]);
+    const evidence = new Map<string, Record<string, unknown>>();
+    let transactionCount = 0;
+
+    const client = {
+      rawDexSwap: {
+        findMany: async () => [action],
+        updateMany: async (updateArgs: {
+          where: { id: { in: string[] } };
+          data: { rawTransferEvidenceStatus: string };
+        }) => {
+          let count = 0;
+          for (const id of updateArgs.where.id.in) {
+            if (statuses.has(id)) {
+              statuses.set(id, updateArgs.data.rawTransferEvidenceStatus);
+              count += 1;
+            }
+          }
+          return { count };
+        },
+      },
+      rawDexSwapTransferEvidence: {
+        createMany: async (createArgs: {
+          data: Array<{
+            rawDexSwapId: string;
+            rawTokenTransferId: string;
+            legRole: string;
+          }>;
+        }) => {
+          if (args?.failEvidenceInsert) {
+            throw new Error("forced evidence insert failure");
+          }
+
+          let count = 0;
+          for (const row of createArgs.data) {
+            const key = `${row.rawDexSwapId}:${row.legRole}:${row.rawTokenTransferId}`;
+            if (!evidence.has(key)) {
+              evidence.set(key, row);
+              count += 1;
+            }
+          }
+          return { count };
+        },
+      },
+      $transaction: async <T>(operation: (tx: never) => Promise<T>) => {
+        transactionCount += 1;
+        const statusSnapshot = new Map(statuses);
+        const evidenceSnapshot = new Map(evidence);
+
+        try {
+          return await operation(client as never);
+        } catch (error) {
+          statuses.clear();
+          for (const [key, value] of statusSnapshot) {
+            statuses.set(key, value);
+          }
+          evidence.clear();
+          for (const [key, value] of evidenceSnapshot) {
+            evidence.set(key, value);
+          }
+          throw error;
+        }
+      },
+    };
+
+    return {
+      client,
+      evidence,
+      statuses,
+      get transactionCount() {
+        return transactionCount;
+      },
+    };
+  }
+
+  it("records an action when any leg has exact transfer evidence", async () => {
+    const store = createDexEvidenceClient();
+
+    const result = await persistRawDexSwapTransferEvidence(
+      [
+        {
+          chainId: 369,
+          txHash: "0xswap",
+          blockHash: "0xblock100",
+          logIndex: 5,
+          legRole: "SOLD",
+          rawTokenTransferIds: ["transfer_sold_1"],
+        },
+        {
+          chainId: 369,
+          txHash: "0xswap",
+          blockHash: "0xblock100",
+          logIndex: 5,
+          legRole: "BOUGHT",
+          rawTokenTransferIds: [],
+        },
+      ],
+      store.client as never,
+    );
+
+    expect(result).toEqual({ count: 1 });
+    expect(store.statuses.get("raw_dex_swap_1")).toBe("RECORDED");
+    expect(store.evidence.size).toBe(1);
+    expect(store.transactionCount).toBe(1);
+  });
+
+  it("marks an action verified empty only when every leg has no transfer evidence", async () => {
+    const store = createDexEvidenceClient();
+
+    const result = await persistRawDexSwapTransferEvidence(
+      [
+        {
+          chainId: 369,
+          txHash: "0xswap",
+          blockHash: "0xblock100",
+          logIndex: 5,
+          legRole: "SOLD",
+          rawTokenTransferIds: [],
+        },
+        {
+          chainId: 369,
+          txHash: "0xswap",
+          blockHash: "0xblock100",
+          logIndex: 5,
+          legRole: "BOUGHT",
+          rawTokenTransferIds: [],
+        },
+      ],
+      store.client as never,
+    );
+
+    expect(result).toEqual({ count: 0 });
+    expect(store.statuses.get("raw_dex_swap_1")).toBe("VERIFIED_EMPTY");
+    expect(store.evidence.size).toBe(0);
+    expect(store.transactionCount).toBe(1);
+  });
+
+  it("does not persist recorded status when exact evidence insertion fails", async () => {
+    const store = createDexEvidenceClient({ failEvidenceInsert: true });
+
+    await expect(
+      persistRawDexSwapTransferEvidence(
+        [
+          {
+            chainId: 369,
+            txHash: "0xswap",
+            blockHash: "0xblock100",
+            logIndex: 5,
+            legRole: "SOLD",
+            rawTokenTransferIds: ["transfer_sold_1"],
+          },
+        ],
+        store.client as never,
+      ),
+    ).rejects.toThrow("forced evidence insert failure");
+
+    expect(store.statuses.get("raw_dex_swap_1")).toBeNull();
+    expect(store.evidence.size).toBe(0);
+    expect(store.transactionCount).toBe(1);
   });
 });
 

@@ -3,6 +3,7 @@ import "server-only";
 import { CORE_PROTOCOLS } from "@/config/protocols";
 import {
   persistRawLpActions,
+  persistRawLpActionTransferEvidence,
   persistRawTransactions,
   readWalletRawLpActions,
 } from "@/services/ingestion/raw-store";
@@ -164,6 +165,17 @@ export async function ingestLpActions(args: {
       ],
       args.db as never,
     );
+
+    await persistRawLpActionTransferEvidence(
+      buildLpTransferEvidencePlans({
+        chainId: args.wallet.chainId,
+        txHash: transaction.hash,
+        blockHash: transaction.blockHash,
+        logIndex: lpShape.lpLeg.logIndex,
+        lpShape,
+      }),
+      args.db as never,
+    );
   }
 
   const rawActions = await readWalletRawLpActions(
@@ -270,6 +282,7 @@ type AggregatedTransfer = {
   decimalsSnapshot: number;
   amountRaw: string;
   logIndex: number;
+  rawTokenTransferIds: string[];
 };
 
 type LpShape =
@@ -378,6 +391,7 @@ function aggregateTransfers(transfers: readonly WalletTransferSnapshot[]) {
       existing.amountRawBigInt += BigInt(transfer.amountRaw);
       existing.amountRaw = existing.amountRawBigInt.toString();
       existing.logIndex = Math.min(existing.logIndex, transfer.logIndex);
+      existing.rawTokenTransferIds.push(transfer.id);
       continue;
     }
 
@@ -388,6 +402,7 @@ function aggregateTransfers(transfers: readonly WalletTransferSnapshot[]) {
       amountRaw: transfer.amountRaw,
       amountRawBigInt: BigInt(transfer.amountRaw),
       logIndex: transfer.logIndex,
+      rawTokenTransferIds: [transfer.id],
     });
   }
 
@@ -397,6 +412,7 @@ function aggregateTransfers(transfers: readonly WalletTransferSnapshot[]) {
     decimalsSnapshot: value.decimalsSnapshot,
     amountRaw: value.amountRaw,
     logIndex: value.logIndex,
+    rawTokenTransferIds: [...value.rawTokenTransferIds],
   }));
 }
 
@@ -404,4 +420,68 @@ function sortPairAssets(transfers: readonly AggregatedTransfer[]) {
   return [...transfers].sort((left, right) =>
     left.assetIdSnapshot.localeCompare(right.assetIdSnapshot),
   );
+}
+
+function buildLpTransferEvidencePlans(args: {
+  chainId: number;
+  txHash: string;
+  blockHash: string;
+  logIndex: number;
+  lpShape: Extract<LpShape, { ok: true }>;
+}) {
+  if (args.lpShape.actionKind === "ADD") {
+    return [
+      {
+        chainId: args.chainId,
+        txHash: args.txHash,
+        blockHash: args.blockHash,
+        logIndex: args.logIndex,
+        legRole: "TOKEN0_OUT",
+        rawTokenTransferIds: args.lpShape.token0.rawTokenTransferIds,
+      },
+      {
+        chainId: args.chainId,
+        txHash: args.txHash,
+        blockHash: args.blockHash,
+        logIndex: args.logIndex,
+        legRole: "TOKEN1_OUT",
+        rawTokenTransferIds: args.lpShape.token1.rawTokenTransferIds,
+      },
+      {
+        chainId: args.chainId,
+        txHash: args.txHash,
+        blockHash: args.blockHash,
+        logIndex: args.logIndex,
+        legRole: "LP_IN",
+        rawTokenTransferIds: args.lpShape.lpToken.rawTokenTransferIds,
+      },
+    ];
+  }
+
+  return [
+    {
+      chainId: args.chainId,
+      txHash: args.txHash,
+      blockHash: args.blockHash,
+      logIndex: args.logIndex,
+      legRole: "LP_OUT",
+      rawTokenTransferIds: args.lpShape.lpToken.rawTokenTransferIds,
+    },
+    {
+      chainId: args.chainId,
+      txHash: args.txHash,
+      blockHash: args.blockHash,
+      logIndex: args.logIndex,
+      legRole: "TOKEN0_IN",
+      rawTokenTransferIds: args.lpShape.token0.rawTokenTransferIds,
+    },
+    {
+      chainId: args.chainId,
+      txHash: args.txHash,
+      blockHash: args.blockHash,
+      logIndex: args.logIndex,
+      legRole: "TOKEN1_IN",
+      rawTokenTransferIds: args.lpShape.token1.rawTokenTransferIds,
+    },
+  ];
 }

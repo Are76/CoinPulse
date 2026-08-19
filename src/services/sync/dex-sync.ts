@@ -7,6 +7,7 @@ import {
 } from "@/config/assets";
 import {
   persistRawDexSwaps,
+  persistRawDexSwapTransferEvidence,
   persistRawLogs,
   persistRawTransactions,
   readWalletDexSwapSnapshots,
@@ -229,6 +230,28 @@ export async function ingestDexSwaps(args: {
       ],
       args.db as never,
     );
+
+    await persistRawDexSwapTransferEvidence(
+      [
+        {
+          chainId: args.wallet.chainId,
+          txHash: transaction.hash,
+          blockHash: primarySwapLog.blockHash,
+          logIndex: primarySwapLog.logIndex,
+          legRole: "SOLD",
+          rawTokenTransferIds: swapShape.sold.rawTokenTransferIds,
+        },
+        {
+          chainId: args.wallet.chainId,
+          txHash: transaction.hash,
+          blockHash: primarySwapLog.blockHash,
+          logIndex: primarySwapLog.logIndex,
+          legRole: "BOUGHT",
+          rawTokenTransferIds: swapShape.bought.rawTokenTransferIds,
+        },
+      ],
+      args.db as never,
+    );
   }
 
   const rawSwaps = await readWalletDexSwapSnapshots(
@@ -332,6 +355,7 @@ function summarizeWalletSwapTransfers(args: {
       assetIdSnapshot: string;
       decimalsSnapshot: number;
       amountRaw: bigint;
+      rawTokenTransferIds: string[];
     }
   >();
   const inbound = new Map<
@@ -341,6 +365,7 @@ function summarizeWalletSwapTransfers(args: {
       assetIdSnapshot: string;
       decimalsSnapshot: number;
       amountRaw: bigint;
+      rawTokenTransferIds: string[];
     }
   >();
 
@@ -389,10 +414,12 @@ function summarizeWalletSwapTransfers(args: {
     sold: {
       ...sold,
       amountRaw: sold.amountRaw.toString(),
+      rawTokenTransferIds: [...sold.rawTokenTransferIds],
     },
     bought: {
       ...bought,
       amountRaw: bought.amountRaw.toString(),
+      rawTokenTransferIds: [...bought.rawTokenTransferIds],
     },
   };
 }
@@ -405,6 +432,7 @@ function accumulateTransfer(
       assetIdSnapshot: string;
       decimalsSnapshot: number;
       amountRaw: bigint;
+      rawTokenTransferIds: string[];
     }
   >,
   transfer: WalletTransferSnapshot,
@@ -413,6 +441,7 @@ function accumulateTransfer(
 
   if (existing) {
     existing.amountRaw += BigInt(transfer.amountRaw);
+    existing.rawTokenTransferIds.push(transfer.id);
     return;
   }
 
@@ -421,6 +450,7 @@ function accumulateTransfer(
     assetIdSnapshot: transfer.assetIdSnapshot,
     decimalsSnapshot: transfer.decimalsSnapshot,
     amountRaw: BigInt(transfer.amountRaw),
+    rawTokenTransferIds: [transfer.id],
   });
 }
 
