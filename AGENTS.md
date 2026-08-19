@@ -112,6 +112,7 @@ Existing PR fixes:
    - `docs/data-fetching-architecture.md`
    - `docs/frontend-query-standardization-audit.md`
    - `docs/reusable-backend-template-plan.md`
+   - `docs/architecture/pulseicon-privacy-decentralization-principles.md` (D-037) — required before any accounts, authentication, subscriptions, billing, permanent user↔wallet associations, cross-device sync, wallet signatures, or advertising work; see its §21 for the complete review-trigger list
 3. Explain the smallest safe implementation.
 4. Add or update tests first when possible.
 5. Implement bounded changes.
