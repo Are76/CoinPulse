@@ -77,6 +77,7 @@ Each service owns one layer of the truth stack and must remain portable to a fut
 - Treat pDAI as volatile — never force pDAI to $1.
 - Raw audit data is immutable evidence. Canonical ledger and derived state must remain deterministic and rebuildable.
 - Spam/scam/dust assets are flagged or hidden from the UI, not deleted from raw/ledger truth.
+- Before implementing accounts, authentication, subscriptions/billing, permanent identified user↔wallet relationships, wallet ownership/signature features, cross-device wallet sync, third-party product analytics/telemetry, public portfolio sharing/profile features, encrypted user-data recovery, or client-side cryptography: read and comply with D-037 (`docs/project-decisions.md`) and `docs/architecture/pulseicon-privacy-decentralization-principles.md` §21.
 
 ## Database schema overview
 

@@ -1,6 +1,6 @@
 # CoinPulse AI Handoff
 
-**Last updated:** 2026-08-19 (D-037: PulseIcon privacy and decentralization principles accepted — docs only, architecture guardrail)
+**Last updated:** 2026-08-19 (D-037: PulseIcon privacy and decentralization principles proposed via PR #372, pending product-owner approval — docs only, architecture guardrail)
 
 ---
 
@@ -66,7 +66,7 @@ These rules apply to every PR. [E1]
 - **PulseChain (chain ID 369) is the current V1 execution target.** [E1]
 - **Ethereum/Base/cross-chain execution is future scope only.** Not current V1 scope unless docs explicitly say otherwise. [E1]
 - **Raw audit records are immutable.** Mark reorgs as REORGED — never delete or overwrite. [E1]
-- **Privacy by architecture, minimal identity coupling.** See D-037 (`docs/project-decisions.md`) and `docs/architecture/pulseicon-privacy-decentralization-principles.md` — required review before implementing any accounts, subscriptions, billing, permanent user↔wallet associations, cross-device sync, wallet signatures, analytics, or advertising. No such feature exists in the repository today. [E1]
+- **Privacy by architecture, minimal identity coupling.** See D-037 (`docs/project-decisions.md`) and `docs/architecture/pulseicon-privacy-decentralization-principles.md` §21 for the canonical, complete review-trigger list (accounts, authentication, subscriptions, billing, permanent user↔wallet associations, cross-device wallet sync, wallet ownership verification, wallet signatures, wallet-tied notifications, third-party product analytics, advertising, public portfolio profiles, portfolio sharing, encrypted-data account recovery, client-side cryptography) — required review before implementing any of these. This does not apply to CoinPulse's existing first-party portfolio/dashboard/PnL analytics, which are unrelated to the §21 "third-party product analytics" trigger. No accounts/auth/billing/wallet-sync feature exists in the repository today. [E1]
 
 ---
 

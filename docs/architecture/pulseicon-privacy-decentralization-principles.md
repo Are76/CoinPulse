@@ -1,6 +1,6 @@
 # PulseIcon Privacy and Decentralization Principles
 
-**Status:** Accepted (2026-08-19) — architecture guardrail document; no functional change.
+**Status:** Proposed — pending product-owner approval (opened 2026-08-19). Architecture guardrail document; no functional change. Do not treat this document as accepted policy until the product owner approves PR #372.
 
 **Canonical decision record:** D-037 in `docs/project-decisions.md`.
 
@@ -69,15 +69,19 @@ asset identity, transaction identity, ledger identity, HEX identity, DeFi positi
 identity, or pricing identity, unless a future explicit architecture decision proves it is
 required and that decision supersedes this one.
 
-This is consistent with — and an extension of — D-005 (no symbol-as-identity):
-canonical identity stays `chainId + address`-scoped, not user-scoped.
+This is consistent with — and an extension of — D-005 (no symbol-as-identity): each
+domain retains its own existing chain-scoped canonical key (for example, token identity as
+`chainId + tokenAddress`; a raw transaction as `chainId + txHash + blockHash`; a ledger
+entry as `chainId + walletId + dedupeKey`; an ended stake as
+`chainId + walletAddress + stakeId`). This document adds one constraint on top of those
+existing keys, not a replacement for them: `userId` stays excluded from all of them.
 
 ---
 
 ## 3. User ↔ wallet association
 
 The association `identified user/account ↔ wallet address` is **privacy-sensitive data**
-(see the Class D data classification in §11).
+(see the Class D data classification in §15).
 
 The default architecture must not casually introduce a conventional
 `User hasMany Wallet` ownership hierarchy. This is a **future guardrail**, evaluated when
@@ -85,12 +89,19 @@ accounts are eventually designed — not a statement that such a table exists to
 not; PulseIcon has no account system yet).
 
 Any persistent identifiable user↔wallet relationship requires a dedicated privacy/security
-architecture review before implementation (see §12).
+architecture review before implementation (see §21).
 
 Canonical public blockchain data (raw observations, ledger entries, materialized state)
 must remain reusable independently of which PulseIcon users happen to inspect or follow a
 given address — the same canonical wallet record must not need to be duplicated or scoped
 per viewing user.
+
+This section governs *identified human user* ↔ wallet association only. The repository's
+existing operator-facing tracked-wallet records (`POST /api/wallets/import`,
+`GET /api/wallets/tracked`) are wallet-scoped operational state keyed by
+`walletAddress + chainId` — they are not an identified-user ownership model and are not,
+by themselves, a violation of this guardrail. They become in scope for the review in §21
+only if a future change links them to an identified PulseIcon end-user account.
 
 ---
 
@@ -156,8 +167,8 @@ provide synchronization.
 This document does not specify a cryptographic scheme, algorithm, or protocol — inventing
 one here would be irresponsible. **Any implementation requires a dedicated cryptographic
 and security review before it is built, and before any marketing claim such as "PulseIcon
-cannot read your saved wallet list" is made** (see §14). No such capability exists in
-PulseIcon today.
+cannot read your saved wallet list" is made** (see §§19 and 21). No such capability exists
+in PulseIcon today.
 
 ---
 

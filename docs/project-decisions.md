@@ -1,6 +1,6 @@
 # CoinPulse Project Decisions
 
-**Last updated:** 2026-08-19 (D-037: PulseIcon privacy and decentralization principles accepted — docs-only architecture guardrail)
+**Last updated:** 2026-08-19 (D-037: PulseIcon privacy and decentralization principles proposed via PR #372, pending product-owner approval — docs-only architecture guardrail)
 
 ---
 
@@ -744,7 +744,7 @@ No pDAI→USD implementation PR may begin until a separate, evidence-backed deci
 
 ## D-037: PulseIcon Privacy and Decentralization Principles
 
-**Status:** Accepted (2026-08-19) — architecture guardrail document; no functional change.
+**Status:** Proposed — pending product-owner approval (PR #372 opened 2026-08-19). Architecture guardrail document; no functional change. Follows the same pending-approval convention as D-036 until the product owner approves the PR.
 
 **Evidence:** [E1] `docs/architecture/pulseicon-privacy-decentralization-principles.md` (this decision's companion document, added in the same PR); `CLAUDE.md`; D-001, D-004, D-005, D-007, D-008 (existing backend-truth-first, no-frontend-computation, chain-aware-identity, no-mock-fallback, and versioned-DTO rules this decision reinforces and does not weaken). [E3] Repository inspection (2026-08-19): no account, authentication, subscription, billing, or user↔wallet ownership table or code path exists anywhere in `prisma/schema.prisma` or `src/services/`.
 
@@ -752,6 +752,6 @@ No pDAI→USD implementation PR may begin until a separate, evidence-backed deci
 
 **Rationale:** Retrofitting privacy-by-architecture after a conventional `User.hasMany(Wallet)` ownership model, ad-supported monetization, or a plaintext account↔wallet join already exists in production is far more costly and risky than establishing the guardrail before that code is written. CoinPulse's backend-truth-first architecture (D-001) already gives the project a single accounting truth source; this decision adds the complementary constraint that human user identity must not casually become entangled with that canonical blockchain identity as commercial features are added.
 
-**Implications:** Any future PR implementing accounts, authentication, subscriptions, billing, wallet ownership verification, cross-device sync, wallet-tied notifications, third-party analytics, advertising, or client-side cryptography must be evaluated against `docs/architecture/pulseicon-privacy-decentralization-principles.md` before implementation begins, per that document's §21 review triggers. No such feature is implemented, scheduled, or scoped by this decision.
+**Implications:** Any future PR implementing accounts, authentication, subscriptions, billing, permanent user↔wallet associations, cross-device wallet sync, wallet ownership verification, wallet signatures, notifications tied to wallets, third-party product analytics, advertising, public portfolio profiles, portfolio sharing, account recovery for encrypted user data, or client-side cryptography must be evaluated against `docs/architecture/pulseicon-privacy-decentralization-principles.md` §21 (the canonical, complete review-trigger list — this is a summary, not a substitute for reading §21 directly) before implementation begins. No such feature is implemented, scheduled, or scoped by this decision.
 
 **Do not:** Treat this decision as implementing accounts, subscriptions, billing, encryption, wallet sync, or any other feature described in the companion document — none is introduced by this PR. Do not treat the companion document's product-direction language (PulseIcon naming, account-optional goals) as authorization for a repository-wide rename from CoinPulse to PulseIcon, or as changing any existing DTO, schema, API, or frontend behavior. Do not weaken D-001, D-004, D-005, D-007, or D-008 based on this decision — §1 and §25 of the companion document are explicit that privacy goals must never come at the cost of backend-truth-first architecture. Do not cite this document as marketing evidence of a privacy claim (e.g., "anonymous," "we collect nothing," "encrypted sync") until the specific claim is actually implemented and verified — see the companion document §19.
