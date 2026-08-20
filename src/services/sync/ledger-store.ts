@@ -113,6 +113,29 @@ type LedgerStoreClient = {
     deleteEntries(args: { ids: readonly string[] }): Promise<{ count: number }>;
     deleteActionGroups(args: { ids: readonly string[] }): Promise<{ count: number }>;
   };
+  /**
+   * Entirely separate, fully optional capability used only by
+   * resolveCanonicalFeeOwnership's caller (persistNormalizedLedgerBatch) to
+   * remove a source LedgerActionGroup that resolveCanonicalFeeOwnership's own
+   * FEE re-homing left with zero LedgerEntry rows (e.g. a generic TRANSFER
+   * group whose only entry was its native-gas FEE, once that FEE is re-homed
+   * to a higher-priority SWAP/LP/STAKE group for the same transaction).
+   * Feature-detected exactly like transferShadowReconciliation above: when
+   * the underlying client does not expose ledgerActionGroup.deleteMany, this
+   * is entirely skipped (no orphan cleanup attempted) rather than a
+   * partial/best-effort attempt — narrower test clients that never exercise
+   * this path are unaffected.
+   */
+  feeReassignmentCleanup?: {
+    // Counts current LedgerEntry rows per requested actionGroupId. A group
+    // absent from the returned array has zero remaining entries — the caller
+    // must not assume presence implies non-zero, only that an entry map
+    // omission means "no rows found for this id in this read."
+    countRemainingEntries(args: {
+      actionGroupIds: readonly string[];
+    }): Promise<Array<{ actionGroupId: string; count: number }>>;
+    deleteActionGroups(args: { ids: readonly string[] }): Promise<{ count: number }>;
+  };
   $transaction?<T>(callback: (client: LedgerStoreClient) => Promise<T>): Promise<T>;
 };
 
@@ -195,6 +218,7 @@ export function wrapPrismaClientAsLedgerStore(
     typeof db.ledgerActionGroup.deleteMany === "function" &&
     typeof db.ledgerEntry.deleteMany === "function" &&
     typeof db.rawTokenTransfer?.findMany === "function";
+  const canCleanupOrphanedFeeSourceGroups = typeof db.ledgerActionGroup.deleteMany === "function";
 
   return {
     ledgerActionGroup: db.ledgerActionGroup as never,
@@ -236,6 +260,24 @@ export function wrapPrismaClientAsLedgerStore(
           },
           async deleteEntries(args) {
             return db.ledgerEntry.deleteMany!({ where: { id: { in: [...args.ids] } } });
+          },
+          async deleteActionGroups(args) {
+            return db.ledgerActionGroup.deleteMany!({ where: { id: { in: [...args.ids] } } });
+          },
+        }
+      : undefined,
+    feeReassignmentCleanup: canCleanupOrphanedFeeSourceGroups
+      ? {
+          async countRemainingEntries(args) {
+            const rows = (await db.ledgerEntry.findMany({
+              where: { actionGroupId: { in: [...args.actionGroupIds] } },
+              select: { id: true, actionGroupId: true },
+            })) as Array<{ actionGroupId: string }>;
+            const counts = new Map<string, number>();
+            for (const row of rows) {
+              counts.set(row.actionGroupId, (counts.get(row.actionGroupId) ?? 0) + 1);
+            }
+            return Array.from(counts, ([actionGroupId, count]) => ({ actionGroupId, count }));
           },
           async deleteActionGroups(args) {
             return db.ledgerActionGroup.deleteMany!({ where: { id: { in: [...args.ids] } } });
@@ -432,7 +474,11 @@ function selectCanonicalFeeDrafts(
  *     re-home the persisted row in place (only its actionGroupId — never
  *     its id, dedupeKey, quantity, or asset) to the winning action group,
  *     and drop the in-batch draft (the canonical row already exists under
- *     the correct identity, nothing new needs inserting).
+ *     the correct identity, nothing new needs inserting). The persisted
+ *     row's PRE-reassignment actionGroupId is carried on the plan as
+ *     `previousActionGroupId` so the caller can later check whether that
+ *     source group has been left with zero entries and, if so, remove it —
+ *     see the orphan-cleanup step in persistNormalizedLedgerBatch.
  *
  * This never deletes raw evidence, never touches a non-FEE entry, and never
  * reads outside the exact transactions present in this batch.
@@ -440,7 +486,7 @@ function selectCanonicalFeeDrafts(
 async function resolveCanonicalFeeOwnership(
   entries: Map<string, CanonicalLedgerEntryDraft & { actionGroupId: string; id: string }>,
   client: LedgerStoreClient,
-): Promise<Array<{ id: string; actionGroupId: string }>> {
+): Promise<Array<{ id: string; actionGroupId: string; previousActionGroupId: string }>> {
   const feeCandidates = Array.from(entries.entries()).filter(
     ([, entry]) => entry.entryType === "FEE",
   );
@@ -481,7 +527,11 @@ async function resolveCanonicalFeeOwnership(
     }
   }
 
-  const reassignments: Array<{ id: string; actionGroupId: string }> = [];
+  const reassignments: Array<{
+    id: string;
+    actionGroupId: string;
+    previousActionGroupId: string;
+  }> = [];
 
   for (const [entryIdentity, entry] of feeCandidates) {
     const existing = bestExistingByTx.get(feeTxIdentityKey(entry));
@@ -494,7 +544,11 @@ async function resolveCanonicalFeeOwnership(
       continue;
     }
 
-    reassignments.push({ id: existing.id, actionGroupId: entry.actionGroupId });
+    reassignments.push({
+      id: existing.id,
+      actionGroupId: entry.actionGroupId,
+      previousActionGroupId: existing.actionGroupId,
+    });
     entries.delete(entryIdentity);
   }
 
@@ -821,6 +875,42 @@ async function persistNormalizedLedgerBatch(
     })),
     skipDuplicates: true,
   });
+
+  // Remove any source LedgerActionGroup that resolveCanonicalFeeOwnership's
+  // re-homing above left with zero LedgerEntry rows (e.g. a generic
+  // TRANSFER group whose only entry was its native-gas FEE, now re-homed to
+  // a higher-priority SWAP/LP/STAKE group for the same transaction). Checked
+  // only against the exact groups the reassignments above moved a FEE out
+  // of, and only deleted when a fresh count proves zero remaining entries —
+  // a group with any surviving sibling entry (e.g. a legitimate SEND/RECEIVE
+  // that shared the same group) is left untouched. Runs after both the
+  // reassignment updates and the new-entry inserts above, inside the same
+  // transaction, so the count reflects this batch's complete effect.
+  if (reassignments.length > 0 && client.feeReassignmentCleanup) {
+    const previousActionGroupIds = Array.from(
+      new Set(
+        reassignments
+          .map((reassignment) => reassignment.previousActionGroupId)
+          .filter((groupId) => !referencedActionGroupIds.has(groupId)),
+      ),
+    );
+
+    if (previousActionGroupIds.length > 0) {
+      const remaining = await client.feeReassignmentCleanup.countRemainingEntries({
+        actionGroupIds: previousActionGroupIds,
+      });
+      const remainingCountByGroupId = new Map(
+        remaining.map((row) => [row.actionGroupId, row.count]),
+      );
+      const emptyActionGroupIds = previousActionGroupIds.filter(
+        (groupId) => (remainingCountByGroupId.get(groupId) ?? 0) === 0,
+      );
+
+      if (emptyActionGroupIds.length > 0) {
+        await client.feeReassignmentCleanup.deleteActionGroups({ ids: emptyActionGroupIds });
+      }
+    }
+  }
 
   return {
     actionGroupCount: createdActionGroups.count,

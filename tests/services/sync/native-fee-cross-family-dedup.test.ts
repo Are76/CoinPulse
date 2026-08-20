@@ -138,6 +138,15 @@ function createPersistentLedgerStoreClient() {
             .filter((row) => where.id.in.includes(row.id as string))
             .map((row) => ({ id: row.id as string, actionType: row.actionType as string }));
         },
+        deleteMany: async ({ where }: { where: { id: { in: string[] } } }) => {
+          let count = 0;
+          for (const id of where.id.in) {
+            if (actionGroups.delete(id)) {
+              count += 1;
+            }
+          }
+          return { count };
+        },
       },
       ledgerEntry: {
         createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
@@ -207,6 +216,32 @@ function createPersistentLedgerStoreClient() {
             const row = entries.get(id);
             if (row) {
               row.actionGroupId = data.actionGroupId;
+              count += 1;
+            }
+          }
+          return { count };
+        },
+      },
+      // Mirrors wrapPrismaClientAsLedgerStore's production
+      // feeReassignmentCleanup capability: counts current LedgerEntry rows
+      // per requested actionGroupId (a group absent from the result has zero
+      // rows), and deletes only the LedgerActionGroup ids the caller proves
+      // empty.
+      feeReassignmentCleanup: {
+        countRemainingEntries: async ({ actionGroupIds }: { actionGroupIds: string[] }) => {
+          const counts = new Map<string, number>();
+          for (const row of entries.values()) {
+            const groupId = row.actionGroupId as string;
+            if (actionGroupIds.includes(groupId)) {
+              counts.set(groupId, (counts.get(groupId) ?? 0) + 1);
+            }
+          }
+          return Array.from(counts, ([actionGroupId, count]) => ({ actionGroupId, count }));
+        },
+        deleteActionGroups: async ({ ids }: { ids: string[] }) => {
+          let count = 0;
+          for (const id of ids) {
+            if (actionGroups.delete(id)) {
               count += 1;
             }
           }
@@ -619,6 +654,117 @@ function seedLegacyFee(
   });
   return { id, dedupeKey };
 }
+
+describe("orphaned action-group cleanup after fee reassignment", () => {
+  it("deletes the old TRANSFER group once its only entry (the FEE) is re-homed to a higher-priority SWAP group", async () => {
+    const store = createPersistentLedgerStoreClient();
+    const swapTx = "0xswap0000000000000000000000000000000000000000000000000000000003";
+
+    await persistNormalizedLedger(buildNativeTransactionDrafts({ txHash: swapTx }), store.client);
+
+    const feesBefore = feeRows(store.entries);
+    expect(feesBefore).toHaveLength(1);
+    const transferGroupId = feesBefore[0].actionGroupId as string;
+    expect(actionTypeOf(store, transferGroupId)).toBe("TRANSFER");
+    expect(store.actionGroups.has(transferGroupId)).toBe(true);
+
+    await persistNormalizedLedger(
+      buildSwapDrafts({ txHash: swapTx, logIndex: 12 }),
+      store.client,
+    );
+
+    // The old TRANSFER group had exactly one entry (the FEE); once that FEE
+    // is re-homed to SWAP, the TRANSFER group has zero entries and must be
+    // removed rather than left as a permanent orphan.
+    expect(store.actionGroups.has(transferGroupId)).toBe(false);
+
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    const swapGroupId = fees[0].actionGroupId as string;
+    expect(actionTypeOf(store, swapGroupId)).toBe("SWAP");
+
+    const swapGroupEntryTypes = Array.from(store.entries.values())
+      .filter((row) => row.actionGroupId === swapGroupId)
+      .map((row) => row.entryType)
+      .sort();
+    expect(swapGroupEntryTypes).toEqual(["FEE", "SWAP_IN", "SWAP_OUT"]);
+  });
+
+  it("does not delete the old TRANSFER group when it still owns a legitimate entry after fee re-homing", async () => {
+    const store = createPersistentLedgerStoreClient();
+    const swapTx = "0xswap0000000000000000000000000000000000000000000000000000000004";
+
+    const transferDrafts = normalizeNativeTransaction({
+      chainId: CHAIN_ID,
+      walletId: WALLET_ID,
+      walletAddress: WALLET_ADDRESS,
+      txHash: swapTx,
+      blockNumber: REGRESSION_BLOCK,
+      fromAddress: WALLET_ADDRESS,
+      toAddress: "0x9999999999999999999999999999999999999999",
+      valueRaw: "1000000000000000000",
+      gasPriceRaw: REGRESSION_GAS_PRICE_RAW,
+      gasUsedRaw: REGRESSION_GAS_USED_RAW,
+      nativeAssetId: NATIVE_ASSET_ID,
+      nativeDecimals: 18,
+      occurredAt: new Date("2026-06-08T00:00:00.000Z"),
+      normalizerVersion: "v1",
+      hasTrackedTokenTransfersInTransaction: false,
+    });
+    expect(transferDrafts.map((draft) => draft.entryType).sort()).toEqual(["FEE", "SEND"]);
+
+    await persistNormalizedLedger(transferDrafts, store.client);
+
+    const feesBefore = feeRows(store.entries);
+    expect(feesBefore).toHaveLength(1);
+    const transferGroupId = feesBefore[0].actionGroupId as string;
+    expect(store.entries.size).toBe(2); // SEND + FEE, same TRANSFER group
+
+    await persistNormalizedLedger(
+      buildSwapDrafts({ txHash: swapTx, logIndex: 12 }),
+      store.client,
+    );
+
+    // The FEE moved to SWAP, but the TRANSFER group's SEND entry survives,
+    // so the TRANSFER group itself must not be deleted.
+    expect(store.actionGroups.has(transferGroupId)).toBe(true);
+    const remainingTransferEntries = Array.from(store.entries.values()).filter(
+      (row) => row.actionGroupId === transferGroupId,
+    );
+    expect(remainingTransferEntries).toHaveLength(1);
+    expect(remainingTransferEntries[0].entryType).toBe("SEND");
+
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    expect(actionTypeOf(store, fees[0].actionGroupId as string)).toBe("SWAP");
+  });
+
+  it("produces no duplicate FEE and no lingering orphan when the same evidence is persisted repeatedly (idempotent)", async () => {
+    const store = createPersistentLedgerStoreClient();
+    const swapTx = "0xswap0000000000000000000000000000000000000000000000000000000005";
+
+    for (let i = 0; i < 3; i += 1) {
+      await persistNormalizedLedger(
+        buildNativeTransactionDrafts({ txHash: swapTx }),
+        store.client,
+      );
+      await persistNormalizedLedger(
+        buildSwapDrafts({ txHash: swapTx, logIndex: 12 }),
+        store.client,
+      );
+    }
+
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    expect(actionTypeOf(store, fees[0].actionGroupId as string)).toBe("SWAP");
+
+    // No orphaned empty TRANSFER group left behind across repeated runs.
+    const transferGroups = Array.from(store.actionGroups.values()).filter(
+      (group) => group.actionType === "TRANSFER",
+    );
+    expect(transferGroups).toHaveLength(0);
+  });
+});
 
 describe("legacy pre-PR fee identity compatibility", () => {
   it("regression: a legacy STAKING fee already exists, then TRANSFERS is rebuilt — exactly one economic fee, still STAKING-owned", async () => {
