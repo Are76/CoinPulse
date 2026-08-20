@@ -113,6 +113,75 @@ type LedgerStoreClient = {
     deleteEntries(args: { ids: readonly string[] }): Promise<{ count: number }>;
     deleteActionGroups(args: { ids: readonly string[] }): Promise<{ count: number }>;
   };
+  /**
+   * Entirely separate, fully optional capability used only by
+   * resolveCanonicalFeeOwnership's caller (persistNormalizedLedgerBatch) to
+   * remove a source LedgerActionGroup that resolveCanonicalFeeOwnership's own
+   * FEE re-homing left with zero LedgerEntry rows (e.g. a generic TRANSFER
+   * group whose only entry was its native-gas FEE, once that FEE is re-homed
+   * to a higher-priority SWAP/LP/STAKE group for the same transaction).
+   * Feature-detected exactly like transferShadowReconciliation above: when
+   * the underlying client does not expose ledgerActionGroup.deleteMany, this
+   * is entirely skipped (no orphan cleanup attempted) rather than a
+   * partial/best-effort attempt — narrower test clients that never exercise
+   * this path are unaffected.
+   *
+   * Deliberately a single conditional DELETE, not a count-then-delete pair: a
+   * separate "count remaining entries" read followed by a later unconditional
+   * delete would leave a window between the two round trips where a
+   * concurrent transaction could commit a brand-new LedgerEntry into a
+   * candidate group that the earlier count already observed as empty, and —
+   * since LedgerEntry.actionGroup is onDelete: Cascade (prisma/schema.prisma)
+   * — a delete that trusted that stale count would cascade away the
+   * newly-committed, legitimate entry along with its now-condemned parent
+   * group. Folding the check into the DELETE's own WHERE clause (the
+   * `entries: { none: {} }` relation filter, compiled to a
+   * `NOT EXISTS (SELECT 1 FROM "LedgerEntry" WHERE "actionGroupId" = ...)`
+   * subquery) closes that specific TOCTOU gap between our own read and our
+   * own write.
+   *
+   * The remaining question is a genuinely concurrent transaction whose own
+   * INSERT/UPDATE into LedgerEntry (referencing one of these same candidate
+   * groups) is still in flight — not yet committed — while this DELETE
+   * executes. That case is settled by PostgreSQL's own foreign-key
+   * enforcement, independent of isolation level and requiring no additional
+   * application-side locking: inserting or re-homing a row that references
+   * LedgerActionGroup.id takes a FOR KEY SHARE lock on that referenced parent
+   * row for the duration of the referencing transaction (this is the
+   * documented purpose of FOR KEY SHARE — see the PostgreSQL "Explicit
+   * Locking" chapter — guarding a referenced row against concurrent deletion
+   * or key changes while a foreign-key check against it is pending). That
+   * lock conflicts with the row lock this DELETE needs on the same parent
+   * row, so exactly one of two outcomes is possible, never a silent
+   * cascade of the other transaction's row:
+   *   - The other transaction's FK-check lock is taken first and it later
+   *     commits: this DELETE blocks on that row, then re-evaluates its WHERE
+   *     clause against the now-committed data once unblocked (PostgreSQL's
+   *     standard read-committed re-check for a concurrently-locked row) —
+   *     the relation filter now sees the new entry and excludes the group.
+   *   - This DELETE's lock is taken first and it commits: the other
+   *     transaction's still-pending FK check then fails with a foreign-key
+   *     violation against the now-deleted parent, exactly as inserting any
+   *     row against a nonexistent parent id would — an ordinary constraint
+   *     conflict for that writer to handle/retry, not data loss.
+   * Either way, a legitimate LedgerEntry can never be cascade-deleted by this
+   * cleanup. This guarantee is PostgreSQL's own referential-integrity
+   * behavior and cannot be exercised by an in-memory test double — the
+   * in-memory regression coverage below proves this capability is invoked
+   * with the correct candidate scoping and is never bypassed by a stale
+   * earlier read, not the underlying database engine's locking semantics.
+   */
+  feeReassignmentCleanup?: {
+    // Deletes only the given candidate LedgerActionGroup ids that have zero
+    // related LedgerEntry rows according to the DELETE statement's own
+    // relation-filter evaluation — one conditional DELETE, not a separate
+    // prior read followed by an unconditional one. See the guarantee this
+    // relies on (PostgreSQL foreign-key row locking) in the doc comment
+    // above.
+    deleteEmptyActionGroups(args: {
+      candidateActionGroupIds: readonly string[];
+    }): Promise<{ count: number }>;
+  };
   $transaction?<T>(callback: (client: LedgerStoreClient) => Promise<T>): Promise<T>;
 };
 
@@ -195,6 +264,7 @@ export function wrapPrismaClientAsLedgerStore(
     typeof db.ledgerActionGroup.deleteMany === "function" &&
     typeof db.ledgerEntry.deleteMany === "function" &&
     typeof db.rawTokenTransfer?.findMany === "function";
+  const canCleanupOrphanedFeeSourceGroups = typeof db.ledgerActionGroup.deleteMany === "function";
 
   return {
     ledgerActionGroup: db.ledgerActionGroup as never,
@@ -239,6 +309,23 @@ export function wrapPrismaClientAsLedgerStore(
           },
           async deleteActionGroups(args) {
             return db.ledgerActionGroup.deleteMany!({ where: { id: { in: [...args.ids] } } });
+          },
+        }
+      : undefined,
+    feeReassignmentCleanup: canCleanupOrphanedFeeSourceGroups
+      ? {
+          // A single DELETE ... WHERE id IN (candidates) AND entries: none {}
+          // — the "no related LedgerEntry rows" condition is evaluated by
+          // Postgres as part of executing this one statement, not read
+          // separately beforehand. See the LedgerStoreClient type doc above
+          // for why a prior separate count would be unsafe.
+          async deleteEmptyActionGroups(args) {
+            return db.ledgerActionGroup.deleteMany!({
+              where: {
+                id: { in: [...args.candidateActionGroupIds] },
+                entries: { none: {} },
+              },
+            });
           },
         }
       : undefined,
@@ -432,7 +519,11 @@ function selectCanonicalFeeDrafts(
  *     re-home the persisted row in place (only its actionGroupId — never
  *     its id, dedupeKey, quantity, or asset) to the winning action group,
  *     and drop the in-batch draft (the canonical row already exists under
- *     the correct identity, nothing new needs inserting).
+ *     the correct identity, nothing new needs inserting). The persisted
+ *     row's PRE-reassignment actionGroupId is carried on the plan as
+ *     `previousActionGroupId` so the caller can later check whether that
+ *     source group has been left with zero entries and, if so, remove it —
+ *     see the orphan-cleanup step in persistNormalizedLedgerBatch.
  *
  * This never deletes raw evidence, never touches a non-FEE entry, and never
  * reads outside the exact transactions present in this batch.
@@ -440,7 +531,7 @@ function selectCanonicalFeeDrafts(
 async function resolveCanonicalFeeOwnership(
   entries: Map<string, CanonicalLedgerEntryDraft & { actionGroupId: string; id: string }>,
   client: LedgerStoreClient,
-): Promise<Array<{ id: string; actionGroupId: string }>> {
+): Promise<Array<{ id: string; actionGroupId: string; previousActionGroupId: string }>> {
   const feeCandidates = Array.from(entries.entries()).filter(
     ([, entry]) => entry.entryType === "FEE",
   );
@@ -481,7 +572,11 @@ async function resolveCanonicalFeeOwnership(
     }
   }
 
-  const reassignments: Array<{ id: string; actionGroupId: string }> = [];
+  const reassignments: Array<{
+    id: string;
+    actionGroupId: string;
+    previousActionGroupId: string;
+  }> = [];
 
   for (const [entryIdentity, entry] of feeCandidates) {
     const existing = bestExistingByTx.get(feeTxIdentityKey(entry));
@@ -494,7 +589,11 @@ async function resolveCanonicalFeeOwnership(
       continue;
     }
 
-    reassignments.push({ id: existing.id, actionGroupId: entry.actionGroupId });
+    reassignments.push({
+      id: existing.id,
+      actionGroupId: entry.actionGroupId,
+      previousActionGroupId: existing.actionGroupId,
+    });
     entries.delete(entryIdentity);
   }
 
@@ -821,6 +920,36 @@ async function persistNormalizedLedgerBatch(
     })),
     skipDuplicates: true,
   });
+
+  // Remove any source LedgerActionGroup that resolveCanonicalFeeOwnership's
+  // re-homing above left with zero LedgerEntry rows (e.g. a generic
+  // TRANSFER group whose only entry was its native-gas FEE, now re-homed to
+  // a higher-priority SWAP/LP/STAKE group for the same transaction). Scoped
+  // only to the exact groups the reassignments above moved a FEE out of, and
+  // deleted via one conditional DELETE (feeReassignmentCleanup.deleteEmptyActionGroups)
+  // whose own WHERE clause re-checks emptiness rather than trusting a prior
+  // read — see that capability's doc comment on LedgerStoreClient for the
+  // full guarantee, including why a genuinely concurrent, still-uncommitted
+  // writer targeting the same candidate group cannot result in a legitimate
+  // entry being silently cascade-deleted (PostgreSQL's FK-referenced-row
+  // locking, not application code, is what settles that case). Runs after
+  // both the reassignment updates and the new-entry inserts above, inside
+  // the same transaction.
+  if (reassignments.length > 0 && client.feeReassignmentCleanup) {
+    const candidateActionGroupIds = Array.from(
+      new Set(
+        reassignments
+          .map((reassignment) => reassignment.previousActionGroupId)
+          .filter((groupId) => !referencedActionGroupIds.has(groupId)),
+      ),
+    );
+
+    if (candidateActionGroupIds.length > 0) {
+      await client.feeReassignmentCleanup.deleteEmptyActionGroups({
+        candidateActionGroupIds,
+      });
+    }
+  }
 
   return {
     actionGroupCount: createdActionGroups.count,

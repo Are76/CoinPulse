@@ -8,6 +8,7 @@ import { toCanonicalQuantity } from "@/services/normalization/types";
 import {
   buildDeterministicLedgerEntryId,
   persistNormalizedLedger,
+  wrapPrismaClientAsLedgerStore,
 } from "@/services/sync/ledger-store";
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 
@@ -119,27 +120,58 @@ function createPersistentLedgerStoreClient() {
   const actionGroups = new Map<string, Record<string, unknown>>();
   const entries = new Map<string, Record<string, unknown>>();
 
-  return {
-    client: {
-      ledgerActionGroup: {
-        createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
-          let count = 0;
-          for (const row of data) {
-            const id = row.id as string;
-            if (!actionGroups.has(id)) {
-              actionGroups.set(id, row);
-              count += 1;
+  const rawDb = {
+    ledgerActionGroup: {
+      createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
+        let count = 0;
+        for (const row of data) {
+          const id = row.id as string;
+          if (!actionGroups.has(id)) {
+            actionGroups.set(id, row);
+            count += 1;
+          }
+        }
+        return { count };
+      },
+      findMany: async ({ where }: { where: { id: { in: string[] } } }) => {
+        return Array.from(actionGroups.values())
+          .filter((row) => where.id.in.includes(row.id as string))
+          .map((row) => ({ id: row.id as string, actionType: row.actionType as string }));
+      },
+      // Honors the exact relation-filter shape wrapPrismaClientAsLedgerStore's
+      // feeReassignmentCleanup.deleteEmptyActionGroups issues in production
+      // (`entries: { none: {} }`), so this test store exercises the real
+      // adapter code — not just a hand-rolled approximation of it — and
+      // cascades child LedgerEntry deletion the same way
+      // onDelete: Cascade does on the real LedgerEntry.actionGroup relation.
+      deleteMany: async ({
+        where,
+      }: {
+        where: { id: { in: string[] }; entries?: { none: Record<string, never> } };
+      }) => {
+        let count = 0;
+        for (const id of where.id.in) {
+          if (where.entries?.none) {
+            const hasEntries = Array.from(entries.values()).some(
+              (row) => row.actionGroupId === id,
+            );
+            if (hasEntries) {
+              continue;
             }
           }
-          return { count };
-        },
-        findMany: async ({ where }: { where: { id: { in: string[] } } }) => {
-          return Array.from(actionGroups.values())
-            .filter((row) => where.id.in.includes(row.id as string))
-            .map((row) => ({ id: row.id as string, actionType: row.actionType as string }));
-        },
+          if (actionGroups.delete(id)) {
+            for (const [entryId, row] of entries) {
+              if (row.actionGroupId === id) {
+                entries.delete(entryId);
+              }
+            }
+            count += 1;
+          }
+        }
+        return { count };
       },
-      ledgerEntry: {
+    },
+    ledgerEntry: {
         createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
           let count = 0;
           for (const row of data) {
@@ -213,7 +245,20 @@ function createPersistentLedgerStoreClient() {
           return { count };
         },
       },
-    },
+  };
+
+  // Routes through the real wrapPrismaClientAsLedgerStore adapter rather
+  // than hand-rolling a feeReassignmentCleanup double, so these tests
+  // exercise the exact production code that constructs the
+  // `entries: { none: {} }` conditional delete — not just an approximation
+  // of its intended behavior. rawDb has no rawTokenTransfer, so
+  // transferShadowReconciliation stays disabled (unused by these tests) and
+  // no $transaction, so persistNormalizedLedger runs directly against this
+  // client without opening one, exactly as before this change.
+  const client = wrapPrismaClientAsLedgerStore(rawDb as never);
+
+  return {
+    client,
     actionGroups,
     entries,
   };
@@ -619,6 +664,187 @@ function seedLegacyFee(
   });
   return { id, dedupeKey };
 }
+
+describe("orphaned action-group cleanup after fee reassignment", () => {
+  it("deletes the old TRANSFER group once its only entry (the FEE) is re-homed to a higher-priority SWAP group", async () => {
+    const store = createPersistentLedgerStoreClient();
+    const swapTx = "0xswap0000000000000000000000000000000000000000000000000000000003";
+
+    await persistNormalizedLedger(buildNativeTransactionDrafts({ txHash: swapTx }), store.client);
+
+    const feesBefore = feeRows(store.entries);
+    expect(feesBefore).toHaveLength(1);
+    const transferGroupId = feesBefore[0].actionGroupId as string;
+    expect(actionTypeOf(store, transferGroupId)).toBe("TRANSFER");
+    expect(store.actionGroups.has(transferGroupId)).toBe(true);
+
+    await persistNormalizedLedger(
+      buildSwapDrafts({ txHash: swapTx, logIndex: 12 }),
+      store.client,
+    );
+
+    // The old TRANSFER group had exactly one entry (the FEE); once that FEE
+    // is re-homed to SWAP, the TRANSFER group has zero entries and must be
+    // removed rather than left as a permanent orphan.
+    expect(store.actionGroups.has(transferGroupId)).toBe(false);
+
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    const swapGroupId = fees[0].actionGroupId as string;
+    expect(actionTypeOf(store, swapGroupId)).toBe("SWAP");
+
+    const swapGroupEntryTypes = Array.from(store.entries.values())
+      .filter((row) => row.actionGroupId === swapGroupId)
+      .map((row) => row.entryType)
+      .sort();
+    expect(swapGroupEntryTypes).toEqual(["FEE", "SWAP_IN", "SWAP_OUT"]);
+  });
+
+  it("does not delete the old TRANSFER group when it still owns a legitimate entry after fee re-homing", async () => {
+    const store = createPersistentLedgerStoreClient();
+    const swapTx = "0xswap0000000000000000000000000000000000000000000000000000000004";
+
+    const transferDrafts = normalizeNativeTransaction({
+      chainId: CHAIN_ID,
+      walletId: WALLET_ID,
+      walletAddress: WALLET_ADDRESS,
+      txHash: swapTx,
+      blockNumber: REGRESSION_BLOCK,
+      fromAddress: WALLET_ADDRESS,
+      toAddress: "0x9999999999999999999999999999999999999999",
+      valueRaw: "1000000000000000000",
+      gasPriceRaw: REGRESSION_GAS_PRICE_RAW,
+      gasUsedRaw: REGRESSION_GAS_USED_RAW,
+      nativeAssetId: NATIVE_ASSET_ID,
+      nativeDecimals: 18,
+      occurredAt: new Date("2026-06-08T00:00:00.000Z"),
+      normalizerVersion: "v1",
+      hasTrackedTokenTransfersInTransaction: false,
+    });
+    expect(transferDrafts.map((draft) => draft.entryType).sort()).toEqual(["FEE", "SEND"]);
+
+    await persistNormalizedLedger(transferDrafts, store.client);
+
+    const feesBefore = feeRows(store.entries);
+    expect(feesBefore).toHaveLength(1);
+    const transferGroupId = feesBefore[0].actionGroupId as string;
+    expect(store.entries.size).toBe(2); // SEND + FEE, same TRANSFER group
+
+    await persistNormalizedLedger(
+      buildSwapDrafts({ txHash: swapTx, logIndex: 12 }),
+      store.client,
+    );
+
+    // The FEE moved to SWAP, but the TRANSFER group's SEND entry survives,
+    // so the TRANSFER group itself must not be deleted.
+    expect(store.actionGroups.has(transferGroupId)).toBe(true);
+    const remainingTransferEntries = Array.from(store.entries.values()).filter(
+      (row) => row.actionGroupId === transferGroupId,
+    );
+    expect(remainingTransferEntries).toHaveLength(1);
+    expect(remainingTransferEntries[0].entryType).toBe("SEND");
+
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    expect(actionTypeOf(store, fees[0].actionGroupId as string)).toBe("SWAP");
+  });
+
+  it("produces no duplicate FEE and no lingering orphan when the same evidence is persisted repeatedly (idempotent)", async () => {
+    const store = createPersistentLedgerStoreClient();
+    const swapTx = "0xswap0000000000000000000000000000000000000000000000000000000005";
+
+    for (let i = 0; i < 3; i += 1) {
+      await persistNormalizedLedger(
+        buildNativeTransactionDrafts({ txHash: swapTx }),
+        store.client,
+      );
+      await persistNormalizedLedger(
+        buildSwapDrafts({ txHash: swapTx, logIndex: 12 }),
+        store.client,
+      );
+    }
+
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    expect(actionTypeOf(store, fees[0].actionGroupId as string)).toBe("SWAP");
+
+    // No orphaned empty TRANSFER group left behind across repeated runs.
+    const transferGroups = Array.from(store.actionGroups.values()).filter(
+      (group) => group.actionType === "TRANSFER",
+    );
+    expect(transferGroups).toHaveLength(0);
+  });
+
+  it("re-checks emptiness at the moment deleteEmptyActionGroups actually runs, not against an earlier observation", async () => {
+    // What this proves: the cleanup step never trusts a previously-cached
+    // "this group looked empty" fact — a write landing in the candidate
+    // group strictly before the (single) deleteEmptyActionGroups call still
+    // correctly excludes that group, because there is no separate prior
+    // count step left to go stale. This is an in-memory, single-threaded
+    // simulation and can only model a write that is already committed by
+    // the time the relation filter evaluates — it cannot exercise real
+    // PostgreSQL MVCC visibility of a genuinely concurrent, still-uncommitted
+    // transaction. That case (an uncommitted writer racing this exact
+    // DELETE) is settled by PostgreSQL's own foreign-key row locking, not by
+    // anything this test can simulate — see the feeReassignmentCleanup doc
+    // comment on LedgerStoreClient in src/services/sync/ledger-store.ts for
+    // that argument in full.
+    const store = createPersistentLedgerStoreClient();
+    const swapTx = "0xswap0000000000000000000000000000000000000000000000000000000006";
+
+    await persistNormalizedLedger(buildNativeTransactionDrafts({ txHash: swapTx }), store.client);
+
+    const feesBefore = feeRows(store.entries);
+    expect(feesBefore).toHaveLength(1);
+    const transferGroupId = feesBefore[0].actionGroupId as string;
+    expect(actionTypeOf(store, transferGroupId)).toBe("TRANSFER");
+
+    // Injects a new, legitimate LedgerEntry into the candidate group
+    // immediately before delegating to the real
+    // feeReassignmentCleanup.deleteEmptyActionGroups (not a stub returning a
+    // canned result) — proving the actual relation-filter check, not an
+    // assumption about it, is what excludes the group.
+    const realDeleteEmptyActionGroups =
+      store.client.feeReassignmentCleanup!.deleteEmptyActionGroups;
+    const concurrentEntryId = "le_concurrent_receive";
+    let concurrentWriteInjected = false;
+    store.client.feeReassignmentCleanup!.deleteEmptyActionGroups = async (args) => {
+      if (!concurrentWriteInjected) {
+        concurrentWriteInjected = true;
+        store.entries.set(concurrentEntryId, {
+          id: concurrentEntryId,
+          chainId: CHAIN_ID,
+          walletId: WALLET_ID,
+          actionGroupId: transferGroupId,
+          txHash: swapTx,
+          entryType: "RECEIVE",
+          assetId: NATIVE_ASSET_ID,
+          quantity: "1",
+          direction: "IN",
+          dedupeKey: "concurrent:receive",
+        });
+      }
+      return realDeleteEmptyActionGroups(args);
+    };
+
+    await persistNormalizedLedger(
+      buildSwapDrafts({ txHash: swapTx, logIndex: 12 }),
+      store.client,
+    );
+
+    // The concurrently-committed entry must survive — no cascade deletion.
+    expect(store.entries.has(concurrentEntryId)).toBe(true);
+    // The TRANSFER group itself must survive too: it was no longer empty at
+    // the moment the atomic delete actually evaluated its condition.
+    expect(store.actionGroups.has(transferGroupId)).toBe(true);
+
+    // The FEE re-homing to SWAP still proceeds correctly, unaffected by the
+    // preserved TRANSFER group.
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    expect(actionTypeOf(store, fees[0].actionGroupId as string)).toBe("SWAP");
+  });
+});
 
 describe("legacy pre-PR fee identity compatibility", () => {
   it("regression: a legacy STAKING fee already exists, then TRANSFERS is rebuilt — exactly one economic fee, still STAKING-owned", async () => {
