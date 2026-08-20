@@ -5,11 +5,15 @@
 
 import { describe, expect, it, vi } from "vitest";
 
+import { PULSECHAIN_FORK_BOUNDARY } from "@/config/chains";
+
 import {
   CHECKPOINT_INTERVAL,
   FIRST_ACTIVITY_BLOCK,
+  FIXED_CURSOR_TO_BLOCK,
   FULL_WINDOW_BLOCKS,
   MAX_WINDOWS_HARD_CAP,
+  ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK,
   ORIGINAL_CURSOR_FROM_BLOCK,
   TOTAL_CAMPAIGN_WINDOWS,
   TRANSFER_BACKFILL_CHAIN_ID,
@@ -28,6 +32,7 @@ import {
   validateAdjacency,
   validateExpectedCursor,
   validateFixedCampaignScope,
+  validateForkBoundary,
   validateNoActiveOperation,
   validateNoPolicyLabelCollision,
   validateRangeSize,
@@ -181,6 +186,22 @@ describe("Window 19 calculation", () => {
   });
 });
 
+// ─── 1b. Window 64 calculation (regression — verified against the live TRANSFERS
+//         cursor for the target wallet during the read-only planning mission) ──
+
+describe("Window 64 calculation", () => {
+  it("computes Window 64 exactly from the live cursor fromBlock 26,634,999, unaffected by the fork-boundary change", () => {
+    const plan = computeWindowPlan({ planningCursorFromBlock: 26_634_999n });
+    if (plan.status !== "next_window") throw new Error("expected next_window");
+    expect(plan.windowNumber).toBe(64);
+    expect(plan.startBlock).toBe(26_633_999n);
+    expect(plan.endBlock).toBe(26_634_998n);
+    expect(plan.policyLabel).toBe("transfer-history-backfill-window-64");
+    expect(plan.isFinalWindow).toBe(false);
+    expect(plan.blockCount).toBe(1000n);
+  });
+});
+
 // ─── 2. Normal 1,000-block adjacency ────────────────────────────────────────────
 
 describe("normal 1,000-block adjacency", () => {
@@ -206,32 +227,50 @@ describe("window numbering and policyLabel generation", () => {
     expect(policyLabelForWindow(42)).toBe("transfer-history-backfill-window-42");
   });
 
-  it("total campaign size is 13,688 windows (13,687 full + 1 partial)", () => {
-    expect(TOTAL_CAMPAIGN_WINDOWS).toBe(13_688);
+  it("total campaign size (ordinary post-fork history only) is 9,465 windows (9,464 full + 1 partial)", () => {
+    // The campaign's real planning floor is ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK
+    // (the PulseChain fork boundary), not the raw FIRST_ACTIVITY_BLOCK — see
+    // the "PulseChain fork boundary" describe block below for why.
+    expect(TOTAL_CAMPAIGN_WINDOWS).toBe(9_465);
     expect(
-      computeTotalWindows({ originalCursorFromBlock: ORIGINAL_CURSOR_FROM_BLOCK, firstActivityBlock: FIRST_ACTIVITY_BLOCK }),
-    ).toBe(13_688);
+      computeTotalWindows({
+        originalCursorFromBlock: ORIGINAL_CURSOR_FROM_BLOCK,
+        firstActivityBlock: ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK,
+      }),
+    ).toBe(9_465);
   });
 });
 
-// ─── 4. Final Window 13,688 partial range ──────────────────────────────────────
+// ─── 4. Final ordinary-history window (Window 9,465) partial range ────────────
 
-describe("final Window 13,688 partial range", () => {
-  it("clamps to FIRST_ACTIVITY_BLOCK and spans 303 blocks", () => {
-    // Live cursor after window 13,687 completed: CURSOR_FROM - 1000*13687 = 13,010,999.
-    const liveCursorFromBlock = ORIGINAL_CURSOR_FROM_BLOCK - FULL_WINDOW_BLOCKS * 13_687n;
-    expect(liveCursorFromBlock).toBe(13_010_999n);
+describe("final ordinary-history Window 9,465 partial range", () => {
+  it("clamps to the PulseChain fork boundary (17,233,000) and spans 999 blocks, never touching 17,232,999", () => {
+    // Live cursor after window 9,464 completed: CURSOR_FROM - 1000*9464 = 17,233,999.
+    const liveCursorFromBlock = ORIGINAL_CURSOR_FROM_BLOCK - FULL_WINDOW_BLOCKS * 9_464n;
+    expect(liveCursorFromBlock).toBe(17_233_999n);
     const plan = computeWindowPlan({ planningCursorFromBlock: liveCursorFromBlock });
     if (plan.status !== "next_window") throw new Error("expected next_window");
-    expect(plan.windowNumber).toBe(13_688);
-    expect(plan.startBlock).toBe(13_010_696n);
-    expect(plan.endBlock).toBe(13_010_998n);
+    expect(plan.windowNumber).toBe(9_465);
+    expect(plan.startBlock).toBe(17_233_000n);
+    expect(plan.startBlock).toBe(ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK);
+    expect(plan.startBlock).toBe(PULSECHAIN_FORK_BOUNDARY.firstPostForkBlock);
+    expect(plan.endBlock).toBe(17_233_998n);
     expect(plan.isFinalWindow).toBe(true);
-    expect(plan.blockCount).toBe(303n);
+    expect(plan.blockCount).toBe(999n);
+    // Never reaches, let alone includes, the last inherited block.
+    expect(plan.startBlock).toBeGreaterThan(PULSECHAIN_FORK_BOUNDARY.lastInheritedBlock);
   });
 
-  it("reports campaign_complete once the cursor reaches FIRST_ACTIVITY_BLOCK", () => {
-    const plan = computeWindowPlan({ planningCursorFromBlock: FIRST_ACTIVITY_BLOCK });
+  it("reports campaign_complete once the cursor reaches the fork boundary, without ever planning inherited history", () => {
+    const plan = computeWindowPlan({ planningCursorFromBlock: ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK });
+    expect(plan.status).toBe("campaign_complete");
+  });
+
+  it("never plans a window anywhere near the raw FIRST_ACTIVITY_BLOCK — reports campaign_complete instead, since that block is itself inherited history", () => {
+    // FIRST_ACTIVITY_BLOCK (13,010,696) is below the fork boundary; the
+    // campaign must already consider itself complete long before reaching
+    // it, never plan a window down there.
+    const plan = computeWindowPlan({ planningCursorFromBlock: FIRST_ACTIVITY_BLOCK + FULL_WINDOW_BLOCKS });
     expect(plan.status).toBe("campaign_complete");
   });
 });
@@ -726,12 +765,127 @@ describe("checkpoint detection after Window 25", () => {
   });
 });
 
-// ─── 13. Final rebuild detection after Window 13,688 ───────────────────────────
+// ─── 13. Final rebuild detection after the last ordinary-history window ───────
 
-describe("final rebuild detection after Window 13,688", () => {
+describe("final rebuild detection (generic pure-function behavior, arbitrary totals)", () => {
   it("is due only at the last window", () => {
     expect(isFinalRebuildDue(13_688, 13_688)).toBe(true);
     expect(isFinalRebuildDue(13_687, 13_688)).toBe(false);
+  });
+
+  it("is due only at the real campaign's last ordinary-history window (9,465), not the old unsafe 13,688 target", () => {
+    expect(isFinalRebuildDue(TOTAL_CAMPAIGN_WINDOWS, TOTAL_CAMPAIGN_WINDOWS)).toBe(true);
+    expect(isFinalRebuildDue(9_465, TOTAL_CAMPAIGN_WINDOWS)).toBe(true);
+    expect(isFinalRebuildDue(9_464, TOTAL_CAMPAIGN_WINDOWS)).toBe(false);
+    expect(isFinalRebuildDue(13_688, TOTAL_CAMPAIGN_WINDOWS)).toBe(false);
+  });
+});
+
+// ─── 13b. PulseChain fork boundary — mechanical hard stop ──────────────────────
+//
+// docs/pulsechain-fork-state-policy.md §6/§14: the ordinary TRANSFERS
+// campaign must never plan or execute a window touching
+// ETHEREUM_INHERITED_HISTORY (blockNumber <= lastInheritedBlock, 17,232,999).
+// These tests prove the guarantee behaviorally — at the planning function,
+// at the standalone gate, and end-to-end through the orchestrator in both
+// dry-run and execute mode — not merely by asserting constants.
+
+describe("PulseChain fork boundary — constants", () => {
+  it("ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK reuses the canonical Tier 1-verified fork constant, not an independent magic number", () => {
+    expect(ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK).toBe(PULSECHAIN_FORK_BOUNDARY.firstPostForkBlock);
+    expect(ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK).toBe(17_233_000n);
+  });
+
+  it("the raw wallet FIRST_ACTIVITY_BLOCK sits below the fork boundary and is never used directly as the planning floor", () => {
+    expect(FIRST_ACTIVITY_BLOCK).toBeLessThan(PULSECHAIN_FORK_BOUNDARY.firstPostForkBlock);
+    expect(ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK).not.toBe(FIRST_ACTIVITY_BLOCK);
+  });
+});
+
+describe("PulseChain fork boundary — validateForkBoundary gate", () => {
+  it("(B) accepts a proposed window whose startBlock is at or above firstPostForkBlock", () => {
+    expect(validateForkBoundary({ startBlock: PULSECHAIN_FORK_BOUNDARY.firstPostForkBlock }).ok).toBe(true);
+    expect(validateForkBoundary({ startBlock: 17_233_500n }).ok).toBe(true);
+    expect(validateForkBoundary({ startBlock: 26_633_999n }).ok).toBe(true); // Window 64's startBlock
+  });
+
+  it("(D) rejects a proposed window whose startBlock is exactly the last inherited block", () => {
+    const result = validateForkBoundary({ startBlock: PULSECHAIN_FORK_BOUNDARY.lastInheritedBlock });
+    expect(result.ok).toBe(false);
+  });
+
+  it("(D) rejects a proposed window whose startBlock is below the last inherited block", () => {
+    const result = validateForkBoundary({ startBlock: 15_353_156n }); // the pre-fork stake block
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("PulseChain fork boundary — computeWindowPlan never crosses it", () => {
+  it("(D) no window planned across the full range down to the boundary ever includes lastInheritedBlock or below", () => {
+    let liveCursorFromBlock = ORIGINAL_CURSOR_FROM_BLOCK;
+    let iterations = 0;
+    for (;;) {
+      const plan = computeWindowPlan({ planningCursorFromBlock: liveCursorFromBlock });
+      if (plan.status === "campaign_complete") break;
+      if (plan.status !== "next_window") throw new Error(`unexpected status: ${plan.status}`);
+      expect(plan.startBlock).toBeGreaterThan(PULSECHAIN_FORK_BOUNDARY.lastInheritedBlock);
+      expect(validateForkBoundary({ startBlock: plan.startBlock }).ok).toBe(true);
+      liveCursorFromBlock = plan.startBlock;
+      iterations += 1;
+      if (iterations > TOTAL_CAMPAIGN_WINDOWS + 1) {
+        throw new Error("campaign did not terminate — possible infinite loop");
+      }
+    }
+    expect(iterations).toBe(TOTAL_CAMPAIGN_WINDOWS);
+  });
+});
+
+describe("PulseChain fork boundary — orchestrator end-to-end", () => {
+  it("(E) execute mode: a live cursor already at the fork boundary reports campaign_complete and never POSTs", async () => {
+    const db = makeFakeDb({ cursor: { fromBlock: ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK, toBlock: FIXED_CURSOR_TO_BLOCK } });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+    const summary = await runTransferBackfillRunner(baseRunnerOptions({ execute: true }), deps);
+    expect(summary.stoppedReason).toBe("campaign_complete");
+    expect(summary.windowsCompleted).toBe(0);
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("(F) dry-run mode: a live cursor already at the fork boundary reports campaign_complete and never POSTs or writes a planned-window evidence record", async () => {
+    const db = makeFakeDb({ cursor: { fromBlock: ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK, toBlock: FIXED_CURSOR_TO_BLOCK } });
+    const { deps, evidence, httpPostCalls } = makeFakeDeps({ db });
+    const summary = await runTransferBackfillRunner(baseRunnerOptions({ execute: false }), deps);
+    expect(summary.stoppedReason).toBe("campaign_complete");
+    expect(httpPostCalls).toHaveLength(0);
+    expect(evidence.some((e) => e.kind === "window")).toBe(false);
+  });
+
+  it("(G) execute mode: the last legal ordinary-history window (9,465) is planned and would submit with a startBlock that passes validateForkBoundary", async () => {
+    // One window above the boundary: live cursor at 17,233,999 plans Window
+    // 9,465 with startBlock 17,233,000 — legal. Confirms execute-mode
+    // planning (not just dry-run) is subject to the same gate.
+    const db = makeFakeDb({ cursor: { fromBlock: 17_233_999n, toBlock: FIXED_CURSOR_TO_BLOCK } });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+    await runTransferBackfillRunner(baseRunnerOptions({ execute: true }), deps);
+    expect(httpPostCalls).toHaveLength(1);
+    const body = httpPostCalls[0].body as { startBlock: string; endBlock: string };
+    expect(body.startBlock).toBe("17233000");
+    expect(body.endBlock).toBe("17233998");
+    expect(validateForkBoundary({ startBlock: BigInt(body.startBlock) }).ok).toBe(true);
+  });
+
+  it("(H) cursor adjacency semantics are unchanged: a disconnected window is still rejected before any boundary concern applies", () => {
+    const result = validateAdjacency({ planningCursorFromBlock: 26_679_999n, proposedEndBlock: 26_678_000n });
+    expect(result.ok).toBe(false);
+  });
+
+  it("(I) max-window semantics are unchanged: the hard cap is still 25", () => {
+    expect(MAX_WINDOWS_HARD_CAP).toBe(25);
+  });
+
+  it("(J) checkpoint cadence is unchanged: still every 25 windows", () => {
+    expect(CHECKPOINT_INTERVAL).toBe(25);
+    expect(isCheckpointDue(25)).toBe(true);
+    expect(isCheckpointDue(50)).toBe(true);
   });
 });
 

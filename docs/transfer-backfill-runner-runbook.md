@@ -138,10 +138,33 @@ deterministic IDs), so either the window is still `PENDING`/`RUNNING` (the
 active-operation gate stops you until it resolves) or it reached a terminal
 state that the next dry-run will reveal via the cursor position.
 
+## PulseChain fork boundary (hard stop)
+
+The ordinary TRANSFERS campaign this runner drives may never plan or submit a
+window that touches Ethereum-inherited history. The Tier 1-verified boundary
+(`docs/pulsechain-fork-state-policy.md` §6.1, `PULSECHAIN_FORK_BOUNDARY` in
+`src/config/chains.ts`) is:
+
+- `lastInheritedBlock = 17,232,999` — the highest block that is copied
+  Ethereum history, not PulseChain-native state.
+- `firstPostForkBlock = 17,233,000` — the lowest block eligible for ordinary
+  PulseChain TRANSFERS backfill.
+
+The runner enforces this mechanically, at planning time, in both dry-run and
+execute mode — not merely as a check immediately before the HTTP POST. The
+campaign's effective floor (`ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK`) is
+`17,233,000`, not the wallet's raw first-activity block
+(`FIRST_ACTIVITY_BLOCK = 13,010,696`, which predates the fork). The final
+ordinary window is a partial window ending exactly at `17,233,000`; the
+campaign reports `campaign_complete` once the cursor reaches that floor.
+Reaching Ethereum-inherited history (fork-opening state, cost basis,
+provenance backfill) is a separate, not-yet-implemented architecture problem
+and is never authorized by this tool.
+
 ## Checkpoint and final rebuild behavior
 
 A rebuild is due after every 25 completed windows (checkpoint) and once more
-after the final window (13,688). By default the runner **stops** the moment
+after the final ordinary-history window. By default the runner **stops** the moment
 a rebuild becomes due (`stopped_before_checkpoint_rebuild` /
 `stopped_before_final_rebuild`) without submitting it. To let the runner also
 submit that rebuild in the same invocation:
@@ -181,8 +204,9 @@ are ever written — verified by unit tests.
 | `decimal_capability_check_failed` | The live codebase's raw read-back no longer serializes large Decimal columns as fixed-point strings. Do not proceed; this is the exact defect PR #330/#331 fixed. |
 | `wallet_not_found` | The campaign wallet is not a tracked wallet on the target server. |
 | `no_transfers_cursor` | No TRANSFERS `SyncCursor` exists yet (Case B / ascending is out of scope for this runner). |
-| `campaign_complete` | Live cursor has reached `FIRST_ACTIVITY_BLOCK`; no more windows to run. |
+| `campaign_complete` | Live cursor has reached `ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK` (the PulseChain fork boundary's `firstPostForkBlock`, `17,233,000`); no more ordinary-history windows to run. |
 | `misaligned_cursor` | Live cursor is not on the 1,000-block campaign grid, or is above the original cursor. Needs manual investigation — do not guess a correction. |
+| `fork_boundary_violation` | A planned window's `startBlock` classifies as anything other than `PULSECHAIN_POST_FORK` (i.e. it would touch Ethereum-inherited history). Should be unreachable in normal operation — the planning floor already prevents it — this is a defense-in-depth check, not the primary mechanism. |
 | `cursor_expectation_mismatch` | `--expected-cursor-from` did not match the live cursor. |
 | `active_operation_conflict` | A `PENDING`/`RUNNING` SyncRun already exists. |
 | `policy_label_collision` | A SyncRun with the computed policyLabel already exists. |
