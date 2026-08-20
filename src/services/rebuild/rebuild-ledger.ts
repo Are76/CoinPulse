@@ -254,6 +254,16 @@ export async function rebuildCanonicalLedger(args: {
       ),
     ),
   );
+  // `client` here is ALWAYS already the transaction this function's own
+  // caller opened below (the outer db.$transaction(run, ...), or `db`
+  // itself in the no-transaction-support fallback) — never a plain
+  // transaction-capable top-level client. Both calls below must execute
+  // directly against it rather than opening a second transaction: Prisma's
+  // real interactive-transaction client still exposes a bound $transaction
+  // method, and calling it while already inside a transaction corrupts that
+  // engine's transaction bookkeeping for the NEXT unrelated top-level
+  // db.$transaction(...) call in this process (see the ownership-flag docs
+  // on deleteScopedLedgerEntries / wrapPrismaClientAsLedgerStore).
   const run = async (client: RebuildDbClient) => {
     const deleted = await deleteScopedLedgerEntries(
       {
@@ -266,10 +276,13 @@ export async function rebuildCanonicalLedger(args: {
         occurredAtRange: inferOccurredAtRange(timestampByBlockKey),
       },
       client,
+      { alreadyInTransaction: true },
     );
     const persisted = await persistNormalizedLedger(
       drafts,
-      wrapPrismaClientAsLedgerStore(client as unknown as PrismaLikeClient),
+      wrapPrismaClientAsLedgerStore(client as unknown as PrismaLikeClient, {
+        ownsTransaction: false,
+      }),
     );
 
     return { deleted, persisted };
