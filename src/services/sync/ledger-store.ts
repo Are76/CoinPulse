@@ -125,16 +125,29 @@ type LedgerStoreClient = {
    * is entirely skipped (no orphan cleanup attempted) rather than a
    * partial/best-effort attempt — narrower test clients that never exercise
    * this path are unaffected.
+   *
+   * Deliberately a single atomic operation, not a count-then-delete pair: a
+   * separate "count remaining entries" read followed by a later unconditional
+   * delete leaves a window between the two round trips where a concurrent
+   * transaction can commit a brand-new LedgerEntry into a candidate group
+   * that the count already observed as empty. Because
+   * LedgerEntry.actionGroup is onDelete: Cascade (prisma/schema.prisma), a
+   * delete that trusts a stale zero-count would cascade away that
+   * newly-committed, legitimate entry along with its now-condemned parent
+   * group. deleteEmptyActionGroups instead re-checks emptiness as part of the
+   * same DELETE statement that removes the row (via the entries relation
+   * filter), so the only entries state that can ever matter is whatever is
+   * true at the moment of deletion itself.
    */
   feeReassignmentCleanup?: {
-    // Counts current LedgerEntry rows per requested actionGroupId. A group
-    // absent from the returned array has zero remaining entries — the caller
-    // must not assume presence implies non-zero, only that an entry map
-    // omission means "no rows found for this id in this read."
-    countRemainingEntries(args: {
-      actionGroupIds: readonly string[];
-    }): Promise<Array<{ actionGroupId: string; count: number }>>;
-    deleteActionGroups(args: { ids: readonly string[] }): Promise<{ count: number }>;
+    // Deletes only the given candidate LedgerActionGroup ids that have zero
+    // related LedgerEntry rows at the exact moment the delete executes — one
+    // conditional DELETE, not a separate prior read. A candidate id that
+    // gained an entry before this call (from this batch or a concurrent one)
+    // is left untouched, along with that entry.
+    deleteEmptyActionGroups(args: {
+      candidateActionGroupIds: readonly string[];
+    }): Promise<{ count: number }>;
   };
   $transaction?<T>(callback: (client: LedgerStoreClient) => Promise<T>): Promise<T>;
 };
@@ -268,19 +281,18 @@ export function wrapPrismaClientAsLedgerStore(
       : undefined,
     feeReassignmentCleanup: canCleanupOrphanedFeeSourceGroups
       ? {
-          async countRemainingEntries(args) {
-            const rows = (await db.ledgerEntry.findMany({
-              where: { actionGroupId: { in: [...args.actionGroupIds] } },
-              select: { id: true, actionGroupId: true },
-            })) as Array<{ actionGroupId: string }>;
-            const counts = new Map<string, number>();
-            for (const row of rows) {
-              counts.set(row.actionGroupId, (counts.get(row.actionGroupId) ?? 0) + 1);
-            }
-            return Array.from(counts, ([actionGroupId, count]) => ({ actionGroupId, count }));
-          },
-          async deleteActionGroups(args) {
-            return db.ledgerActionGroup.deleteMany!({ where: { id: { in: [...args.ids] } } });
+          // A single DELETE ... WHERE id IN (candidates) AND entries: none {}
+          // — the "no related LedgerEntry rows" condition is evaluated by
+          // Postgres as part of executing this one statement, not read
+          // separately beforehand. See the LedgerStoreClient type doc above
+          // for why a prior separate count would be unsafe.
+          async deleteEmptyActionGroups(args) {
+            return db.ledgerActionGroup.deleteMany!({
+              where: {
+                id: { in: [...args.candidateActionGroupIds] },
+                entries: { none: {} },
+              },
+            });
           },
         }
       : undefined,
@@ -879,15 +891,22 @@ async function persistNormalizedLedgerBatch(
   // Remove any source LedgerActionGroup that resolveCanonicalFeeOwnership's
   // re-homing above left with zero LedgerEntry rows (e.g. a generic
   // TRANSFER group whose only entry was its native-gas FEE, now re-homed to
-  // a higher-priority SWAP/LP/STAKE group for the same transaction). Checked
-  // only against the exact groups the reassignments above moved a FEE out
-  // of, and only deleted when a fresh count proves zero remaining entries —
-  // a group with any surviving sibling entry (e.g. a legitimate SEND/RECEIVE
-  // that shared the same group) is left untouched. Runs after both the
-  // reassignment updates and the new-entry inserts above, inside the same
-  // transaction, so the count reflects this batch's complete effect.
+  // a higher-priority SWAP/LP/STAKE group for the same transaction). Scoped
+  // only to the exact groups the reassignments above moved a FEE out of.
+  // Deliberately a single atomic conditional delete
+  // (feeReassignmentCleanup.deleteEmptyActionGroups), not a prior count
+  // followed by an unconditional delete: a separate count read would leave a
+  // window for a concurrent transaction to commit a new, legitimate entry
+  // into a candidate group between the count and the delete, which — since
+  // LedgerEntry.actionGroup is onDelete: Cascade — would silently
+  // cascade-delete that entry along with the group. The emptiness check here
+  // is re-evaluated as part of the delete statement itself, so a group that
+  // gained any entry (a surviving sibling from this batch, or a concurrent
+  // write) by the time the delete actually runs is left untouched. Runs
+  // after both the reassignment updates and the new-entry inserts above,
+  // inside the same transaction.
   if (reassignments.length > 0 && client.feeReassignmentCleanup) {
-    const previousActionGroupIds = Array.from(
+    const candidateActionGroupIds = Array.from(
       new Set(
         reassignments
           .map((reassignment) => reassignment.previousActionGroupId)
@@ -895,20 +914,10 @@ async function persistNormalizedLedgerBatch(
       ),
     );
 
-    if (previousActionGroupIds.length > 0) {
-      const remaining = await client.feeReassignmentCleanup.countRemainingEntries({
-        actionGroupIds: previousActionGroupIds,
+    if (candidateActionGroupIds.length > 0) {
+      await client.feeReassignmentCleanup.deleteEmptyActionGroups({
+        candidateActionGroupIds,
       });
-      const remainingCountByGroupId = new Map(
-        remaining.map((row) => [row.actionGroupId, row.count]),
-      );
-      const emptyActionGroupIds = previousActionGroupIds.filter(
-        (groupId) => (remainingCountByGroupId.get(groupId) ?? 0) === 0,
-      );
-
-      if (emptyActionGroupIds.length > 0) {
-        await client.feeReassignmentCleanup.deleteActionGroups({ ids: emptyActionGroupIds });
-      }
     }
   }
 

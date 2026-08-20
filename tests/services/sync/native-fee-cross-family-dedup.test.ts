@@ -223,25 +223,25 @@ function createPersistentLedgerStoreClient() {
         },
       },
       // Mirrors wrapPrismaClientAsLedgerStore's production
-      // feeReassignmentCleanup capability: counts current LedgerEntry rows
-      // per requested actionGroupId (a group absent from the result has zero
-      // rows), and deletes only the LedgerActionGroup ids the caller proves
-      // empty.
+      // feeReassignmentCleanup capability: a single atomic operation that
+      // re-checks "zero related LedgerEntry rows" against the CURRENT
+      // entries map at the moment it runs (as Postgres would re-evaluate the
+      // entries: { none: {} } relation filter as part of executing one
+      // DELETE statement), never against an earlier, possibly-stale
+      // observation. A candidate id with any matching entry at this exact
+      // moment — including one that only just appeared — is left alone.
       feeReassignmentCleanup: {
-        countRemainingEntries: async ({ actionGroupIds }: { actionGroupIds: string[] }) => {
-          const counts = new Map<string, number>();
-          for (const row of entries.values()) {
-            const groupId = row.actionGroupId as string;
-            if (actionGroupIds.includes(groupId)) {
-              counts.set(groupId, (counts.get(groupId) ?? 0) + 1);
-            }
-          }
-          return Array.from(counts, ([actionGroupId, count]) => ({ actionGroupId, count }));
-        },
-        deleteActionGroups: async ({ ids }: { ids: string[] }) => {
+        deleteEmptyActionGroups: async ({
+          candidateActionGroupIds,
+        }: {
+          candidateActionGroupIds: string[];
+        }) => {
           let count = 0;
-          for (const id of ids) {
-            if (actionGroups.delete(id)) {
+          for (const groupId of candidateActionGroupIds) {
+            const hasAnyEntry = Array.from(entries.values()).some(
+              (row) => row.actionGroupId === groupId,
+            );
+            if (!hasAnyEntry && actionGroups.delete(groupId)) {
               count += 1;
             }
           }
@@ -763,6 +763,67 @@ describe("orphaned action-group cleanup after fee reassignment", () => {
       (group) => group.actionType === "TRANSFER",
     );
     expect(transferGroups).toHaveLength(0);
+  });
+
+  it("does not cascade-delete a legitimate entry that lands in a candidate group concurrently, right before the cleanup delete runs", async () => {
+    const store = createPersistentLedgerStoreClient();
+    const swapTx = "0xswap0000000000000000000000000000000000000000000000000000000006";
+
+    await persistNormalizedLedger(buildNativeTransactionDrafts({ txHash: swapTx }), store.client);
+
+    const feesBefore = feeRows(store.entries);
+    expect(feesBefore).toHaveLength(1);
+    const transferGroupId = feesBefore[0].actionGroupId as string;
+    expect(actionTypeOf(store, transferGroupId)).toBe("TRANSFER");
+
+    // Simulate a concurrent transaction: right as the cleanup step's atomic
+    // delete is about to evaluate its "zero related entries" condition for
+    // this exact candidate group, another writer commits a brand-new,
+    // legitimate LedgerEntry into it — the same interleaving CodeRabbit
+    // flagged against a prior count-then-delete design, where the count
+    // would have already observed zero before this insert landed. This
+    // wraps the client's real feeReassignmentCleanup.deleteEmptyActionGroups
+    // (not a stub returning a canned result) so the test exercises the
+    // actual conditional-delete semantics under the interleaving.
+    const realDeleteEmptyActionGroups =
+      store.client.feeReassignmentCleanup.deleteEmptyActionGroups;
+    const concurrentEntryId = "le_concurrent_receive";
+    let concurrentWriteInjected = false;
+    store.client.feeReassignmentCleanup.deleteEmptyActionGroups = async (args) => {
+      if (!concurrentWriteInjected) {
+        concurrentWriteInjected = true;
+        store.entries.set(concurrentEntryId, {
+          id: concurrentEntryId,
+          chainId: CHAIN_ID,
+          walletId: WALLET_ID,
+          actionGroupId: transferGroupId,
+          txHash: swapTx,
+          entryType: "RECEIVE",
+          assetId: NATIVE_ASSET_ID,
+          quantity: "1",
+          direction: "IN",
+          dedupeKey: "concurrent:receive",
+        });
+      }
+      return realDeleteEmptyActionGroups(args);
+    };
+
+    await persistNormalizedLedger(
+      buildSwapDrafts({ txHash: swapTx, logIndex: 12 }),
+      store.client,
+    );
+
+    // The concurrently-committed entry must survive — no cascade deletion.
+    expect(store.entries.has(concurrentEntryId)).toBe(true);
+    // The TRANSFER group itself must survive too: it was no longer empty at
+    // the moment the atomic delete actually evaluated its condition.
+    expect(store.actionGroups.has(transferGroupId)).toBe(true);
+
+    // The FEE re-homing to SWAP still proceeds correctly, unaffected by the
+    // preserved TRANSFER group.
+    const fees = feeRows(store.entries);
+    expect(fees).toHaveLength(1);
+    expect(actionTypeOf(store, fees[0].actionGroupId as string)).toBe("SWAP");
   });
 });
 
