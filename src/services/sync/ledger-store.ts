@@ -169,8 +169,28 @@ export const LEDGER_PERSIST_TRANSACTION_OPTIONS = {
  * transferShadowReconciliation, so persistNormalizedLedger's own
  * feature-detection (see reconcileConsumedTransferShadows) skips
  * reconciliation entirely rather than crashing on a missing method.
+ *
+ * ownsTransaction (default true) controls whether the returned
+ * LedgerStoreClient is allowed to open its own transaction via
+ * persistNormalizedLedger's `if (client.$transaction)` check. Pass `false`
+ * whenever `db` is ALREADY a transaction-scoped client (e.g. the `client`
+ * argument rebuild-ledger.ts's outer `db.$transaction(run, ...)` callback
+ * receives) — see the caller-ownership note on `deleteScopedLedgerEntries`
+ * for why this must be explicit rather than inferred from `db.$transaction`'s
+ * mere presence: Prisma's real interactive-transaction client still exposes
+ * a bound `$transaction` method (proven empirically, not merely assumed —
+ * confirmed against @prisma/client 7.8.0's driver-adapter Client Engine),
+ * and invoking it while already inside a transaction reliably corrupts that
+ * engine's transaction bookkeeping, causing the NEXT unrelated top-level
+ * `db.$transaction(...)` call in the same process to fail with "Transaction
+ * already closed: A start cannot be executed on a committed transaction" —
+ * not merely a nested-transaction error on the nested call itself.
  */
-export function wrapPrismaClientAsLedgerStore(db: PrismaLikeClient): LedgerStoreClient {
+export function wrapPrismaClientAsLedgerStore(
+  db: PrismaLikeClient,
+  options?: { ownsTransaction?: boolean },
+): LedgerStoreClient {
+  const ownsTransaction = options?.ownsTransaction ?? true;
   const canReconcile =
     typeof db.ledgerActionGroup.deleteMany === "function" &&
     typeof db.ledgerEntry.deleteMany === "function" &&
@@ -222,7 +242,7 @@ export function wrapPrismaClientAsLedgerStore(db: PrismaLikeClient): LedgerStore
           },
         }
       : undefined,
-    $transaction: db.$transaction
+    $transaction: ownsTransaction && db.$transaction
       ? (callback) =>
           db.$transaction!(
             (tx) => callback(wrapPrismaClientAsLedgerStore(tx)),
@@ -808,6 +828,22 @@ async function persistNormalizedLedgerBatch(
   };
 }
 
+/**
+ * `alreadyInTransaction` (default false) must be set to `true` whenever
+ * `client` is already a transaction-scoped Prisma client (e.g. the callback
+ * argument of an outer `db.$transaction(...)`, as in rebuild-ledger.ts).
+ * This cannot be inferred from `client.$transaction`'s mere presence:
+ * Prisma's real interactive-transaction client (confirmed empirically
+ * against @prisma/client 7.8.0's driver-adapter Client Engine, not merely
+ * assumed) still exposes a bound `$transaction` method, and calling it while
+ * already inside a transaction reliably corrupts that engine's transaction
+ * bookkeeping — not by failing the nested call itself, but by causing the
+ * NEXT unrelated top-level `db.$transaction(...)` call in the same process
+ * to fail with "Transaction already closed: A start cannot be executed on a
+ * committed transaction." When `alreadyInTransaction` is true, this function
+ * always executes directly against `client`, never opening a second
+ * transaction.
+ */
 export async function deleteScopedLedgerEntries(
   args: {
     chainId: number;
@@ -820,6 +856,7 @@ export async function deleteScopedLedgerEntries(
     };
   },
   client: ScopedLedgerDeleteClient = getDb(),
+  options?: { alreadyInTransaction?: boolean },
 ) {
   if (args.actionTypes.length === 0) {
     return {
@@ -894,7 +931,7 @@ export async function deleteScopedLedgerEntries(
     };
   };
 
-  if (client.$transaction) {
+  if (!options?.alreadyInTransaction && client.$transaction) {
     return client.$transaction(run);
   }
 

@@ -1396,22 +1396,39 @@ describe("rebuildCanonicalLedger", () => {
     expect(phexMovements(stores, PHEX_ASSET_ID)).toHaveLength(1);
   });
 
-  it("opens the outer rebuild transaction with the same bounded, explicit maxWait/timeout used for ledger persistence", async () => {
+  it("opens the outer rebuild transaction with the same bounded, explicit maxWait/timeout used for ledger persistence, and never opens a second (nested) transaction", async () => {
     const stores = createMemoryDb();
     seedP1Fixture(stores);
 
-    // Prisma's real interactive-transaction client never exposes $transaction
-    // itself (no nested transactions) — the mock mirrors that by handing the
-    // callback the same store object, which also lacks $transaction, proving
-    // persistNormalizedLedger's inner wrapping correctly stays single-level
-    // (it never attempts to open a second transaction here).
+    // IMPORTANT: Prisma's real interactive-transaction client (confirmed
+    // empirically against @prisma/client 7.8.0's driver-adapter Client
+    // Engine, not assumed) DOES still expose a bound `$transaction` method
+    // on the tx client handed to db.$transaction(callback)'s callback. A
+    // previous version of this test's mock incorrectly modeled the tx
+    // client as lacking `$transaction`, which hid a real bug: calling
+    // `client.$transaction(...)` while already inside a transaction doesn't
+    // fail that nested call — it silently corrupts the engine's
+    // transaction bookkeeping such that the NEXT unrelated top-level
+    // db.$transaction(...) call in the same process fails with "Transaction
+    // already closed: A start cannot be executed on a committed
+    // transaction." (reproduced directly against real Postgres before this
+    // fix). This mock now faithfully exposes `$transaction` on the
+    // tx-scoped client too, wired as a poison pill: if rebuild-ledger.ts (or
+    // any code it calls) ever invokes it, the test fails immediately and
+    // explicitly, rather than only failing on some LATER, seemingly
+    // unrelated call the way the real bug did in production.
+    const innerTransactionSpy = vi.fn(async () => {
+      throw new Error(
+        "REGRESSION: nested client.$transaction() was called on an already-transactional client",
+      );
+    });
     const transactionSpy = vi.fn(
       async (
         callback: (client: unknown) => Promise<unknown>,
         options?: { maxWait?: number; timeout?: number },
       ) => {
         void options;
-        return callback(stores.db);
+        return callback({ ...stores.db, $transaction: innerTransactionSpy });
       },
     );
     const dbWithTransaction = { ...stores.db, $transaction: transactionSpy };
@@ -1431,10 +1448,175 @@ describe("rebuildCanonicalLedger", () => {
     // uses — one policy, not a second inconsistent one for rebuild.
     expect(options).toEqual(LEDGER_PERSIST_TRANSACTION_OPTIONS);
 
+    // The poison pill was never triggered: neither deleteScopedLedgerEntries
+    // nor persistNormalizedLedger opened a second transaction.
+    expect(innerTransactionSpy).not.toHaveBeenCalled();
+
     // Scoped deletes + persistence still happened, inside that one call.
     expect(Array.from(stores.ledgerEntries.values()).some((e) => e.entryType === "STAKE_RETURN_UNALLOCATED")).toBe(
       true,
     );
+  });
+
+  it("rebuilds a TRANSFERS window with two transfer logs in the same transaction without opening a nested transaction", async () => {
+    // Reproduces the exact production failure shape: one tx, two token
+    // transfer logs, same block, same wallet, no higher-order evidence. On
+    // the pre-fix code, this alone doesn't fail (the corruption only
+    // surfaces on the NEXT top-level transaction) — see the two-sequential-
+    // rebuilds test below for the failure this test's fix actually prevents.
+    // This test instead pins the correctness of the two-entry result itself
+    // plus the same poison-pill non-nesting guarantee.
+    const stores = createMemoryDb();
+    const PHEX_ASSET_ID = "chain:369:erc20:0xtoken";
+    stores.rawBlocks.push({
+      chainId: 369,
+      blockNumber: 300n,
+      blockHash: "0xblock300",
+      timestamp: new Date("2026-05-08T10:00:00.000Z"),
+    });
+    stores.rawTokenTransfers.push(
+      {
+        chainId: 369,
+        tokenId: "token_1",
+        tokenAddress: "0xtoken",
+        assetIdSnapshot: PHEX_ASSET_ID,
+        decimalsSnapshot: 8,
+        txHash: "0xtx-two-legs",
+        blockNumber: 300n,
+        blockHash: "0xblock300",
+        logIndex: 37,
+        fromAddress: WALLET_ADDRESS,
+        toAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        amountRaw: "990000000000",
+        status: "ACTIVE",
+      },
+      {
+        chainId: 369,
+        tokenId: "token_1",
+        tokenAddress: "0xtoken",
+        assetIdSnapshot: PHEX_ASSET_ID,
+        decimalsSnapshot: 8,
+        txHash: "0xtx-two-legs",
+        blockNumber: 300n,
+        blockHash: "0xblock300",
+        logIndex: 42,
+        fromAddress: WALLET_ADDRESS,
+        toAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        amountRaw: "110000000000",
+        status: "ACTIVE",
+      },
+    );
+
+    const innerTransactionSpy = vi.fn(async () => {
+      throw new Error("REGRESSION: nested client.$transaction() was called");
+    });
+    const transactionSpy = vi.fn(
+      async (callback: (client: unknown) => Promise<unknown>) =>
+        callback({ ...stores.db, $transaction: innerTransactionSpy }),
+    );
+    const dbWithTransaction = { ...stores.db, $transaction: transactionSpy };
+
+    const report = await rebuildCanonicalLedger({
+      db: dbWithTransaction as never,
+      wallet: { id: WALLET_ID, chainId: 369, address: WALLET_ADDRESS },
+      fromBlock: 300n,
+      toBlock: 300n,
+      sourceFamilies: ["TRANSFERS"],
+      normalizerVersion: "v1",
+    });
+
+    expect(innerTransactionSpy).not.toHaveBeenCalled();
+    expect(report.ledgerEntriesRecreated).toBe(2);
+    expect(report.ledgerEntriesDeleted).toBe(0);
+    const sendEntries = Array.from(stores.ledgerEntries.values()).filter(
+      (e) => e.entryType === "SEND",
+    );
+    expect(sendEntries).toHaveLength(2);
+    expect(sendEntries.map((e) => e.quantity).sort()).toEqual(["1100", "9900"]);
+  });
+
+  it("survives two sequential rebuildCanonicalLedger calls against the same underlying client without the second failing", async () => {
+    // This is the direct regression test for the reproduced production bug:
+    // two back-to-back TRANSFERS rebuild windows in the same process (e.g.
+    // two operator-authorized single-block rebuild windows run in
+    // sequence). Before the fix, the FIRST call always succeeded and the
+    // SECOND always failed — proven by direct reproduction against real
+    // Postgres/@prisma/client 7.8.0, not merely hypothesized. This test
+    // encodes that exact two-call shape using a mock whose inner
+    // $transaction is a poison pill: if either call ever nests a
+    // transaction, the test fails loudly instead of silently passing call 1
+    // and mysteriously failing call 2 the way the real bug did.
+    const stores = createMemoryDb();
+    const PHEX_ASSET_ID = "chain:369:erc20:0xtoken";
+    stores.rawBlocks.push(
+      { chainId: 369, blockNumber: 400n, blockHash: "0xblock400", timestamp: new Date("2026-05-08T10:00:00.000Z") },
+      { chainId: 369, blockNumber: 401n, blockHash: "0xblock401", timestamp: new Date("2026-05-08T10:01:00.000Z") },
+    );
+    stores.rawTokenTransfers.push(
+      {
+        chainId: 369,
+        tokenId: "token_1",
+        tokenAddress: "0xtoken",
+        assetIdSnapshot: PHEX_ASSET_ID,
+        decimalsSnapshot: 8,
+        txHash: "0xtx-call-1",
+        blockNumber: 400n,
+        blockHash: "0xblock400",
+        logIndex: 1,
+        fromAddress: WALLET_ADDRESS,
+        toAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        amountRaw: "1000000",
+        status: "ACTIVE",
+      },
+      {
+        chainId: 369,
+        tokenId: "token_1",
+        tokenAddress: "0xtoken",
+        assetIdSnapshot: PHEX_ASSET_ID,
+        decimalsSnapshot: 8,
+        txHash: "0xtx-call-2",
+        blockNumber: 401n,
+        blockHash: "0xblock401",
+        logIndex: 1,
+        fromAddress: WALLET_ADDRESS,
+        toAddress: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        amountRaw: "2000000",
+        status: "ACTIVE",
+      },
+    );
+
+    const innerTransactionSpy = vi.fn(async () => {
+      throw new Error("REGRESSION: nested client.$transaction() was called");
+    });
+    const transactionSpy = vi.fn(
+      async (callback: (client: unknown) => Promise<unknown>) =>
+        callback({ ...stores.db, $transaction: innerTransactionSpy }),
+    );
+    const dbWithTransaction = { ...stores.db, $transaction: transactionSpy };
+
+    const call1 = await rebuildCanonicalLedger({
+      db: dbWithTransaction as never,
+      wallet: { id: WALLET_ID, chainId: 369, address: WALLET_ADDRESS },
+      fromBlock: 400n,
+      toBlock: 400n,
+      sourceFamilies: ["TRANSFERS"],
+      normalizerVersion: "v1",
+    });
+    expect(call1.ledgerEntriesRecreated).toBe(1);
+
+    // The second call is the one that failed in production pre-fix.
+    const call2 = await rebuildCanonicalLedger({
+      db: dbWithTransaction as never,
+      wallet: { id: WALLET_ID, chainId: 369, address: WALLET_ADDRESS },
+      fromBlock: 401n,
+      toBlock: 401n,
+      sourceFamilies: ["TRANSFERS"],
+      normalizerVersion: "v1",
+    });
+    expect(call2.ledgerEntriesRecreated).toBe(1);
+
+    expect(innerTransactionSpy).not.toHaveBeenCalled();
+    expect(transactionSpy).toHaveBeenCalledTimes(2);
   });
 
   it("rebuilds mixed source families in one run", async () => {
