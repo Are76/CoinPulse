@@ -4,6 +4,7 @@ import {
   buildDeterministicActionGroupId,
   buildDeterministicLedgerEntryId,
   persistNormalizedLedger,
+  wrapPrismaClientAsLedgerStore,
 } from "@/services/sync/ledger-store";
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 
@@ -106,5 +107,45 @@ describe("persistNormalizedLedger", () => {
       ]),
       skipDuplicates: true,
     });
+  });
+});
+
+describe("wrapPrismaClientAsLedgerStore", () => {
+  it("opens the interactive transaction with a bounded, explicit maxWait/timeout (not the bare Prisma default)", async () => {
+    const transactionSpy = vi.fn(
+      async (
+        callback: (tx: unknown) => Promise<unknown>,
+        options?: { maxWait?: number; timeout?: number },
+      ) => {
+        void options;
+        return callback({
+          ledgerActionGroup: { findMany: vi.fn(async () => []), createMany: vi.fn(async () => ({ count: 0 })) },
+          ledgerEntry: { findMany: vi.fn(async () => []), createMany: vi.fn(async () => ({ count: 0 })) },
+        });
+      },
+    );
+
+    const db = {
+      ledgerActionGroup: { findMany: vi.fn(async () => []) },
+      ledgerEntry: { findMany: vi.fn(async () => []) },
+      $transaction: transactionSpy,
+    };
+
+    await persistNormalizedLedger(
+      [
+        createDraft({
+          actionGroupKey: "group_tx_opts",
+          dedupeKey: "dedupe_tx_opts",
+        }),
+      ],
+      wrapPrismaClientAsLedgerStore(db as never),
+    );
+
+    expect(transactionSpy).toHaveBeenCalledTimes(1);
+    const [, options] = transactionSpy.mock.calls[0]!;
+    expect(options).toMatchObject({ maxWait: expect.any(Number), timeout: expect.any(Number) });
+    // Explicit and greater than Prisma's bare default (timeout: 5000ms),
+    // to give reconcileConsumedTransferShadows' added round trips headroom.
+    expect((options as { timeout: number }).timeout).toBeGreaterThan(5000);
   });
 });

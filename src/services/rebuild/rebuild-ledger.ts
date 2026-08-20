@@ -15,7 +15,10 @@ import {
 } from "@/services/ingestion/raw-store";
 import {
   deleteScopedLedgerEntries,
+  LEDGER_PERSIST_TRANSACTION_OPTIONS,
   persistNormalizedLedger,
+  wrapPrismaClientAsLedgerStore,
+  type PrismaLikeClient,
 } from "@/services/sync/ledger-store";
 import {
   getOccurredAtForDexSwap,
@@ -164,7 +167,10 @@ type RebuildDbClient = {
     }): Promise<{ count: number }>;
     deleteMany(args: { where: { id: { in: string[] } } }): Promise<{ count: number }>;
   };
-  $transaction?<T>(callback: (client: RebuildDbClient) => Promise<T>): Promise<T>;
+  $transaction?<T>(
+    callback: (client: RebuildDbClient) => Promise<T>,
+    options?: { maxWait?: number; timeout?: number },
+  ): Promise<T>;
 };
 
 export type RebuildLedgerReport = {
@@ -261,12 +267,15 @@ export async function rebuildCanonicalLedger(args: {
       },
       client,
     );
-    const persisted = await persistNormalizedLedger(drafts, client);
+    const persisted = await persistNormalizedLedger(
+      drafts,
+      wrapPrismaClientAsLedgerStore(client as unknown as PrismaLikeClient),
+    );
 
     return { deleted, persisted };
   };
   const { deleted, persisted } = db.$transaction
-    ? await db.$transaction(run)
+    ? await db.$transaction(run, LEDGER_PERSIST_TRANSACTION_OPTIONS)
     : await run(db);
   const skippedSnapshots = familyResults.reduce(
     (total, result) =>

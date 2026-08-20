@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "LedgerEntryType" ADD VALUE 'STAKE_RETURN_UNALLOCATED';

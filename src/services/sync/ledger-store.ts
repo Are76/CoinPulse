@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 
 import { getDb } from "@/lib/db";
 import type { CanonicalLedgerEntryDraft, NormalizedActionType } from "@/services/normalization";
+import { readCanonicallyConsumedRawTokenTransferIds } from "@/services/ingestion/raw-store";
 
 type LedgerStoreClient = {
   ledgerActionGroup: {
@@ -76,7 +77,160 @@ type LedgerStoreClient = {
       data: { actionGroupId: string };
     }): Promise<{ count: number }>;
   };
+  /**
+   * Entirely separate, fully optional capability used only by
+   * reconcileConsumedTransferShadows, kept off the existing
+   * ledgerActionGroup/ledgerEntry method shapes above so it never narrows or
+   * conflicts with the many existing narrowly-typed test clients that
+   * implement only the shapes those callers need. Feature-detected as a
+   * whole: when absent, reconciliation is skipped entirely (a no-op), never
+   * a partial/best-effort attempt. See reconcileConsumedTransferShadows for
+   * why this exists and its exact-identity guarantees.
+   */
+  transferShadowReconciliation?: {
+    findTransferGroups(args: {
+      chainId: number;
+      walletId: string;
+      txHashes: readonly string[];
+    }): Promise<Array<{ id: string; txHash: string }>>;
+    findGroupEntries(args: {
+      actionGroupIds: readonly string[];
+    }): Promise<
+      Array<{ id: string; actionGroupId: string; txHash: string; sourceLogIndex: number | null }>
+    >;
+    findActiveRawTransfers(args: {
+      chainId: number;
+      txHashes: readonly string[];
+    }): Promise<Array<{ id: string; txHash: string; logIndex: number }>>;
+    // Delegates to the exact same canonical-consumption authority PR #377's
+    // own TRANSFER-shadow suppression reads (readCanonicallyConsumedRawTokenTransferIds):
+    // an ACTIVE RawTokenTransfer.id proven consumed by ACTIVE,
+    // rawTransferEvidenceStatus "RECORDED" SWAP/LP/STAKE evidence. Fails
+    // closed (empty set) if the underlying evidence tables are unreachable.
+    readConsumedRawTokenTransferIds(
+      rawTokenTransferIds: readonly string[],
+    ): Promise<ReadonlySet<string>>;
+    deleteEntries(args: { ids: readonly string[] }): Promise<{ count: number }>;
+    deleteActionGroups(args: { ids: readonly string[] }): Promise<{ count: number }>;
+  };
+  $transaction?<T>(callback: (client: LedgerStoreClient) => Promise<T>): Promise<T>;
 };
+
+export type PrismaLikeClient = {
+  ledgerActionGroup: {
+    findMany(args: unknown): Promise<Array<{ id: string; txHash: string }>>;
+    deleteMany?(args: unknown): Promise<{ count: number }>;
+  };
+  ledgerEntry: {
+    findMany(
+      args: unknown,
+    ): Promise<
+      Array<{ id: string; actionGroupId: string; txHash: string; sourceLogIndex: number | null }>
+    >;
+    deleteMany?(args: unknown): Promise<{ count: number }>;
+  };
+  rawTokenTransfer?: {
+    findMany(args: unknown): Promise<Array<{ id: string; txHash: string; logIndex: number }>>;
+  };
+  $transaction?<T>(
+    callback: (tx: PrismaLikeClient) => Promise<T>,
+    options?: { maxWait?: number; timeout?: number },
+  ): Promise<T>;
+};
+
+/**
+ * Bounds for the interactive transaction persistNormalizedLedger opens
+ * around one batch's writes plus reconcileConsumedTransferShadows'
+ * read/delete work. Prisma's defaults (maxWait 2000ms, timeout 5000ms) are a
+ * reasonable floor but leave little headroom once reconciliation adds
+ * several sequential round trips (transfer-group lookup, entry lookup,
+ * raw-transfer lookup, evidence check, deletes) on top of the existing
+ * create/reassignment work. One persistNormalizedLedger call always covers
+ * exactly one bounded sync/rebuild window — the rebuild path is capped by
+ * REBUILD_MAX_BLOCK_SPAN (api/validation.ts, 1000 blocks) and live sync
+ * windows are smaller still — so the batch this transaction ever covers is
+ * bounded, not unbounded, and a generous-but-finite timeout is safe rather
+ * than a workaround for an open-ended workload.
+ */
+export const LEDGER_PERSIST_TRANSACTION_OPTIONS = {
+  maxWait: 5_000,
+  timeout: 15_000,
+} as const;
+
+/**
+ * Wraps a full Prisma-shaped client (production getDb(), or a Prisma
+ * $transaction callback's tx client) into LedgerStoreClient. Safe to call
+ * unconditionally from any production call site, including ones that may
+ * receive a narrower test double: the transferShadowReconciliation
+ * capability is only attached when the underlying client actually exposes
+ * ledgerActionGroup.deleteMany, ledgerEntry.deleteMany, AND
+ * rawTokenTransfer.findMany — every other client (missing one or more of
+ * these) gets ledgerActionGroup/ledgerEntry passed through unchanged and no
+ * transferShadowReconciliation, so persistNormalizedLedger's own
+ * feature-detection (see reconcileConsumedTransferShadows) skips
+ * reconciliation entirely rather than crashing on a missing method.
+ */
+export function wrapPrismaClientAsLedgerStore(db: PrismaLikeClient): LedgerStoreClient {
+  const canReconcile =
+    typeof db.ledgerActionGroup.deleteMany === "function" &&
+    typeof db.ledgerEntry.deleteMany === "function" &&
+    typeof db.rawTokenTransfer?.findMany === "function";
+
+  return {
+    ledgerActionGroup: db.ledgerActionGroup as never,
+    ledgerEntry: db.ledgerEntry as never,
+    transferShadowReconciliation: canReconcile
+      ? {
+          async findTransferGroups(args) {
+            return db.ledgerActionGroup.findMany({
+              where: {
+                chainId: args.chainId,
+                walletId: args.walletId,
+                actionType: { in: ["TRANSFER"] },
+                txHash: { in: [...args.txHashes] },
+              },
+              select: { id: true, txHash: true },
+            });
+          },
+          async findGroupEntries(args) {
+            return db.ledgerEntry.findMany({
+              where: { actionGroupId: { in: [...args.actionGroupIds] } },
+              select: { id: true, actionGroupId: true, txHash: true, sourceLogIndex: true },
+            });
+          },
+          async findActiveRawTransfers(args) {
+            return db.rawTokenTransfer!.findMany({
+              where: {
+                chainId: args.chainId,
+                txHash: { in: [...args.txHashes] },
+                status: "ACTIVE",
+              },
+              select: { id: true, txHash: true, logIndex: true },
+            });
+          },
+          async readConsumedRawTokenTransferIds(rawTokenTransferIds) {
+            return readCanonicallyConsumedRawTokenTransferIds(
+              { rawTokenTransferIds },
+              db as never,
+            );
+          },
+          async deleteEntries(args) {
+            return db.ledgerEntry.deleteMany!({ where: { id: { in: [...args.ids] } } });
+          },
+          async deleteActionGroups(args) {
+            return db.ledgerActionGroup.deleteMany!({ where: { id: { in: [...args.ids] } } });
+          },
+        }
+      : undefined,
+    $transaction: db.$transaction
+      ? (callback) =>
+          db.$transaction!(
+            (tx) => callback(wrapPrismaClientAsLedgerStore(tx)),
+            LEDGER_PERSIST_TRANSACTION_OPTIONS,
+          )
+      : undefined,
+  };
+}
 
 type ScopedLedgerDeleteClient = {
   ledgerActionGroup: {
@@ -327,9 +481,182 @@ async function resolveCanonicalFeeOwnership(
   return reassignments;
 }
 
+/**
+ * Reconciles a stale generic TRANSFER shadow against the exact canonical
+ * RawTokenTransfer it duplicates, whenever this batch is persisting a
+ * higher-order (non-TRANSFER) draft for the same transaction.
+ *
+ * Why this exists: PR #377's suppression check (readCanonicallyConsumedRawTokenTransferIds,
+ * consulted by buildTransferNormalizationSnapshots) only prevents a NEW
+ * TRANSFER draft from being created once canonical evidence is RECORDED. It
+ * cannot retroactively remove a TRANSFER entry that was already persisted
+ * before that evidence existed — e.g. the default sync order runs TRANSFERS
+ * before STAKING (source-families.ts), so a first full sync can persist a
+ * generic TRANSFER for a stake-return transfer before STAKING has recorded
+ * the RawStakeActionTransferEvidence that would have suppressed it. A
+ * STAKING-only rebuild has the identical gap: rebuild-ledger.ts's delete
+ * scope for a STAKING-only rebuild only ever touches HEX_STAKE_* action
+ * types, never TRANSFER, so a pre-existing shadow from an earlier run is
+ * never cleaned up by re-running STAKING alone.
+ *
+ * This function closes that gap symmetrically for every higher-order family
+ * (SWAP/LP/STAKE all write to the same three evidence tables
+ * readCanonicallyConsumedRawTokenTransferIds already reads), using the exact
+ * same canonical-identity authority PR #377 itself uses: an ACTIVE
+ * RawTokenTransfer.id proven consumed by ACTIVE, rawTransferEvidenceStatus
+ * "RECORDED" evidence. It never matches by txHash alone, amount, symbol,
+ * direction, or ordering — only by the same (chainId, txHash, logIndex) ->
+ * RawTokenTransfer.id identity the normalizer itself uses to build
+ * sourceLogIndex, cross-checked against the exact evidence relation.
+ *
+ * Feature-detected: entirely skipped (no-op) when the client does not expose
+ * client.transferShadowReconciliation — narrower test clients that never
+ * exercise this path are unaffected. Called from inside
+ * persistNormalizedLedger's own transaction, so the delete and the new
+ * higher-order entries this batch is about to write commit together or not
+ * at all.
+ */
+async function reconcileConsumedTransferShadows(
+  entries: ReadonlyMap<string, CanonicalLedgerEntryDraft & { actionGroupId: string; id: string }>,
+  client: LedgerStoreClient,
+): Promise<{ actionGroupCount: number; entryCount: number }> {
+  const reconciliation = client.transferShadowReconciliation;
+  if (!reconciliation) {
+    return { actionGroupCount: 0, entryCount: 0 };
+  }
+
+  type Scope = { chainId: number; walletId: string; txHashes: Set<string> };
+  const scopesByWalletChain = new Map<string, Scope>();
+
+  for (const entry of entries.values()) {
+    if (entry.actionType === "TRANSFER") {
+      continue;
+    }
+    const key = `${entry.chainId}:${entry.walletId}`;
+    const scope = scopesByWalletChain.get(key) ?? {
+      chainId: entry.chainId,
+      walletId: entry.walletId,
+      txHashes: new Set<string>(),
+    };
+    scope.txHashes.add(entry.txHash.toLowerCase());
+    scopesByWalletChain.set(key, scope);
+  }
+
+  if (scopesByWalletChain.size === 0) {
+    return { actionGroupCount: 0, entryCount: 0 };
+  }
+
+  let actionGroupCount = 0;
+  let entryCount = 0;
+
+  for (const scope of scopesByWalletChain.values()) {
+    const txHashes = Array.from(scope.txHashes);
+
+    const shadowGroups = await reconciliation.findTransferGroups({
+      chainId: scope.chainId,
+      walletId: scope.walletId,
+      txHashes,
+    });
+    if (shadowGroups.length === 0) {
+      continue;
+    }
+
+    const shadowGroupIds = shadowGroups.map((group) => group.id);
+    const shadowEntries = await reconciliation.findGroupEntries({
+      actionGroupIds: shadowGroupIds,
+    });
+    const candidateEntries = shadowEntries.filter(
+      (entry): entry is typeof entry & { sourceLogIndex: number } =>
+        typeof entry.sourceLogIndex === "number",
+    );
+    if (candidateEntries.length === 0) {
+      continue;
+    }
+
+    // Exact canonical identity only: (chainId, txHash, logIndex) is the same
+    // tuple the normalizer itself embeds in sourceLogIndex/sourceLogKey.
+    const rawTransfers = await reconciliation.findActiveRawTransfers({
+      chainId: scope.chainId,
+      txHashes,
+    });
+    const transferIdByKey = new Map<string, string>();
+    for (const transfer of rawTransfers) {
+      transferIdByKey.set(`${transfer.txHash.toLowerCase()}:${transfer.logIndex}`, transfer.id);
+    }
+
+    const transferIdByEntryId = new Map<string, string>();
+    for (const entry of candidateEntries) {
+      const transferId = transferIdByKey.get(`${entry.txHash.toLowerCase()}:${entry.sourceLogIndex}`);
+      if (transferId) {
+        transferIdByEntryId.set(entry.id, transferId);
+      }
+    }
+    if (transferIdByEntryId.size === 0) {
+      continue;
+    }
+
+    const consumedTransferIds = await reconciliation.readConsumedRawTokenTransferIds(
+      Array.from(new Set(transferIdByEntryId.values())),
+    );
+    if (consumedTransferIds.size === 0) {
+      continue;
+    }
+
+    const entryIdsToDelete = Array.from(transferIdByEntryId.entries())
+      .filter(([, transferId]) => consumedTransferIds.has(transferId))
+      .map(([entryId]) => entryId);
+    if (entryIdsToDelete.length === 0) {
+      continue;
+    }
+
+    const entryIdSet = new Set(entryIdsToDelete);
+
+    // Safety invariant: a LedgerActionGroup may only be deleted when EVERY
+    // entry it currently owns (not just the proven-consumed ones) is also
+    // being deleted. shadowEntries is the complete membership list per group
+    // (fetched by actionGroupId, unfiltered by sourceLogIndex validity), so
+    // this check catches any group that turns out to have a surviving
+    // sibling entry — never inferred by amount/direction/symbol/ordering,
+    // only exact group/entry identity. A generic TRANSFER group is expected
+    // to always contain exactly one entry (transfer-normalizer.ts), but this
+    // does not rely on that invariant holding.
+    const entryIdsByGroup = new Map<string, string[]>();
+    for (const entry of shadowEntries) {
+      const ids = entryIdsByGroup.get(entry.actionGroupId) ?? [];
+      ids.push(entry.id);
+      entryIdsByGroup.set(entry.actionGroupId, ids);
+    }
+
+    const groupIdsToDelete: string[] = [];
+    for (const [groupId, memberEntryIds] of entryIdsByGroup) {
+      const anyMemberSelected = memberEntryIds.some((id) => entryIdSet.has(id));
+      if (!anyMemberSelected) {
+        continue;
+      }
+      const everyMemberSelected = memberEntryIds.every((id) => entryIdSet.has(id));
+      if (everyMemberSelected) {
+        groupIdsToDelete.push(groupId);
+      }
+      // else: a surviving sibling entry exists in this group — the group and
+      // its unconsumed sibling(s) are preserved; only the consumed shadow
+      // entry (still in entryIdsToDelete below) is removed.
+    }
+
+    await reconciliation.deleteEntries({ ids: entryIdsToDelete });
+    if (groupIdsToDelete.length > 0) {
+      await reconciliation.deleteActionGroups({ ids: groupIdsToDelete });
+    }
+
+    entryCount += entryIdsToDelete.length;
+    actionGroupCount += groupIdsToDelete.length;
+  }
+
+  return { actionGroupCount, entryCount };
+}
+
 export async function persistNormalizedLedger(
   drafts: readonly CanonicalLedgerEntryDraft[],
-  client: LedgerStoreClient = getDb(),
+  client: LedgerStoreClient = wrapPrismaClientAsLedgerStore(getDb() as unknown as PrismaLikeClient),
 ) {
   if (drafts.length === 0) {
     return {
@@ -338,6 +665,20 @@ export async function persistNormalizedLedger(
     };
   }
 
+  const run = async (transactionClient: LedgerStoreClient) =>
+    persistNormalizedLedgerBatch(drafts, transactionClient);
+
+  if (client.$transaction) {
+    return client.$transaction(run);
+  }
+
+  return run(client);
+}
+
+async function persistNormalizedLedgerBatch(
+  drafts: readonly CanonicalLedgerEntryDraft[],
+  client: LedgerStoreClient,
+) {
   const canonicalDrafts = selectCanonicalFeeDrafts(drafts);
 
   const actionGroups = new Map<
@@ -399,6 +740,14 @@ export async function persistNormalizedLedger(
   }
 
   const reassignments = await resolveCanonicalFeeOwnership(entries, client);
+
+  // See reconcileConsumedTransferShadows doc comment: removes any
+  // already-persisted generic TRANSFER shadow for the exact RawTokenTransfer
+  // this batch's higher-order (non-TRANSFER) drafts prove consumed, in the
+  // same transaction as the createMany calls below. Awaited for sequencing
+  // only — its counts are not surfaced on persistNormalizedLedger's return
+  // shape to avoid widening every existing typed call site.
+  await reconcileConsumedTransferShadows(entries, client);
 
   // Never persist an action group that ends up with zero entries in this
   // batch — e.g. a family whose only contribution was a FEE draft that lost

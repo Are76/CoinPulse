@@ -182,6 +182,12 @@ export type DashboardStakePositionDto = {
   returnedQuantity: string;
   yieldQuantity: string | null;
   penaltyQuantity: string | null;
+  // Non-null only when this stake has a known total returned quantity whose
+  // principal/yield/penalty split could not be determined (no matching
+  // historical START evidence). Distinct from returnedQuantity, which means
+  // a known principal return — never conflate the two. Null means "not
+  // applicable", not zero.
+  unallocatedReturnedQuantity: string | null;
   status: string;
   startBlock: string | null;
   endBlock: string | null;
@@ -260,6 +266,7 @@ export type DashboardDbClient = {
         returnedQuantity: string | { toString(): string };
         yieldQuantity: string | { toString(): string } | null;
         penaltyQuantity: string | { toString(): string } | null;
+        unallocatedReturnedQuantity: string | { toString(): string } | null;
         status: string;
         startBlock: bigint | null;
         endBlock: bigint | null;

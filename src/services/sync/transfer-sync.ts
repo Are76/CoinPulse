@@ -13,7 +13,11 @@ import {
   readCanonicallyConsumedRawTokenTransferIds,
   readWalletRawTransactions,
 } from "@/services/ingestion/raw-store";
-import { persistNormalizedLedger } from "@/services/sync/ledger-store";
+import {
+  persistNormalizedLedger,
+  wrapPrismaClientAsLedgerStore,
+  type PrismaLikeClient,
+} from "@/services/sync/ledger-store";
 import {
   createPrismaSyncCursorStore,
   createPrismaSyncRunStore,
@@ -96,7 +100,7 @@ export function createSyncDependencies(args?: {
     runStore: createPrismaSyncRunStore(db as never),
     cursorStore: createPrismaSyncCursorStore(db as never),
     persistLedger: (drafts: readonly CanonicalLedgerEntryDraft[]) =>
-      persistNormalizedLedger(drafts, db as never),
+      persistNormalizedLedger(drafts, wrapPrismaClientAsLedgerStore(db as unknown as PrismaLikeClient)),
     ingestSourceFamily: async (ingestArgs: {
       runId: string;
       wallet: { chainId: number; address: string };
