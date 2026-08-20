@@ -126,25 +126,58 @@ type LedgerStoreClient = {
    * partial/best-effort attempt — narrower test clients that never exercise
    * this path are unaffected.
    *
-   * Deliberately a single atomic operation, not a count-then-delete pair: a
+   * Deliberately a single conditional DELETE, not a count-then-delete pair: a
    * separate "count remaining entries" read followed by a later unconditional
-   * delete leaves a window between the two round trips where a concurrent
-   * transaction can commit a brand-new LedgerEntry into a candidate group
-   * that the count already observed as empty. Because
-   * LedgerEntry.actionGroup is onDelete: Cascade (prisma/schema.prisma), a
-   * delete that trusts a stale zero-count would cascade away that
+   * delete would leave a window between the two round trips where a
+   * concurrent transaction could commit a brand-new LedgerEntry into a
+   * candidate group that the earlier count already observed as empty, and —
+   * since LedgerEntry.actionGroup is onDelete: Cascade (prisma/schema.prisma)
+   * — a delete that trusted that stale count would cascade away the
    * newly-committed, legitimate entry along with its now-condemned parent
-   * group. deleteEmptyActionGroups instead re-checks emptiness as part of the
-   * same DELETE statement that removes the row (via the entries relation
-   * filter), so the only entries state that can ever matter is whatever is
-   * true at the moment of deletion itself.
+   * group. Folding the check into the DELETE's own WHERE clause (the
+   * `entries: { none: {} }` relation filter, compiled to a
+   * `NOT EXISTS (SELECT 1 FROM "LedgerEntry" WHERE "actionGroupId" = ...)`
+   * subquery) closes that specific TOCTOU gap between our own read and our
+   * own write.
+   *
+   * The remaining question is a genuinely concurrent transaction whose own
+   * INSERT/UPDATE into LedgerEntry (referencing one of these same candidate
+   * groups) is still in flight — not yet committed — while this DELETE
+   * executes. That case is settled by PostgreSQL's own foreign-key
+   * enforcement, independent of isolation level and requiring no additional
+   * application-side locking: inserting or re-homing a row that references
+   * LedgerActionGroup.id takes a FOR KEY SHARE lock on that referenced parent
+   * row for the duration of the referencing transaction (this is the
+   * documented purpose of FOR KEY SHARE — see the PostgreSQL "Explicit
+   * Locking" chapter — guarding a referenced row against concurrent deletion
+   * or key changes while a foreign-key check against it is pending). That
+   * lock conflicts with the row lock this DELETE needs on the same parent
+   * row, so exactly one of two outcomes is possible, never a silent
+   * cascade of the other transaction's row:
+   *   - The other transaction's FK-check lock is taken first and it later
+   *     commits: this DELETE blocks on that row, then re-evaluates its WHERE
+   *     clause against the now-committed data once unblocked (PostgreSQL's
+   *     standard read-committed re-check for a concurrently-locked row) —
+   *     the relation filter now sees the new entry and excludes the group.
+   *   - This DELETE's lock is taken first and it commits: the other
+   *     transaction's still-pending FK check then fails with a foreign-key
+   *     violation against the now-deleted parent, exactly as inserting any
+   *     row against a nonexistent parent id would — an ordinary constraint
+   *     conflict for that writer to handle/retry, not data loss.
+   * Either way, a legitimate LedgerEntry can never be cascade-deleted by this
+   * cleanup. This guarantee is PostgreSQL's own referential-integrity
+   * behavior and cannot be exercised by an in-memory test double — the
+   * in-memory regression coverage below proves this capability is invoked
+   * with the correct candidate scoping and is never bypassed by a stale
+   * earlier read, not the underlying database engine's locking semantics.
    */
   feeReassignmentCleanup?: {
     // Deletes only the given candidate LedgerActionGroup ids that have zero
-    // related LedgerEntry rows at the exact moment the delete executes — one
-    // conditional DELETE, not a separate prior read. A candidate id that
-    // gained an entry before this call (from this batch or a concurrent one)
-    // is left untouched, along with that entry.
+    // related LedgerEntry rows according to the DELETE statement's own
+    // relation-filter evaluation — one conditional DELETE, not a separate
+    // prior read followed by an unconditional one. See the guarantee this
+    // relies on (PostgreSQL foreign-key row locking) in the doc comment
+    // above.
     deleteEmptyActionGroups(args: {
       candidateActionGroupIds: readonly string[];
     }): Promise<{ count: number }>;
@@ -892,19 +925,16 @@ async function persistNormalizedLedgerBatch(
   // re-homing above left with zero LedgerEntry rows (e.g. a generic
   // TRANSFER group whose only entry was its native-gas FEE, now re-homed to
   // a higher-priority SWAP/LP/STAKE group for the same transaction). Scoped
-  // only to the exact groups the reassignments above moved a FEE out of.
-  // Deliberately a single atomic conditional delete
-  // (feeReassignmentCleanup.deleteEmptyActionGroups), not a prior count
-  // followed by an unconditional delete: a separate count read would leave a
-  // window for a concurrent transaction to commit a new, legitimate entry
-  // into a candidate group between the count and the delete, which — since
-  // LedgerEntry.actionGroup is onDelete: Cascade — would silently
-  // cascade-delete that entry along with the group. The emptiness check here
-  // is re-evaluated as part of the delete statement itself, so a group that
-  // gained any entry (a surviving sibling from this batch, or a concurrent
-  // write) by the time the delete actually runs is left untouched. Runs
-  // after both the reassignment updates and the new-entry inserts above,
-  // inside the same transaction.
+  // only to the exact groups the reassignments above moved a FEE out of, and
+  // deleted via one conditional DELETE (feeReassignmentCleanup.deleteEmptyActionGroups)
+  // whose own WHERE clause re-checks emptiness rather than trusting a prior
+  // read — see that capability's doc comment on LedgerStoreClient for the
+  // full guarantee, including why a genuinely concurrent, still-uncommitted
+  // writer targeting the same candidate group cannot result in a legitimate
+  // entry being silently cascade-deleted (PostgreSQL's FK-referenced-row
+  // locking, not application code, is what settles that case). Runs after
+  // both the reassignment updates and the new-entry inserts above, inside
+  // the same transaction.
   if (reassignments.length > 0 && client.feeReassignmentCleanup) {
     const candidateActionGroupIds = Array.from(
       new Set(

@@ -8,6 +8,7 @@ import { toCanonicalQuantity } from "@/services/normalization/types";
 import {
   buildDeterministicLedgerEntryId,
   persistNormalizedLedger,
+  wrapPrismaClientAsLedgerStore,
 } from "@/services/sync/ledger-store";
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
 
@@ -119,36 +120,58 @@ function createPersistentLedgerStoreClient() {
   const actionGroups = new Map<string, Record<string, unknown>>();
   const entries = new Map<string, Record<string, unknown>>();
 
-  return {
-    client: {
-      ledgerActionGroup: {
-        createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
-          let count = 0;
-          for (const row of data) {
-            const id = row.id as string;
-            if (!actionGroups.has(id)) {
-              actionGroups.set(id, row);
-              count += 1;
-            }
+  const rawDb = {
+    ledgerActionGroup: {
+      createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
+        let count = 0;
+        for (const row of data) {
+          const id = row.id as string;
+          if (!actionGroups.has(id)) {
+            actionGroups.set(id, row);
+            count += 1;
           }
-          return { count };
-        },
-        findMany: async ({ where }: { where: { id: { in: string[] } } }) => {
-          return Array.from(actionGroups.values())
-            .filter((row) => where.id.in.includes(row.id as string))
-            .map((row) => ({ id: row.id as string, actionType: row.actionType as string }));
-        },
-        deleteMany: async ({ where }: { where: { id: { in: string[] } } }) => {
-          let count = 0;
-          for (const id of where.id.in) {
-            if (actionGroups.delete(id)) {
-              count += 1;
-            }
-          }
-          return { count };
-        },
+        }
+        return { count };
       },
-      ledgerEntry: {
+      findMany: async ({ where }: { where: { id: { in: string[] } } }) => {
+        return Array.from(actionGroups.values())
+          .filter((row) => where.id.in.includes(row.id as string))
+          .map((row) => ({ id: row.id as string, actionType: row.actionType as string }));
+      },
+      // Honors the exact relation-filter shape wrapPrismaClientAsLedgerStore's
+      // feeReassignmentCleanup.deleteEmptyActionGroups issues in production
+      // (`entries: { none: {} }`), so this test store exercises the real
+      // adapter code — not just a hand-rolled approximation of it — and
+      // cascades child LedgerEntry deletion the same way
+      // onDelete: Cascade does on the real LedgerEntry.actionGroup relation.
+      deleteMany: async ({
+        where,
+      }: {
+        where: { id: { in: string[] }; entries?: { none: Record<string, never> } };
+      }) => {
+        let count = 0;
+        for (const id of where.id.in) {
+          if (where.entries?.none) {
+            const hasEntries = Array.from(entries.values()).some(
+              (row) => row.actionGroupId === id,
+            );
+            if (hasEntries) {
+              continue;
+            }
+          }
+          if (actionGroups.delete(id)) {
+            for (const [entryId, row] of entries) {
+              if (row.actionGroupId === id) {
+                entries.delete(entryId);
+              }
+            }
+            count += 1;
+          }
+        }
+        return { count };
+      },
+    },
+    ledgerEntry: {
         createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
           let count = 0;
           for (const row of data) {
@@ -222,33 +245,20 @@ function createPersistentLedgerStoreClient() {
           return { count };
         },
       },
-      // Mirrors wrapPrismaClientAsLedgerStore's production
-      // feeReassignmentCleanup capability: a single atomic operation that
-      // re-checks "zero related LedgerEntry rows" against the CURRENT
-      // entries map at the moment it runs (as Postgres would re-evaluate the
-      // entries: { none: {} } relation filter as part of executing one
-      // DELETE statement), never against an earlier, possibly-stale
-      // observation. A candidate id with any matching entry at this exact
-      // moment — including one that only just appeared — is left alone.
-      feeReassignmentCleanup: {
-        deleteEmptyActionGroups: async ({
-          candidateActionGroupIds,
-        }: {
-          candidateActionGroupIds: string[];
-        }) => {
-          let count = 0;
-          for (const groupId of candidateActionGroupIds) {
-            const hasAnyEntry = Array.from(entries.values()).some(
-              (row) => row.actionGroupId === groupId,
-            );
-            if (!hasAnyEntry && actionGroups.delete(groupId)) {
-              count += 1;
-            }
-          }
-          return { count };
-        },
-      },
-    },
+  };
+
+  // Routes through the real wrapPrismaClientAsLedgerStore adapter rather
+  // than hand-rolling a feeReassignmentCleanup double, so these tests
+  // exercise the exact production code that constructs the
+  // `entries: { none: {} }` conditional delete — not just an approximation
+  // of its intended behavior. rawDb has no rawTokenTransfer, so
+  // transferShadowReconciliation stays disabled (unused by these tests) and
+  // no $transaction, so persistNormalizedLedger runs directly against this
+  // client without opening one, exactly as before this change.
+  const client = wrapPrismaClientAsLedgerStore(rawDb as never);
+
+  return {
+    client,
     actionGroups,
     entries,
   };
@@ -765,7 +775,20 @@ describe("orphaned action-group cleanup after fee reassignment", () => {
     expect(transferGroups).toHaveLength(0);
   });
 
-  it("does not cascade-delete a legitimate entry that lands in a candidate group concurrently, right before the cleanup delete runs", async () => {
+  it("re-checks emptiness at the moment deleteEmptyActionGroups actually runs, not against an earlier observation", async () => {
+    // What this proves: the cleanup step never trusts a previously-cached
+    // "this group looked empty" fact — a write landing in the candidate
+    // group strictly before the (single) deleteEmptyActionGroups call still
+    // correctly excludes that group, because there is no separate prior
+    // count step left to go stale. This is an in-memory, single-threaded
+    // simulation and can only model a write that is already committed by
+    // the time the relation filter evaluates — it cannot exercise real
+    // PostgreSQL MVCC visibility of a genuinely concurrent, still-uncommitted
+    // transaction. That case (an uncommitted writer racing this exact
+    // DELETE) is settled by PostgreSQL's own foreign-key row locking, not by
+    // anything this test can simulate — see the feeReassignmentCleanup doc
+    // comment on LedgerStoreClient in src/services/sync/ledger-store.ts for
+    // that argument in full.
     const store = createPersistentLedgerStoreClient();
     const swapTx = "0xswap0000000000000000000000000000000000000000000000000000000006";
 
@@ -776,20 +799,16 @@ describe("orphaned action-group cleanup after fee reassignment", () => {
     const transferGroupId = feesBefore[0].actionGroupId as string;
     expect(actionTypeOf(store, transferGroupId)).toBe("TRANSFER");
 
-    // Simulate a concurrent transaction: right as the cleanup step's atomic
-    // delete is about to evaluate its "zero related entries" condition for
-    // this exact candidate group, another writer commits a brand-new,
-    // legitimate LedgerEntry into it — the same interleaving CodeRabbit
-    // flagged against a prior count-then-delete design, where the count
-    // would have already observed zero before this insert landed. This
-    // wraps the client's real feeReassignmentCleanup.deleteEmptyActionGroups
-    // (not a stub returning a canned result) so the test exercises the
-    // actual conditional-delete semantics under the interleaving.
+    // Injects a new, legitimate LedgerEntry into the candidate group
+    // immediately before delegating to the real
+    // feeReassignmentCleanup.deleteEmptyActionGroups (not a stub returning a
+    // canned result) — proving the actual relation-filter check, not an
+    // assumption about it, is what excludes the group.
     const realDeleteEmptyActionGroups =
-      store.client.feeReassignmentCleanup.deleteEmptyActionGroups;
+      store.client.feeReassignmentCleanup!.deleteEmptyActionGroups;
     const concurrentEntryId = "le_concurrent_receive";
     let concurrentWriteInjected = false;
-    store.client.feeReassignmentCleanup.deleteEmptyActionGroups = async (args) => {
+    store.client.feeReassignmentCleanup!.deleteEmptyActionGroups = async (args) => {
       if (!concurrentWriteInjected) {
         concurrentWriteInjected = true;
         store.entries.set(concurrentEntryId, {
