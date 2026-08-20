@@ -6,8 +6,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { PULSECHAIN_FORK_BOUNDARY } from "@/config/chains";
 import { MANUAL_SYNC_MAX_BLOCK_SPAN } from "@/services/api/validation";
+import { mergeCursorWindow, type SyncCursorRecord } from "@/services/sync/sync-state-store";
 
 import {
+  CLEAN_STOP_REASONS,
+  HTTP_REQUEST_TIMEOUT_MS,
   MAX_REASON_SLUG_LENGTH,
   POLICY_LABEL_PREFIX,
   WINDOW_CHAIN_ID,
@@ -15,14 +18,19 @@ import {
   buildManualSyncRequestBody,
   buildPolicyLabel,
   checkEnv,
+  classifyAmbiguousSubmissionRecovery,
   classifyCursorDisconnection,
+  computeExitCode,
   cursorsIdentical,
   parseRunnerCliArgs,
+  policyLabelExistsForChain,
   runEvidenceDirectedWindowRunner,
+  sanitizeBackendResponseBody,
   serializeEvidence,
   slugifyReason,
   validateBlockOrder,
   validateChainId,
+  validateCursorDisconnection,
   validateForkBoundary,
   validateNoActiveOperation,
   validateNoPolicyLabelCollision,
@@ -49,6 +57,7 @@ const WALLET_ADDRESS = "0x75f808367720951e789d47e9e9db51148d9aa765";
 const WALLET_ID = "wallet-cuid-1";
 const POST_FORK_START = PULSECHAIN_FORK_BOUNDARY.firstPostForkBlock;
 const POST_FORK_END = POST_FORK_START + 999n;
+const DEFAULT_POLICY_LABEL = "EVIDENCE_DIRECTED_WINDOW_V1:recover-window-evidence";
 
 function baseRunnerOptions(overrides: Partial<RunnerCliOptions> = {}): RunnerCliOptions {
   return {
@@ -70,13 +79,15 @@ type CursorFixture = { fromBlock: bigint; toBlock: bigint } | null;
 
 function makeFakeDb(overrides: Partial<{
   cursorsByFamily: Partial<Record<(typeof WINDOW_SOURCE_FAMILIES)[number], CursorFixture>>;
-  policyLabels: string[];
+  policyLabelExists: boolean;
+  policyLabelCandidates: RunnerSyncRunRecord[];
   activeRunCount: number;
   runsById: Record<string, RunnerSyncRunRecord>;
 }> = {}): RunnerDbClient {
   const state = {
     cursorsByFamily: overrides.cursorsByFamily ?? {},
-    policyLabels: overrides.policyLabels ?? [],
+    policyLabelExists: overrides.policyLabelExists ?? false,
+    policyLabelCandidates: overrides.policyLabelCandidates ?? [],
     activeRunCount: overrides.activeRunCount ?? 0,
     runsById: overrides.runsById ?? {},
   };
@@ -91,12 +102,24 @@ function makeFakeDb(overrides: Partial<{
       },
     },
     syncRun: {
-      findMany: async () => state.policyLabels.map((policyLabel) => ({ policyLabel })),
+      // Only used by findSyncRunsByPolicyLabel (ambiguous-submission recovery).
+      findMany: async () => state.policyLabelCandidates,
       findUnique: async (args: unknown) => {
         const id = (args as { where: { id: string } }).where.id;
         return state.runsById[id] ?? null;
       },
-      count: async () => state.activeRunCount,
+      // Serves two distinct real call sites: countActiveOperations
+      // (where.status.in) and policyLabelExistsForChain (where.policyLabel).
+      count: async (args: unknown) => {
+        const where = (args as { where?: { status?: { in?: string[] }; policyLabel?: string } }).where;
+        if (where?.status?.in) {
+          return state.activeRunCount;
+        }
+        if (where?.policyLabel !== undefined) {
+          return state.policyLabelExists ? 1 : 0;
+        }
+        return 0;
+      },
     },
   };
 }
@@ -171,14 +194,15 @@ describe("dry-run mutation safety", () => {
 // ─── 3. --execute is required for submission ────────────────────────────────
 
 describe("execute gate", () => {
-  it("submits exactly one manual sync POST only when execute is true", async () => {
-    const db = makeFakeDb();
+  it("submits exactly one manual sync POST only when execute is true, and completes", async () => {
+    const db = makeFakeDb({ runsById: { "run-1": completedRun() } });
     const { deps, httpPostCalls } = makeFakeDeps({ db });
 
-    await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
+    const summary = await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
 
     expect(httpPostCalls).toHaveLength(1);
     expect(httpPostCalls[0].url).toBe("http://localhost:3100/api/sync/manual");
+    expect(summary.stoppedReason).toBe("execute_completed");
   });
 });
 
@@ -360,14 +384,15 @@ describe("fixed source-family policy", () => {
     expect(body.sourceFamilies).toEqual(["TRANSFERS", "DEX", "LP", "STAKING"]);
   });
 
-  it("the submitted execute payload matches the fixed families exactly", async () => {
-    const db = makeFakeDb();
+  it("the submitted execute payload matches the fixed families exactly, and completes", async () => {
+    const db = makeFakeDb({ runsById: { "run-1": completedRun() } });
     const { deps, httpPostCalls } = makeFakeDeps({ db });
 
-    await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
+    const summary = await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
 
     const body = httpPostCalls[0].body as { sourceFamilies: string[] };
     expect(body.sourceFamilies).toEqual(["TRANSFERS", "DEX", "LP", "STAKING"]);
+    expect(summary.stoppedReason).toBe("execute_completed");
   });
 });
 
@@ -375,7 +400,7 @@ describe("fixed source-family policy", () => {
 
 describe("materialization contract", () => {
   it("only ever POSTs to /api/sync/manual, never /api/rebuild", async () => {
-    const db = makeFakeDb();
+    const db = makeFakeDb({ runsById: { "run-1": completedRun() } });
     const { deps, httpPostCalls } = makeFakeDeps({ db });
 
     await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
@@ -445,6 +470,75 @@ describe("disconnected window cursor invariant", () => {
     expect(classifyCursorDisconnection({ cursor: null, startBlock: 1n, endBlock: 2n })).toBe("no_existing_cursor");
   });
 
+  // Runner-level bridge test against the REAL production mergeCursorWindow
+  // (imported directly from src/services/sync/sync-state-store.ts, not
+  // reimplemented or mocked here) — this repo has no real-Postgres
+  // integration-test harness anywhere (no CI Postgres service, no
+  // PrismaClient used in any test file; mergeCursorWindow's own dedicated
+  // coverage in tests/services/sync/sync-state-store.test.ts is pure-function
+  // unit testing, the established convention this whole suite follows). What
+  // this bridge test CAN and does prove: for every window this runner's
+  // validateCursorDisconnection gate WOULD allow through to execute
+  // ("disconnected" or "no_existing_cursor"), the real mergeCursorWindow
+  // either leaves the existing cursor completely untouched (the
+  // "disconnected" case) or has no prior cursor to protect at all (the
+  // "no_existing_cursor" case) — so the gate can never let an execute-mode
+  // submission silently move a cursor. A "connected" window (which the gate
+  // always rejects before submission) is deliberately NOT asserted to always
+  // mutate the cursor — a window fully inside existing coverage is
+  // "connected" too, and mergeCursorWindow correctly treats that as a no-op;
+  // the gate still refuses it because it targets no genuine gap.
+  it("bridges to the real mergeCursorWindow: every gate-allowed window leaves an existing cursor byte-identical", () => {
+    const existing: SyncCursorRecord = { fromBlock: 100n, toBlock: 200n, blockHash: "0xexisting" };
+    const disconnectedCases: Array<{ startBlock: bigint; endBlock: bigint; label: string }> = [
+      { startBlock: 500n, endBlock: 600n, label: "far forward gap" },
+      { startBlock: 10n, endBlock: 90n, label: "far backward gap" },
+      { startBlock: 202n, endBlock: 250n, label: "one block beyond forward adjacency" },
+      { startBlock: 50n, endBlock: 98n, label: "one block beyond backward adjacency" },
+    ];
+    const connectedCases: Array<{ startBlock: bigint; endBlock: bigint; label: string }> = [
+      { startBlock: 201n, endBlock: 250n, label: "exactly adjacent forward (toBlock + 1)" },
+      { startBlock: 50n, endBlock: 99n, label: "exactly adjacent backward (fromBlock - 1)" },
+      { startBlock: 150n, endBlock: 250n, label: "overlapping forward" },
+      { startBlock: 120n, endBlock: 180n, label: "fully inside existing coverage" },
+    ];
+
+    for (const testCase of disconnectedCases) {
+      expect(
+        classifyCursorDisconnection({ cursor: existing, startBlock: testCase.startBlock, endBlock: testCase.endBlock }),
+        testCase.label,
+      ).toBe("disconnected");
+
+      const merged = mergeCursorWindow({
+        existing,
+        next: { fromBlock: testCase.startBlock, toBlock: testCase.endBlock, blockHash: "0xnext" },
+      });
+      expect(merged.changed, `${testCase.label}: mergeCursorWindow must leave a disconnected cursor unchanged`).toBe(false);
+      expect(merged.fromBlock).toBe(existing.fromBlock);
+      expect(merged.toBlock).toBe(existing.toBlock);
+    }
+
+    for (const testCase of connectedCases) {
+      expect(
+        classifyCursorDisconnection({ cursor: existing, startBlock: testCase.startBlock, endBlock: testCase.endBlock }),
+        testCase.label,
+      ).toBe("connected");
+    }
+
+    // No existing cursor at all: mergeCursorWindow always adopts `next`
+    // (changed: true), which is exactly why validateCursorDisconnection
+    // treats "no_existing_cursor" as acceptable for this runner — there is
+    // no prior coverage to protect.
+    const adopted = mergeCursorWindow({
+      existing: null,
+      next: { fromBlock: 500n, toBlock: 600n, blockHash: "0xnext" },
+    });
+    expect(adopted.changed).toBe(true);
+    expect(classifyCursorDisconnection({ cursor: null, startBlock: 500n, endBlock: 600n })).toBe(
+      "no_existing_cursor",
+    );
+  });
+
   it("for a successful execute run, SyncCursor snapshots for all four families remain byte-identical before/after when the underlying store never mutated them (disconnected gap)", async () => {
     const fixedCursor = { TRANSFERS: { fromBlock: 900_000n, toBlock: 901_000n } };
     const db = makeFakeDb({
@@ -470,14 +564,72 @@ describe("disconnected window cursor invariant", () => {
   });
 });
 
+// ─── Connected-window rejection (execute-mode gate) ─────────────────────────
+
+describe("connected-window rejection gate", () => {
+  it("validateCursorDisconnection fails when any family's cursor is connected", () => {
+    const disconnected = validateCursorDisconnection({
+      cursorsBefore: {
+        TRANSFERS: { fromBlock: POST_FORK_END + 100_000n, toBlock: POST_FORK_END + 101_000n },
+        DEX: null,
+        LP: null,
+        STAKING: null,
+      },
+      startBlock: POST_FORK_START,
+      endBlock: POST_FORK_END,
+    });
+    expect(disconnected.ok).toBe(true);
+
+    const connected = validateCursorDisconnection({
+      cursorsBefore: {
+        TRANSFERS: null,
+        DEX: { fromBlock: POST_FORK_START, toBlock: POST_FORK_START + 10n },
+        LP: null,
+        STAKING: null,
+      },
+      startBlock: POST_FORK_START,
+      endBlock: POST_FORK_END,
+    });
+    expect(connected.ok).toBe(false);
+    if (!connected.ok) {
+      expect(connected.reason).toContain("DEX");
+    }
+  });
+
+  it("refuses to execute when a family's cursor overlaps the requested window, before any POST", async () => {
+    const db = makeFakeDb({
+      cursorsByFamily: {
+        LP: { fromBlock: POST_FORK_START, toBlock: POST_FORK_START + 500n },
+      },
+    });
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+
+    const summary = await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("window_connected_to_existing_cursor");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("does not block dry-run — the window is only reported, never rejected, in dry-run", async () => {
+    const db = makeFakeDb({
+      cursorsByFamily: {
+        LP: { fromBlock: POST_FORK_START, toBlock: POST_FORK_START + 500n },
+      },
+    });
+    const { deps } = makeFakeDeps({ db });
+
+    const summary = await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: false }), deps);
+
+    expect(summary.stoppedReason).toBe("dry_run_reported");
+  });
+});
+
 // ─── 18. repeated identical execution: only one new SyncRun attempt, ───────
 // ─── no duplicate submission for a colliding policyLabel ───────────────────
 
 describe("policy label collision / idempotent-attempt gate", () => {
   it("refuses a second execute submission with the same policyLabel", async () => {
-    const db = makeFakeDb({
-      policyLabels: ["EVIDENCE_DIRECTED_WINDOW_V1:recover-window-evidence"],
-    });
+    const db = makeFakeDb({ policyLabelExists: true });
     const { deps, httpPostCalls } = makeFakeDeps({ db });
 
     const summary = await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
@@ -487,12 +639,30 @@ describe("policy label collision / idempotent-attempt gate", () => {
   });
 
   it("validateNoPolicyLabelCollision is the pure gate backing this behavior", () => {
-    expect(
-      validateNoPolicyLabelCollision({ policyLabel: "x", existingPolicyLabels: ["x"] }).ok,
-    ).toBe(false);
-    expect(
-      validateNoPolicyLabelCollision({ policyLabel: "x", existingPolicyLabels: ["y"] }).ok,
-    ).toBe(true);
+    expect(validateNoPolicyLabelCollision({ policyLabel: "x", policyLabelExists: true }).ok).toBe(false);
+    expect(validateNoPolicyLabelCollision({ policyLabel: "x", policyLabelExists: false }).ok).toBe(true);
+  });
+});
+
+// ─── Follow-up C: targeted policyLabel existence lookup ─────────────────────
+
+describe("policyLabelExistsForChain — targeted existence lookup", () => {
+  it("queries by the exact (chainId, policyLabel) pair via count, not a full-chain scan", async () => {
+    const db = makeFakeDb({ policyLabelExists: true });
+    const countSpy = vi.spyOn(db.syncRun, "count");
+    const findManySpy = vi.spyOn(db.syncRun, "findMany");
+
+    const exists = await policyLabelExistsForChain(db, { chainId: WINDOW_CHAIN_ID, policyLabel: DEFAULT_POLICY_LABEL });
+
+    expect(exists).toBe(true);
+    expect(countSpy).toHaveBeenCalledWith({ where: { chainId: WINDOW_CHAIN_ID, policyLabel: DEFAULT_POLICY_LABEL } });
+    expect(findManySpy).not.toHaveBeenCalled();
+  });
+
+  it("returns false when no matching SyncRun exists", async () => {
+    const db = makeFakeDb({ policyLabelExists: false });
+    const exists = await policyLabelExistsForChain(db, { chainId: WINDOW_CHAIN_ID, policyLabel: DEFAULT_POLICY_LABEL });
+    expect(exists).toBe(false);
   });
 });
 
@@ -617,7 +787,7 @@ describe("serializeEvidence", () => {
 // ─── Server health gate ──────────────────────────────────────────────────────
 
 describe("server health gate", () => {
-  it("stops before submission when health check fails", async () => {
+  it("stops before submission when health check fails (non-200)", async () => {
     const db = makeFakeDb();
     const { deps, httpPostCalls } = makeFakeDeps({ db });
     deps.httpGet = async () => ({ status: 500, body: undefined });
@@ -629,6 +799,172 @@ describe("server health gate", () => {
   });
 });
 
+// ─── Blocker A: bounded HTTP request timeouts ───────────────────────────────
+
+describe("bounded HTTP timeout policy", () => {
+  it("uses a fixed, non-arbitrary timeout constant", () => {
+    expect(HTTP_REQUEST_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(HTTP_REQUEST_TIMEOUT_MS).toBeLessThanOrEqual(120_000);
+  });
+
+  it("GET timeout / thrown network error fails the health gate closed, never reaching POST", async () => {
+    const db = makeFakeDb();
+    const { deps, httpPostCalls } = makeFakeDeps({ db });
+    deps.httpGet = async () => {
+      throw new DOMException("The operation was aborted.", "TimeoutError");
+    };
+
+    const summary = await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("server_unhealthy");
+    expect(httpPostCalls).toHaveLength(0);
+  });
+
+  it("POST timeout before acceptance, with zero matching SyncRun candidates, fails closed with no automatic retry", async () => {
+    const db = makeFakeDb({ policyLabelCandidates: [] });
+    const httpPost: RunnerDeps["httpPost"] = async () => {
+      throw new DOMException("The operation was aborted.", "TimeoutError");
+    };
+    const postCalls: unknown[] = [];
+    const wrappedHttpPost: RunnerDeps["httpPost"] = async (url, body) => {
+      postCalls.push({ url, body });
+      return httpPost(url, body);
+    };
+    const { deps, evidence } = makeFakeDeps({ db, httpPost: wrappedHttpPost });
+
+    const summary = await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("ambiguous_submission_unrecoverable");
+    expect(postCalls).toHaveLength(1);
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "ambiguous_submission_unrecoverable");
+    expect(stopRecord).toBeDefined();
+    expect(stopRecord?.serverAcceptanceUnknown).toBe(true);
+    expect(String(stopRecord?.detail)).toMatch(/zero SyncRun candidates/i);
+  });
+
+  it("ambiguous POST where exactly one matching SyncRun exists recovers and proceeds without resubmitting", async () => {
+    const matchingCandidate = completedRun({ id: "recovered-run", policyLabel: DEFAULT_POLICY_LABEL });
+    const db = makeFakeDb({
+      policyLabelCandidates: [matchingCandidate],
+      runsById: { "recovered-run": matchingCandidate },
+    });
+    const postCalls: unknown[] = [];
+    const httpPost: RunnerDeps["httpPost"] = async (url, body) => {
+      postCalls.push({ url, body });
+      throw new DOMException("The operation was aborted.", "TimeoutError");
+    };
+    const { deps, evidence } = makeFakeDeps({ db, httpPost });
+
+    const summary = await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
+
+    expect(postCalls).toHaveLength(1);
+    expect(summary.stoppedReason).toBe("execute_completed");
+    const executeRecord = evidence.find((e) => e.kind === "execute");
+    expect(executeRecord?.recoveredFromAmbiguousSubmission).toBe(true);
+    expect(executeRecord?.runId).toBe("recovered-run");
+  });
+
+  it("ambiguous POST with more than one matching candidate fails closed, never guesses", async () => {
+    const db = makeFakeDb({
+      policyLabelCandidates: [
+        completedRun({ id: "run-a", policyLabel: DEFAULT_POLICY_LABEL }),
+        completedRun({ id: "run-b", policyLabel: DEFAULT_POLICY_LABEL }),
+      ],
+    });
+    const httpPost: RunnerDeps["httpPost"] = async () => {
+      throw new Error("network error");
+    };
+    const { deps } = makeFakeDeps({ db, httpPost });
+
+    const summary = await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("ambiguous_submission_unrecoverable");
+  });
+
+  it("classifyAmbiguousSubmissionRecovery rejects a candidate whose identity does not fully match", () => {
+    const mismatched = completedRun({
+      id: "run-x",
+      policyLabel: DEFAULT_POLICY_LABEL,
+      startBlock: POST_FORK_START + 1n,
+    });
+    const result = classifyAmbiguousSubmissionRecovery({
+      candidates: [mismatched],
+      expectedPolicyLabel: DEFAULT_POLICY_LABEL,
+      expectedStartBlock: POST_FORK_START,
+      expectedEndBlock: POST_FORK_END,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("manual_sync_submit_failed evidence preserves the backend response body", async () => {
+    const db = makeFakeDb();
+    const httpPost: RunnerDeps["httpPost"] = async () => ({
+      status: 409,
+      body: { error: { code: "OPERATION_CONFLICT", message: "conflict", details: { activeRunId: "run-9" } } },
+    });
+    const { deps, evidence } = makeFakeDeps({ db, httpPost });
+
+    const summary = await runEvidenceDirectedWindowRunner(baseRunnerOptions({ execute: true }), deps);
+
+    expect(summary.stoppedReason).toBe("manual_sync_submit_failed");
+    const stopRecord = evidence.find((e) => e.kind === "stop" && e.reason === "manual_sync_submit_failed");
+    expect(stopRecord?.responseBody).toEqual({
+      error: { code: "OPERATION_CONFLICT", message: "conflict", details: { activeRunId: "run-9" } },
+    });
+  });
+});
+
+describe("sanitizeBackendResponseBody", () => {
+  it("redacts secret-like keys and never throws", () => {
+    expect(sanitizeBackendResponseBody({ password: "hunter2", ok: true })).toEqual({
+      password: "[redacted]",
+      ok: true,
+    });
+    expect(sanitizeBackendResponseBody(undefined)).toBeNull();
+  });
+
+  it("truncates an oversized string body", () => {
+    const huge = "x".repeat(3000);
+    const result = sanitizeBackendResponseBody(huge) as string;
+    expect(result.length).toBeLessThan(huge.length);
+    expect(result).toContain("[truncated]");
+  });
+});
+
+// ─── Blocker B: exit-code / clean-stop-reason contract ──────────────────────
+
+describe("computeExitCode / CLEAN_STOP_REASONS", () => {
+  it("exits 0 only for dry_run_reported and execute_completed", () => {
+    expect(CLEAN_STOP_REASONS.has("dry_run_reported")).toBe(true);
+    expect(CLEAN_STOP_REASONS.has("execute_completed")).toBe(true);
+    expect(computeExitCode("dry_run_reported")).toBe(0);
+    expect(computeExitCode("execute_completed")).toBe(0);
+  });
+
+  it("fails closed (exit 1) for every gate decline and failure reason", () => {
+    const failClosedReasons = [
+      "invalid_chain_id",
+      "invalid_block_order",
+      "range_too_large",
+      "fork_boundary_violation",
+      "invalid_reason",
+      "wallet_not_found",
+      "window_connected_to_existing_cursor",
+      "active_operation_conflict",
+      "policy_label_collision",
+      "server_unhealthy",
+      "ambiguous_submission_unrecoverable",
+      "manual_sync_submit_failed",
+      "poll_timeout",
+      "sync_run_not_completed",
+      "some_future_unlisted_reason",
+    ];
+    for (const reason of failClosedReasons) {
+      expect(computeExitCode(reason)).toBe(1);
+    }
+  });
+});
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function completedRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncRunRecord {
@@ -637,6 +973,7 @@ function completedRun(overrides: Partial<RunnerSyncRunRecord> = {}): RunnerSyncR
     trigger: "MANUAL",
     status: "COMPLETED",
     stage: "COMPLETED",
+    policyLabel: DEFAULT_POLICY_LABEL,
     sourceFamilies: ["TRANSFERS", "DEX", "LP", "STAKING"],
     startBlock: POST_FORK_START,
     endBlock: POST_FORK_END,

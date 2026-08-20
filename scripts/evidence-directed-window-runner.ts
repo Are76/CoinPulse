@@ -10,15 +10,19 @@
  * `mergeCursorWindow`, and does not perform reorg detection or portfolio
  * materialization.
  *
- * A historical window submitted here is, by construction, disconnected from
- * the wallet's live SyncCursor for at least one family (that is the entire
+ * A historical window submitted here must be disconnected from the wallet's
+ * live SyncCursor for every one of the four families (that is the entire
  * point — it targets a gap the ordinary forward/backfill cursor has not
- * reached). `mergeCursorWindow` already refuses to move a cursor across a
- * disconnected gap (src/services/sync/sync-state-store.ts), so a successful
- * run here ingests raw + canonical ledger evidence for the window WITHOUT
- * advancing SyncCursor and WITHOUT claiming the wallet's historical coverage
- * is now contiguous. This runner relies on that existing invariant; it does
- * not attempt to force, bypass, or duplicate it.
+ * reached). The runner enforces this itself in the execute path (see
+ * `validateCursorDisconnection` below) before ever submitting, and
+ * `mergeCursorWindow` additionally refuses to move a cursor across a
+ * disconnected gap as a second, independent line of defense
+ * (src/services/sync/sync-state-store.ts). A successful run here therefore
+ * ingests raw + canonical ledger evidence for the window WITHOUT advancing
+ * SyncCursor and WITHOUT claiming the wallet's historical coverage is now
+ * contiguous. This runner relies on that existing `mergeCursorWindow`
+ * invariant as a backstop; it does not attempt to force, bypass, or
+ * duplicate it — it refuses connected windows before ever reaching it.
  *
  * Known limitations this runner does NOT attempt to fix (out of scope):
  *   - Reorg detection (`detectReorgMismatch`, `ReorgEvent`,
@@ -64,11 +68,33 @@
  * service modules use the server-only guard, which is a no-op only under
  * that export condition.
  *
- * Exit behaviour:
- *   - Exits 0 on any clean stop (dry-run completion, execute completion,
- *     or a gate failure reported through the JSON summary).
- *   - Exits 1 on invalid arguments, missing environment, HTTP submission
- *     failure, poll timeout, or an unterminated/failed SyncRun.
+ * HTTP calls (`GET /api/debug/health`, `POST /api/sync/manual`) carry a
+ * fixed request timeout (`HTTP_REQUEST_TIMEOUT_MS`, matching the convention
+ * already established in scripts/wallet-forward-campaign-runner.ts and
+ * scripts/wallet-forward-supervisor.ts). A timed-out health check fails the
+ * health gate closed exactly like any other network error. A timed-out or
+ * otherwise-thrown POST is never automatically retried: instead the runner
+ * performs a narrow, read-only ambiguous-submission recovery lookup by
+ * policyLabel (`classifyAmbiguousSubmissionRecovery`) and only proceeds if
+ * canonical PostgreSQL shows exactly one SyncRun matching the full expected
+ * identity; any other outcome fails closed with explicit evidence that
+ * server acceptance is unknown.
+ *
+ * Exit behaviour (see `CLEAN_STOP_REASONS`/`computeExitCode`; the same
+ * explicit-allowlist, fail-closed design used by
+ * scripts/wallet-forward-sync-runner.ts):
+ *   - Exits 0 only for `dry_run_reported` or `execute_completed` — the two
+ *     stop reasons that represent the runner doing exactly what it was
+ *     asked to do.
+ *   - Exits 1 for every other stop reason, including invalid arguments,
+ *     missing environment, every pre-submit gate decline (wallet not found,
+ *     active-operation conflict, policy-label collision, connected-window
+ *     rejection, server unhealthy), an unrecoverable ambiguous submission,
+ *     HTTP submission failure, poll timeout, or an unterminated/failed
+ *     SyncRun. Adding a new stop reason without adding it to
+ *     `CLEAN_STOP_REASONS` therefore fails closed (exit 1) rather than
+ *     silently succeeding. The JSON summary on stdout always reports the
+ *     exact stop reason regardless of exit code.
  *   - Never prints DATABASE_URL, REDIS_URL, RPC URLs, secrets, or headers.
  */
 
@@ -86,6 +112,19 @@ export const WINDOW_CHAIN_ID = PULSECHAIN_REFERENCE.id;
 export const WINDOW_SOURCE_FAMILIES = ["TRANSFERS", "DEX", "LP", "STAKING"] as const;
 export const POLICY_LABEL_PREFIX = "EVIDENCE_DIRECTED_WINDOW_V1:";
 export const MAX_REASON_SLUG_LENGTH = 64;
+
+/**
+ * Fixed request timeout applied to both the health check and the manual-sync
+ * submission, matching the established convention in
+ * scripts/wallet-forward-campaign-runner.ts (`HTTP_REQUEST_TIMEOUT_MS`) and
+ * scripts/wallet-forward-supervisor.ts. Applies via `AbortSignal.timeout` in
+ * `main()`'s real `httpGet`/`httpPost` implementations only — injected test
+ * deps are not subject to it. A timed-out GET fails the health gate closed
+ * identically to any other network error. A timed-out POST throws exactly
+ * like any other transport failure, so it flows through the same
+ * ambiguous-submission recovery path — never an automatic retry.
+ */
+export const HTTP_REQUEST_TIMEOUT_MS = 60_000;
 
 // ─── Reason slug / policyLabel (pure) ──────────────────────────────────────
 
@@ -196,9 +235,9 @@ export function validateNoActiveOperation(args: { activeRunCount: number }): Gat
 
 export function validateNoPolicyLabelCollision(args: {
   policyLabel: string;
-  existingPolicyLabels: readonly string[];
+  policyLabelExists: boolean;
 }): GateResult {
-  if (args.existingPolicyLabels.includes(args.policyLabel)) {
+  if (args.policyLabelExists) {
     return { ok: false, reason: `a SyncRun with policyLabel "${args.policyLabel}" already exists` };
   }
   return { ok: true };
@@ -250,6 +289,38 @@ export function cursorsIdentical(a: CursorSnapshot, b: CursorSnapshot): boolean 
   if (a === null && b === null) return true;
   if (a === null || b === null) return false;
   return a.fromBlock === b.fromBlock && a.toBlock === b.toBlock;
+}
+
+/**
+ * Execute-mode gate: refuses to submit when the requested window is
+ * "connected" (overlapping or directly adjacent) to ANY family's existing
+ * SyncCursor. A connected window would make `mergeCursorWindow` (called
+ * inside `runWalletSync`) actually expand that family's cursor rather than
+ * leaving it untouched — silently breaking this runner's documented
+ * no-cursor-movement contract for a tool whose entire purpose is targeting
+ * an already-disconnected historical gap. `no_existing_cursor` and
+ * `disconnected` are both acceptable; only `connected` fails this gate.
+ */
+export function validateCursorDisconnection(args: {
+  cursorsBefore: Record<(typeof WINDOW_SOURCE_FAMILIES)[number], CursorSnapshot>;
+  startBlock: bigint;
+  endBlock: bigint;
+}): GateResult {
+  const connectedFamilies = WINDOW_SOURCE_FAMILIES.filter(
+    (sourceFamily) =>
+      classifyCursorDisconnection({
+        cursor: args.cursorsBefore[sourceFamily],
+        startBlock: args.startBlock,
+        endBlock: args.endBlock,
+      }) === "connected",
+  );
+  if (connectedFamilies.length > 0) {
+    return {
+      ok: false,
+      reason: `requested window [${args.startBlock}, ${args.endBlock}] is connected (overlapping or directly adjacent) to the existing SyncCursor for: ${connectedFamilies.join(", ")}; this runner only targets windows disconnected from all four families' existing coverage`,
+    };
+  }
+  return { ok: true };
 }
 
 // ─── CLI argument parsing ───────────────────────────────────────────────────
@@ -464,6 +535,7 @@ export type RunnerSyncRunRecord = {
   trigger: string;
   status: string;
   stage: string;
+  policyLabel: string;
   sourceFamilies: readonly string[];
   startBlock: bigint | null;
   endBlock: bigint | null;
@@ -484,7 +556,7 @@ export type RunnerDbClient = {
     } | null>;
   };
   syncRun: {
-    findMany: (args: unknown) => Promise<Array<{ policyLabel: string }>>;
+    findMany: (args: unknown) => Promise<RunnerSyncRunRecord[]>;
     findUnique: (args: unknown) => Promise<RunnerSyncRunRecord | null>;
     count: (args: unknown) => Promise<number>;
   };
@@ -520,13 +592,36 @@ export async function getCursorsForAllFamilies(
   return Object.fromEntries(entries) as Record<(typeof WINDOW_SOURCE_FAMILIES)[number], CursorSnapshot>;
 }
 
-export async function listActivePolicyLabels(db: RunnerDbClient, chainId: number): Promise<string[]> {
-  const runs = await db.syncRun.findMany({ where: { chainId }, select: { policyLabel: true } });
-  return runs.map((r) => r.policyLabel);
+/**
+ * Smallest targeted existence lookup for the exact (chainId, policyLabel)
+ * pair — replaces an earlier version that loaded every SyncRun policyLabel
+ * for the chain. No schema/index change: this narrows the query at the
+ * database layer via `count`, which Prisma can already push into a single
+ * COUNT(*) WHERE query without materializing rows.
+ */
+export async function policyLabelExistsForChain(
+  db: RunnerDbClient,
+  args: { chainId: number; policyLabel: string },
+): Promise<boolean> {
+  const count = await db.syncRun.count({ where: { chainId: args.chainId, policyLabel: args.policyLabel } });
+  return count > 0;
 }
 
 export async function countActiveOperations(db: RunnerDbClient): Promise<number> {
   return db.syncRun.count({ where: { status: { in: ["PENDING", "RUNNING"] } } });
+}
+
+/**
+ * All canonical SyncRun rows sharing the exact policyLabel, for
+ * ambiguous-submission recovery only. `policyLabel` is not database-unique
+ * (prisma/schema.prisma: no `@unique`), so more than one row can share a
+ * label — the caller must treat that as a red flag, not resolve it here.
+ */
+export async function findSyncRunsByPolicyLabel(
+  db: RunnerDbClient,
+  args: { chainId: number; policyLabel: string },
+): Promise<RunnerSyncRunRecord[]> {
+  return db.syncRun.findMany({ where: { chainId: args.chainId, policyLabel: args.policyLabel } });
 }
 
 // ─── HTTP + polling ─────────────────────────────────────────────────────────
@@ -534,6 +629,125 @@ export async function countActiveOperations(db: RunnerDbClient): Promise<number>
 export type HttpResponse = { status: number; body: unknown };
 export type HttpPost = (url: string, body: unknown) => Promise<HttpResponse>;
 export type HttpGet = (url: string) => Promise<HttpResponse>;
+
+const SANITIZED_RESPONSE_TEXT_MAX_LENGTH = 2_000;
+
+/** Key names that must never appear verbatim in evidence, even if a backend
+ * response body somehow included one (defense in depth — the API routes
+ * this runner calls do not emit these fields today). */
+const SECRET_LIKE_KEY_PATTERN =
+  /(database_url|redis_url|password|secret|token|api[-_]?key|authorization|cookie)/i;
+
+function redactSecretLikeFields(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactSecretLikeFields);
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = SECRET_LIKE_KEY_PATTERN.test(key) ? "[redacted]" : redactSecretLikeFields(val);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Prepares a backend HTTP response body for inclusion in stop evidence: caps
+ * an oversized/non-JSON string body, redacts any secret-like key a JSON body
+ * might carry, and never throws. Matches the convention already established
+ * in scripts/lib/wallet-forward-sync-primitives.ts.
+ */
+export function sanitizeBackendResponseBody(body: unknown): unknown {
+  if (body === undefined) {
+    return null;
+  }
+  if (typeof body === "string") {
+    return body.length > SANITIZED_RESPONSE_TEXT_MAX_LENGTH
+      ? `${body.slice(0, SANITIZED_RESPONSE_TEXT_MAX_LENGTH)}...[truncated]`
+      : body;
+  }
+  try {
+    return redactSecretLikeFields(body);
+  } catch {
+    return "[unavailable: response body could not be sanitized]";
+  }
+}
+
+/** Reads a fetch Response body as JSON when possible, text otherwise, and
+ * never throws — an empty or unparseable body degrades to a safe value
+ * rather than masking the original HTTP status. */
+export async function readHttpResponseBody(res: { text: () => Promise<string> }): Promise<unknown> {
+  let text: string;
+  try {
+    text = await res.text();
+  } catch {
+    return undefined;
+  }
+  if (text.length === 0) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * Classifies whether an ambiguous POST (the HTTP call itself threw — the
+ * runner never received a runId, but the server may have already accepted
+ * and persisted the request) can be safely treated as the exact submitted
+ * attempt. Mirrors the design in
+ * scripts/wallet-forward-campaign-runner.ts:classifyAmbiguousSubmissionRecovery.
+ *
+ * `candidates` must be every canonical SyncRun row sharing the exact
+ * expected (chainId, policyLabel) pair. The candidate-set size is checked
+ * FIRST, independent of identity: zero rows or more than one row sharing the
+ * label both fail closed immediately — the mere presence of an unrelated
+ * same-label row is itself treated as a red flag, not something a
+ * coincidental identity match on a different row can paper over. Only when
+ * the label uniquely identifies a single row is that row checked against the
+ * full expected identity (policyLabel, sourceFamilies === the fixed four,
+ * startBlock, endBlock); any mismatch also fails closed. Never an automatic
+ * resubmit, and never an inference from range alone.
+ */
+export function classifyAmbiguousSubmissionRecovery(args: {
+  candidates: readonly RunnerSyncRunRecord[];
+  expectedPolicyLabel: string;
+  expectedStartBlock: bigint;
+  expectedEndBlock: bigint;
+}): { ok: true; run: RunnerSyncRunRecord } | { ok: false; reason: string } {
+  if (args.candidates.length === 0) {
+    return {
+      ok: false,
+      reason: `ambiguous submission for policyLabel "${args.expectedPolicyLabel}": zero SyncRun candidates share this policyLabel — failing closed, no auto-resubmit`,
+    };
+  }
+  if (args.candidates.length > 1) {
+    return {
+      ok: false,
+      reason: `ambiguous submission for policyLabel "${args.expectedPolicyLabel}": ${args.candidates.length} SyncRun candidates share this policyLabel (policyLabel is not database-unique) — failing closed regardless of which one, if any, would otherwise match the full expected identity, no auto-resubmit`,
+    };
+  }
+
+  const [sole] = args.candidates;
+  const matchesFullIdentity =
+    sole.policyLabel === args.expectedPolicyLabel &&
+    sole.sourceFamilies.length === WINDOW_SOURCE_FAMILIES.length &&
+    WINDOW_SOURCE_FAMILIES.every((family, index) => sole.sourceFamilies[index] === family) &&
+    sole.startBlock === args.expectedStartBlock &&
+    sole.endBlock === args.expectedEndBlock;
+
+  if (!matchesFullIdentity) {
+    return {
+      ok: false,
+      reason: `ambiguous submission for policyLabel "${args.expectedPolicyLabel}": the sole matching-policyLabel SyncRun candidate does not match the full expected identity (policyLabel, sourceFamilies, startBlock, endBlock) — failing closed, no auto-resubmit`,
+    };
+  }
+
+  return { ok: true, run: sole };
+}
 
 export async function checkServerHealth(httpGet: HttpGet, baseUrl: string): Promise<GateResult> {
   let response: HttpResponse;
@@ -651,12 +865,22 @@ export async function runEvidenceDirectedWindowRunner(
   }
 
   // ── Execute path ──
+
+  // Refuses a window connected to any family's existing cursor BEFORE any
+  // other execute-only gate or HTTP call — see validateCursorDisconnection.
+  const disconnectionGate = validateCursorDisconnection({
+    cursorsBefore,
+    startBlock: options.startBlock,
+    endBlock: options.endBlock,
+  });
+  if (!disconnectionGate.ok) return stop(deps, mode, "window_connected_to_existing_cursor", disconnectionGate.reason);
+
   const activeRunCount = await countActiveOperations(deps.db);
   const activeOpGate = validateNoActiveOperation({ activeRunCount });
   if (!activeOpGate.ok) return stop(deps, mode, "active_operation_conflict", activeOpGate.reason);
 
-  const existingLabels = await listActivePolicyLabels(deps.db, options.chainId);
-  const labelGate = validateNoPolicyLabelCollision({ policyLabel, existingPolicyLabels: existingLabels });
+  const policyLabelExists = await policyLabelExistsForChain(deps.db, { chainId: options.chainId, policyLabel });
+  const labelGate = validateNoPolicyLabelCollision({ policyLabel, policyLabelExists });
   if (!labelGate.ok) return stop(deps, mode, "policy_label_collision", labelGate.reason);
 
   const healthGate = await checkServerHealth(deps.httpGet, options.baseUrl);
@@ -669,22 +893,67 @@ export async function runEvidenceDirectedWindowRunner(
     endBlock: options.endBlock,
     policyLabel,
   });
-  const postResponse = await deps.httpPost(`${options.baseUrl}/api/sync/manual`, requestBody);
-  const runId = (postResponse.body as { data?: { runId?: string } } | undefined)?.data?.runId;
-  if (postResponse.status !== 202 || !runId) {
+
+  // The policy-label collision gate above already ran and passed — this
+  // POST is the only submission attempt for this policyLabel; a thrown
+  // error here (including a request timeout) is never retried, only
+  // resolved via the read-only recovery lookup below.
+  let postResponse: HttpResponse | undefined;
+  let recoveredRunId: string | undefined;
+  try {
+    postResponse = await deps.httpPost(`${options.baseUrl}/api/sync/manual`, requestBody);
+  } catch (err) {
+    const candidates = await findSyncRunsByPolicyLabel(deps.db, { chainId: options.chainId, policyLabel });
+    const recovery = classifyAmbiguousSubmissionRecovery({
+      candidates,
+      expectedPolicyLabel: policyLabel,
+      expectedStartBlock: options.startBlock,
+      expectedEndBlock: options.endBlock,
+    });
+    if (!recovery.ok) {
+      const detail = `POST /api/sync/manual threw (${err instanceof Error ? err.message : String(err)}); server acceptance is unknown; ${recovery.reason}`;
+      await deps.writeEvidence({
+        kind: "stop",
+        at: deps.now().toISOString(),
+        mode,
+        reason: "ambiguous_submission_unrecoverable",
+        detail,
+        policyLabel,
+        submittedAt,
+        serverAcceptanceUnknown: true,
+      });
+      return { mode, stoppedReason: "ambiguous_submission_unrecoverable", detail };
+    }
+    recoveredRunId = recovery.run.id;
+  }
+
+  const runId =
+    recoveredRunId ?? (postResponse?.body as { data?: { runId?: string } } | undefined)?.data?.runId;
+
+  if (!recoveredRunId && (!postResponse || postResponse.status !== 202 || !runId)) {
     await deps.writeEvidence({
       kind: "stop",
       at: deps.now().toISOString(),
       mode,
       reason: "manual_sync_submit_failed",
-      detail: `POST /api/sync/manual returned status ${postResponse.status}`,
+      detail: `POST /api/sync/manual returned status ${postResponse?.status ?? "unknown"}`,
       policyLabel,
       submittedAt,
+      httpStatus: postResponse?.status ?? null,
+      responseBody: sanitizeBackendResponseBody(postResponse?.body),
     });
-    return { mode, stoppedReason: "manual_sync_submit_failed", detail: `POST /api/sync/manual returned status ${postResponse.status}` };
+    return {
+      mode,
+      stoppedReason: "manual_sync_submit_failed",
+      detail: `POST /api/sync/manual returned status ${postResponse?.status ?? "unknown"}`,
+    };
   }
 
-  const polled = await pollSyncRunToTerminal(deps.db, runId, {
+  // runId is guaranteed defined here: the block above returns unless either
+  // recoveredRunId is set or postResponse carried a runId.
+  const finalRunId: string = runId!;
+
+  const polled = await pollSyncRunToTerminal(deps.db, finalRunId, {
     now: deps.now,
     sleep: deps.sleep,
     pollIntervalMs: options.pollIntervalMs,
@@ -696,12 +965,12 @@ export async function runEvidenceDirectedWindowRunner(
       at: deps.now().toISOString(),
       mode,
       reason: "poll_timeout",
-      detail: `SyncRun ${runId} did not reach a terminal state within ${options.pollTimeoutMs}ms`,
+      detail: `SyncRun ${finalRunId} did not reach a terminal state within ${options.pollTimeoutMs}ms`,
       policyLabel,
-      runId,
+      runId: finalRunId,
       submittedAt,
     });
-    return { mode, stoppedReason: "poll_timeout", detail: `SyncRun ${runId} did not reach a terminal state within ${options.pollTimeoutMs}ms` };
+    return { mode, stoppedReason: "poll_timeout", detail: `SyncRun ${finalRunId} did not reach a terminal state within ${options.pollTimeoutMs}ms` };
   }
   const terminalAt = deps.now().toISOString();
 
@@ -728,7 +997,8 @@ export async function runEvidenceDirectedWindowRunner(
     submittedRange: { startBlock: options.startBlock.toString(), endBlock: options.endBlock.toString() },
     sourceFamilies: [...WINDOW_SOURCE_FAMILIES],
     policyLabel,
-    runId,
+    runId: finalRunId,
+    recoveredFromAmbiguousSubmission: recoveredRunId !== undefined,
     submittedAt,
     terminalAt,
     terminalStatus,
@@ -744,7 +1014,7 @@ export async function runEvidenceDirectedWindowRunner(
   return {
     mode,
     stoppedReason: succeeded ? "execute_completed" : "sync_run_not_completed",
-    detail: succeeded ? undefined : `SyncRun ${runId} terminal status was ${terminalStatus}, not COMPLETED`,
+    detail: succeeded ? undefined : `SyncRun ${finalRunId} terminal status was ${terminalStatus}, not COMPLETED`,
   };
 }
 
@@ -788,7 +1058,19 @@ function safeStringify(value: unknown): string {
   return JSON.stringify(value, bigintSafeReplacer, 2);
 }
 
-const SUCCESSFUL_STOP_REASONS = new Set(["dry_run_reported", "execute_completed"]);
+/**
+ * Explicit allowlist of stop reasons that represent the runner doing exactly
+ * what it was asked to do. Everything else fails closed (exit 1) — matching
+ * the deliberate design already used by
+ * scripts/wallet-forward-sync-runner.ts's CLEAN_STOP_REASONS/computeExitCode:
+ * adding a new stop reason without adding it here fails closed rather than
+ * silently succeeding.
+ */
+export const CLEAN_STOP_REASONS: ReadonlySet<string> = new Set(["dry_run_reported", "execute_completed"]);
+
+export function computeExitCode(stoppedReason: string): 0 | 1 {
+  return CLEAN_STOP_REASONS.has(stoppedReason) ? 0 : 1;
+}
 
 async function main(): Promise<void> {
   const parsed = parseRunnerCliArgs(process.argv.slice(2));
@@ -819,17 +1101,24 @@ async function main(): Promise<void> {
   const deps: RunnerDeps = {
     db: prisma as unknown as RunnerDbClient,
     resolveWallet: resolveTrackedWalletByAddress,
+    // Fixed request timeout on both calls (see HTTP_REQUEST_TIMEOUT_MS doc
+    // comment). A timed-out GET fails the health gate closed identically to
+    // any other network error. A timed-out POST throws exactly like any
+    // other transport failure, so it flows through the orchestrator's
+    // ambiguous-submission recovery path unchanged — never an automatic
+    // retry of the POST itself.
     httpGet: async (url) => {
-      const res = await fetch(url);
-      return { status: res.status, body: await res.json().catch(() => undefined) };
+      const res = await fetch(url, { signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS) });
+      return { status: res.status, body: await readHttpResponseBody(res) };
     },
     httpPost: async (url, body) => {
       const res = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
       });
-      return { status: res.status, body: await res.json().catch(() => undefined) };
+      return { status: res.status, body: await readHttpResponseBody(res) };
     },
     now: () => new Date(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -839,9 +1128,7 @@ async function main(): Promise<void> {
   try {
     const summary = await runEvidenceDirectedWindowRunner(parsed.options, deps);
     console.log(safeStringify(summary));
-    if (!SUCCESSFUL_STOP_REASONS.has(summary.stoppedReason)) {
-      process.exitCode = 1;
-    }
+    process.exitCode = computeExitCode(summary.stoppedReason);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`evidence-directed-window-runner error: ${message}`);
