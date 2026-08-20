@@ -1,6 +1,6 @@
-﻿import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it, vi } from "vitest";
 import type { CanonicalLedgerEntryDraft } from "@/services/normalization";
-import { persistNormalizedLedger } from "@/services/sync/ledger-store";
+import { LEDGER_PERSIST_TRANSACTION_OPTIONS, persistNormalizedLedger } from "@/services/sync/ledger-store";
 import { rebuildCanonicalLedger } from "@/services/rebuild/rebuild-ledger";
 
 type RawBlockRecord = {
@@ -1394,6 +1394,47 @@ describe("rebuildCanonicalLedger", () => {
 
     expect(afterSecond).toEqual(afterFirst);
     expect(phexMovements(stores, PHEX_ASSET_ID)).toHaveLength(1);
+  });
+
+  it("opens the outer rebuild transaction with the same bounded, explicit maxWait/timeout used for ledger persistence", async () => {
+    const stores = createMemoryDb();
+    seedP1Fixture(stores);
+
+    // Prisma's real interactive-transaction client never exposes $transaction
+    // itself (no nested transactions) — the mock mirrors that by handing the
+    // callback the same store object, which also lacks $transaction, proving
+    // persistNormalizedLedger's inner wrapping correctly stays single-level
+    // (it never attempts to open a second transaction here).
+    const transactionSpy = vi.fn(
+      async (
+        callback: (client: unknown) => Promise<unknown>,
+        options?: { maxWait?: number; timeout?: number },
+      ) => {
+        void options;
+        return callback(stores.db);
+      },
+    );
+    const dbWithTransaction = { ...stores.db, $transaction: transactionSpy };
+
+    await rebuildCanonicalLedger({
+      db: dbWithTransaction as never,
+      wallet: { id: WALLET_ID, chainId: 369, address: WALLET_ADDRESS },
+      fromBlock: 200n,
+      toBlock: 200n,
+      sourceFamilies: ["STAKING"],
+      normalizerVersion: "v1",
+    });
+
+    expect(transactionSpy).toHaveBeenCalledTimes(1);
+    const [, options] = transactionSpy.mock.calls[0]!;
+    // Same shared constant persistNormalizedLedger's own $transaction call
+    // uses — one policy, not a second inconsistent one for rebuild.
+    expect(options).toEqual(LEDGER_PERSIST_TRANSACTION_OPTIONS);
+
+    // Scoped deletes + persistence still happened, inside that one call.
+    expect(Array.from(stores.ledgerEntries.values()).some((e) => e.entryType === "STAKE_RETURN_UNALLOCATED")).toBe(
+      true,
+    );
   });
 
   it("rebuilds mixed source families in one run", async () => {

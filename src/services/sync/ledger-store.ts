@@ -152,7 +152,7 @@ export type PrismaLikeClient = {
  * bounded, not unbounded, and a generous-but-finite timeout is safe rather
  * than a workaround for an open-ended workload.
  */
-const LEDGER_PERSIST_TRANSACTION_OPTIONS = {
+export const LEDGER_PERSIST_TRANSACTION_OPTIONS = {
   maxWait: 5_000,
   timeout: 15_000,
 } as const;

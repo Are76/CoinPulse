@@ -112,11 +112,17 @@ describe("persistNormalizedLedger", () => {
 
 describe("wrapPrismaClientAsLedgerStore", () => {
   it("opens the interactive transaction with a bounded, explicit maxWait/timeout (not the bare Prisma default)", async () => {
-    const transactionSpy = vi.fn(async (callback: (tx: unknown) => Promise<unknown>) =>
-      callback({
-        ledgerActionGroup: { findMany: vi.fn(async () => []), createMany: vi.fn(async () => ({ count: 0 })) },
-        ledgerEntry: { findMany: vi.fn(async () => []), createMany: vi.fn(async () => ({ count: 0 })) },
-      }),
+    const transactionSpy = vi.fn(
+      async (
+        callback: (tx: unknown) => Promise<unknown>,
+        options?: { maxWait?: number; timeout?: number },
+      ) => {
+        void options;
+        return callback({
+          ledgerActionGroup: { findMany: vi.fn(async () => []), createMany: vi.fn(async () => ({ count: 0 })) },
+          ledgerEntry: { findMany: vi.fn(async () => []), createMany: vi.fn(async () => ({ count: 0 })) },
+        });
+      },
     );
 
     const db = {
