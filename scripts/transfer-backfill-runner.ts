@@ -14,6 +14,13 @@
  *   - Checkpoint/final rebuild is planned but never submitted unless
  *     --allow-checkpoint-rebuild is also passed.
  *   - Every invariant violation is a hard stop; nothing is auto-retried.
+ *   - The campaign can never plan or submit a window at or below the
+ *     Tier 1-verified PulseChain fork boundary (`lastInheritedBlock`,
+ *     `src/config/chains.ts` PULSECHAIN_FORK_BOUNDARY) — see
+ *     ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK and validateForkBoundary below.
+ *     Inherited Ethereum history and fork-opening state are a separate,
+ *     not-yet-implemented architecture problem
+ *     (docs/pulsechain-fork-state-policy.md) and out of scope for this tool.
  *
  * Usage (dry-run, the safe default):
  *   npx tsx --conditions react-server scripts/transfer-backfill-runner.ts
@@ -50,6 +57,9 @@ import { fileURLToPath } from "url";
 import { mkdir, appendFile } from "node:fs/promises";
 import path from "node:path";
 
+import { PULSECHAIN_FORK_BOUNDARY } from "@/config/chains";
+import { classifyPulseChainBlockProvenance } from "@/services/chains/fork-provenance";
+
 // ─── Campaign constants (fixed; not operator-overridable) ─────────────────────
 
 export const TRANSFER_BACKFILL_CHAIN_ID = 369;
@@ -61,8 +71,29 @@ export const TRANSFER_BACKFILL_WALLET_ADDRESS =
 export const ORIGINAL_CURSOR_FROM_BLOCK = 26_697_999n;
 /** Fixed TRANSFERS SyncCursor upper edge; never changes during descending backfill. */
 export const FIXED_CURSOR_TO_BLOCK = 26_698_010n;
-/** Authoritative earliest target block (wallet's first-ever on-chain activity). */
+/**
+ * The wallet's actual first-ever on-chain activity block. Kept as a factual
+ * record only — it sits below the PulseChain fork boundary
+ * (`PULSECHAIN_FORK_BOUNDARY`, `src/config/chains.ts`) and must NOT be used
+ * directly as the ordinary TRANSFERS campaign's planning floor. Use
+ * `ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK` for that.
+ */
 export const FIRST_ACTIVITY_BLOCK = 13_010_696n;
+/**
+ * The lowest block the ordinary (ETHEREUM_INHERITED_HISTORY-excluding)
+ * TRANSFERS backfill campaign may ever plan a window down to. This is the
+ * higher (more restrictive) of the wallet's real first-activity block and
+ * the Tier 1-verified PulseChain fork boundary's `firstPostForkBlock` — i.e.
+ * today it equals the fork boundary, since the wallet's first activity
+ * predates PulseChain's fork. Docs/pulsechain-fork-state-policy.md §14:
+ * inherited Ethereum history requires fork-opening-state evidence and a
+ * separate, explicitly gated ingestion path before it can safely enter the
+ * canonical ledger — this campaign is not that path.
+ */
+export const ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK: bigint =
+  FIRST_ACTIVITY_BLOCK > PULSECHAIN_FORK_BOUNDARY.firstPostForkBlock
+    ? FIRST_ACTIVITY_BLOCK
+    : PULSECHAIN_FORK_BOUNDARY.firstPostForkBlock;
 /** Full window size in inclusive blocks. */
 export const FULL_WINDOW_BLOCKS = 1_000n;
 /** Checkpoint rebuild cadence, in completed windows. */
@@ -95,7 +126,7 @@ export function computeTotalWindows(args: {
 
 export const TOTAL_CAMPAIGN_WINDOWS = computeTotalWindows({
   originalCursorFromBlock: ORIGINAL_CURSOR_FROM_BLOCK,
-  firstActivityBlock: FIRST_ACTIVITY_BLOCK,
+  firstActivityBlock: ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK,
 });
 
 // ─── Window planning (pure) ────────────────────────────────────────────────────
@@ -122,6 +153,11 @@ export type WindowPlanResult =
  * cursor for later dry-run previews. Never trusts a hardcoded "windows
  * completed" count — in execute mode the live cursor is the only source of
  * truth for campaign progress.
+ *
+ * `firstActivityBlock` defaults to `ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK`,
+ * NOT the raw wallet-first-activity constant — the planning floor is always
+ * clamped to whichever is higher (more restrictive), so a window can never
+ * be planned below the PulseChain fork boundary by construction.
  */
 export function computeWindowPlan(args: {
   planningCursorFromBlock: bigint;
@@ -131,7 +167,8 @@ export function computeWindowPlan(args: {
 }): WindowPlanResult {
   const originalCursorFromBlock =
     args.originalCursorFromBlock ?? ORIGINAL_CURSOR_FROM_BLOCK;
-  const firstActivityBlock = args.firstActivityBlock ?? FIRST_ACTIVITY_BLOCK;
+  const firstActivityBlock =
+    args.firstActivityBlock ?? ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK;
   const fullWindowBlocks = args.fullWindowBlocks ?? FULL_WINDOW_BLOCKS;
   const totalWindows = computeTotalWindows({
     originalCursorFromBlock,
@@ -270,6 +307,32 @@ export function validateRangeSize(args: {
     return {
       ok: false,
       reason: `final window must span at most ${fullWindowBlocks} inclusive blocks, got ${blockCount}`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Mechanical hard stop against planning or executing any window that would
+ * touch ETHEREUM_INHERITED_HISTORY (docs/pulsechain-fork-state-policy.md
+ * §6-7). Reuses the canonical, already-verified classifier
+ * (`classifyPulseChainBlockProvenance`,
+ * `src/services/chains/fork-provenance.ts`) rather than re-deriving the
+ * boundary comparison — a window's startBlock is safe only when it
+ * classifies as PULSECHAIN_POST_FORK. This is checked independently of the
+ * `ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK` clamp already applied inside
+ * `computeWindowPlan`, so a future change to that default cannot silently
+ * remove the protection: this gate fails closed on its own.
+ */
+export function validateForkBoundary(args: { startBlock: bigint }): GateResult {
+  const provenance = classifyPulseChainBlockProvenance({
+    chainId: TRANSFER_BACKFILL_CHAIN_ID,
+    blockNumber: args.startBlock,
+  });
+  if (provenance !== "PULSECHAIN_POST_FORK") {
+    return {
+      ok: false,
+      reason: `proposed startBlock ${args.startBlock} classifies as ${provenance}, not PULSECHAIN_POST_FORK; ordinary TRANSFERS backfill must never plan or submit a window at or below the PulseChain fork boundary (lastInheritedBlock ${PULSECHAIN_FORK_BOUNDARY.lastInheritedBlock})`,
     };
   }
   return { ok: true };
@@ -983,6 +1046,12 @@ export async function runTransferBackfillRunner(
 
     const rangeGate = validateRangeSize({ startBlock: plan.startBlock, endBlock: plan.endBlock, isFinalWindow: plan.isFinalWindow });
     if (!rangeGate.ok) return stop(deps, "range_size_violation", rangeGate.reason, windowsCompleted, lastWindowNumber);
+
+    // Applies in both dry-run and execute mode, before any evidence is
+    // written or any HTTP call is made — planning-time, not merely
+    // pre-POST (docs/pulsechain-fork-state-policy.md §14).
+    const forkBoundaryGate = validateForkBoundary({ startBlock: plan.startBlock });
+    if (!forkBoundaryGate.ok) return stop(deps, "fork_boundary_violation", forkBoundaryGate.reason, windowsCompleted, lastWindowNumber);
 
     const activeRunCount = await countActiveOperations(deps.db);
     const activeOpGate = validateNoActiveOperation({ activeRunCount });
