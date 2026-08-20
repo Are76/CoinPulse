@@ -155,8 +155,9 @@ execute mode — not merely as a check immediately before the HTTP POST. The
 campaign's effective floor (`ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK`) is
 `17,233,000`, not the wallet's raw first-activity block
 (`FIRST_ACTIVITY_BLOCK = 13,010,696`, which predates the fork). The final
-ordinary window is a partial window ending exactly at `17,233,000`; the
-campaign reports `campaign_complete` once the cursor reaches that floor.
+ordinary window is a partial window starting exactly at `17,233,000` (and
+ending at `17,233,998`, per the live cursor's grid alignment); the campaign
+reports `campaign_complete` once the cursor reaches that floor.
 Reaching Ethereum-inherited history (fork-opening state, cost basis,
 provenance backfill) is a separate, not-yet-implemented architecture problem
 and is never authorized by this tool.
@@ -206,7 +207,7 @@ are ever written — verified by unit tests.
 | `no_transfers_cursor` | No TRANSFERS `SyncCursor` exists yet (Case B / ascending is out of scope for this runner). |
 | `campaign_complete` | Live cursor has reached `ORDINARY_TRANSFERS_LOWER_BOUND_BLOCK` (the PulseChain fork boundary's `firstPostForkBlock`, `17,233,000`); no more ordinary-history windows to run. |
 | `misaligned_cursor` | Live cursor is not on the 1,000-block campaign grid, or is above the original cursor. Needs manual investigation — do not guess a correction. |
-| `fork_boundary_violation` | A planned window's `startBlock` classifies as anything other than `PULSECHAIN_POST_FORK` (i.e. it would touch Ethereum-inherited history). Should be unreachable in normal operation — the planning floor already prevents it — this is a defense-in-depth check, not the primary mechanism. |
+| `fork_boundary_violation` | A planned window's `startBlock` classifies as anything other than `PULSECHAIN_POST_FORK` (i.e. it would touch Ethereum-inherited history). This should be unreachable in normal operation — the planning floor already prevents it — and this is a defense-in-depth check, not the primary mechanism. |
 | `cursor_expectation_mismatch` | `--expected-cursor-from` did not match the live cursor. |
 | `active_operation_conflict` | A `PENDING`/`RUNNING` SyncRun already exists. |
 | `policy_label_collision` | A SyncRun with the computed policyLabel already exists. |
