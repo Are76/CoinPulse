@@ -23,7 +23,8 @@
     "backfill:wallet-forward": "tsx --conditions react-server scripts/wallet-forward-sync-runner.ts",
     "backfill:wallet-forward-campaign": "tsx --conditions react-server scripts/wallet-forward-campaign-runner.ts",
     "backfill:wallet-forward-supervisor": "tsx --conditions react-server scripts/wallet-forward-supervisor.ts",
-    "recover:ended-stake-evidence": "tsx --conditions react-server scripts/hexmining-ended-stake-historical-state-recovery.ts"
+    "recover:ended-stake-evidence": "tsx --conditions react-server scripts/hexmining-ended-stake-historical-state-recovery.ts",
+    "window:evidence-directed": "tsx --conditions react-server scripts/evidence-directed-window-runner.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",
